@@ -4,6 +4,8 @@ use mzdata::spectrum::ScanPolarity;
 use mzdata::spectrum::SignalContinuity;
 use mzdata::MZReader;
 
+const MS_LEVEL: u8 = 1;
+
 #[derive(Debug)]
 pub struct MzData {
     pub retention_time: Vec<f32>,
@@ -19,13 +21,6 @@ impl MzData {
             mz: Vec::new(),
         }
     }
-
-    pub fn mzdata_is_empty(&self) -> bool {
-        match (self.intensity.is_empty(), self.retention_time.is_empty()) {
-            (true, true) => true,
-            _ => false,
-        }
-    }
 }
 
 pub fn get_xic(
@@ -33,13 +28,12 @@ pub fn get_xic(
     mass: f64,
     polarity: ScanPolarity,
     mass_tolerance: f64,
-    ms_level: u8,
 ) -> Result<MzData> {
     let reader = MZReader::open_path(path)?;
     let mut mzdata = MzData::new();
 
     for spectrum in reader {
-        if spectrum.description.ms_level == ms_level
+        if spectrum.description.ms_level == MS_LEVEL
             && spectrum.description.polarity == polarity
             && spectrum.signal_continuity() == SignalContinuity::Centroid
         {
@@ -110,10 +104,42 @@ pub fn get_bpic(path: &str, polarity: ScanPolarity) -> Result<MzData> {
 
 pub fn prepare_for_plot(mzdata: Result<MzData>) -> Result<Vec<[f64; 2]>> {
     let mzdata = mzdata?;
-    Ok(mzdata
+
+    // Create a vector of tuples where each tuple is (retention_time, intensity)
+    let mut data: Vec<_> = mzdata
         .retention_time
         .iter()
         .zip(&mzdata.intensity)
+        .collect();
+
+    // Sort the data by retention_time
+    data.sort_by(|a, b| a.0.partial_cmp(b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Convert the sorted data to the desired format
+    let result: Vec<[f64; 2]> = data
+        .into_iter()
         .map(|(&rt, &int)| [rt as f64, int as f64])
-        .collect())
+        .collect();
+
+    Ok(result)
+}
+
+pub fn smooth_data(data: Result<Vec<[f64; 2]>>, window_size: usize) -> Result<Vec<[f64; 2]>> {
+    let data = data?;
+    let mut smoothed_data = Vec::new();
+    for i in 0..data.len() {
+        if i < window_size || i >= data.len() - window_size {
+            // Not enough data to smooth, keep original
+            smoothed_data.push(data[i]);
+        } else {
+            // Calculate the average for the smoothing window
+            let sum: f64 = data[i - window_size..=i + window_size]
+                .iter()
+                .map(|point| point[1])
+                .sum();
+            let average = sum / (window_size * 2 + 1) as f64;
+            smoothed_data.push([data[i][0], average]);
+        }
+    }
+    Ok(smoothed_data)
 }
