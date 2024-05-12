@@ -6,7 +6,7 @@ use mzdata::MZReader;
 
 const MS_LEVEL: u8 = 1;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MzData {
     pub retention_time: Vec<f32>,
     pub intensity: Vec<f32>,
@@ -104,40 +104,48 @@ pub fn get_bpic(path: &str, polarity: ScanPolarity) -> Result<MzData> {
 
 pub fn prepare_for_plot(mzdata: Result<MzData>) -> Result<Vec<[f64; 2]>> {
     let mzdata = mzdata?;
+    let mut data = Vec::new();
+    let mut temp_rt = 0.0;
+    let mut temp_intensity_collector = Vec::new();
 
-    // Create a vector of tuples where each tuple is (retention_time, intensity)
-    let mut data: Vec<_> = mzdata
-        .retention_time
-        .iter()
-        .zip(&mzdata.intensity)
-        .collect();
+    for (idx, &rt) in mzdata.retention_time.iter().enumerate() {
+        if rt != temp_rt && !temp_intensity_collector.is_empty() {
+            data.push([
+                temp_rt as f64,
+                temp_intensity_collector.iter().sum::<f64>()
+                    / temp_intensity_collector.len() as f64,
+            ]);
+            temp_intensity_collector.clear();
+            temp_rt = rt;
+        }
+        temp_intensity_collector.push(mzdata.intensity[idx].into());
+    }
+    //the second if statement after the loop is needed to process the remaining intensities.
+    if !temp_intensity_collector.is_empty() {
+        data.push([
+            temp_rt as f64,
+            temp_intensity_collector.iter().sum::<f64>() / temp_intensity_collector.len() as f64,
+        ]);
+    }
 
-    // Sort the data by retention_time
-    data.sort_by(|a, b| a.0.partial_cmp(b.0).unwrap_or(std::cmp::Ordering::Equal));
-
-    // Convert the sorted data to the desired format
-    let result: Vec<[f64; 2]> = data
-        .into_iter()
-        .map(|(&rt, &int)| [rt as f64, int as f64])
-        .collect();
-
-    Ok(result)
+    Ok(data)
 }
 
-pub fn smooth_data(data: Result<Vec<[f64; 2]>>, window_size: usize) -> Result<Vec<[f64; 2]>> {
+pub fn smooth_data(data: Result<Vec<[f64; 2]>>, window_size: u8) -> Result<Vec<[f64; 2]>> {
     let data = data?;
     let mut smoothed_data = Vec::new();
+    let window_size_usize = window_size as usize;
     for i in 0..data.len() {
-        if i < window_size || i >= data.len() - window_size {
+        if i < window_size_usize || i >= data.len() - window_size_usize {
             // Not enough data to smooth, keep original
             smoothed_data.push(data[i]);
         } else {
             // Calculate the average for the smoothing window
-            let sum: f64 = data[i - window_size..=i + window_size]
+            let sum: f64 = data[i - window_size_usize..=i + window_size_usize]
                 .iter()
                 .map(|point| point[1])
                 .sum();
-            let average = sum / (window_size * 2 + 1) as f64;
+            let average = sum / (window_size as f64 * 2.0 + 1.0);
             smoothed_data.push([data[i][0], average]);
         }
     }
