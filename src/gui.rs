@@ -5,11 +5,62 @@ use mzdata::spectrum::ScanPolarity;
 use std::path::PathBuf;
 
 use eframe::egui;
-use egui::Visuals;
 use egui_plot::{Line, PlotPoints};
 use rfd;
 
-#[derive(PartialEq, Clone, Debug)]
+#[derive(PartialEq)]
+enum LineType {
+    Solid,
+    Dotted,
+    Dashed,
+}
+
+impl LineType {
+    fn to_egui(&self) -> egui_plot::LineStyle {
+        match self {
+            Self::Solid => egui_plot::LineStyle::Solid,
+            Self::Dashed => egui_plot::LineStyle::Dashed { length: 10.0 },
+            Self::Dotted => egui_plot::LineStyle::Dotted { spacing: 5.0 },
+        }
+    }
+}
+
+impl Default for LineType {
+    fn default() -> Self {
+        LineType::Solid
+    }
+}
+
+#[derive(PartialEq)]
+enum LineColor {
+    Red,
+    Green,
+    Blue,
+    Black,
+    Yellow,
+    White,
+}
+
+impl LineColor {
+    fn to_egui(&self) -> egui::ecolor::Color32 {
+        match self {
+            Self::Red => egui::ecolor::Color32::RED,
+            Self::Green => egui::ecolor::Color32::GREEN,
+            Self::Blue => egui::ecolor::Color32::BLUE,
+            Self::Black => egui::ecolor::Color32::BLACK,
+            Self::Yellow => egui::ecolor::Color32::YELLOW,
+            Self::White => egui::ecolor::Color32::WHITE,
+        }
+    }
+}
+
+impl Default for LineColor {
+    fn default() -> Self {
+        LineColor::Red
+    }
+}
+
+#[derive(PartialEq, Debug)]
 enum PlotType {
     XIC,
     BPC,
@@ -31,6 +82,8 @@ pub struct MzViewerApp {
     plot_data: Option<Vec<[f64; 2]>>,
     mass_input: String,
     mass_tolerance_input: String,
+    line_type: LineType,
+    line_color: LineColor,
 
     invalid_file: bool,
     state_changed: bool,
@@ -78,6 +131,8 @@ impl MzViewerApp {
                     plot_ui.line(
                         Line::new(PlotPoints::from(data.clone()))
                             .width(self.line_width)
+                            .style(self.line_type.to_egui())
+                            .color(self.line_color.to_egui())
                             .name(format!("{:?}", self.plot_type)),
                     )
                 }
@@ -109,15 +164,30 @@ impl MzViewerApp {
 
                     ui.menu_button("Line width", |ui| {
                         if ui
-                            .add(egui::Slider::new(&mut self.line_width, 1.0..=5.0))
+                            .add(egui::Slider::new(&mut self.line_width, 0.1..=5.0))
                             .on_hover_text("Adjust the line width")
                             .changed()
                         {
                             self.state_changed = true
                         };
                     });
-                    if ui.button("Line color").clicked() {};
-                    if ui.button("Line style").clicked() {};
+                    ui.menu_button("Line color", |ui| {
+                        ui.horizontal(|ui| {
+                            ui.radio_value(&mut self.line_color, LineColor::Red, "Red");
+                            ui.radio_value(&mut self.line_color, LineColor::Blue, "Blue");
+                            ui.radio_value(&mut self.line_color, LineColor::Green, "Green");
+                            ui.radio_value(&mut self.line_color, LineColor::Yellow, "Yellow");
+                            ui.radio_value(&mut self.line_color, LineColor::Black, "Black");
+                            ui.radio_value(&mut self.line_color, LineColor::White, "White");
+                        });
+                    });
+                    ui.menu_button("Line style", |ui| {
+                        ui.horizontal(|ui| {
+                            ui.radio_value(&mut self.line_type, LineType::Solid, "Solid");
+                            ui.radio_value(&mut self.line_type, LineType::Dashed, "Dashed");
+                            ui.radio_value(&mut self.line_type, LineType::Dotted, "Dotted");
+                        });
+                    });
                 });
                 let current_visuals = ui.style().visuals.clone();
                 if let Some(new_visuals) = current_visuals.light_dark_small_toggle_button(ui) {
