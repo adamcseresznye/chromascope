@@ -1,4 +1,7 @@
+use crate::line_color;
+use crate::line_type;
 use crate::parser;
+use crate::plot_type;
 
 use egui::Color32;
 use mzdata::spectrum::ScanPolarity;
@@ -8,82 +11,18 @@ use eframe::egui;
 use egui_plot::{Line, PlotPoints};
 use rfd;
 
-#[derive(PartialEq)]
-enum LineType {
-    Solid,
-    Dotted,
-    Dashed,
-}
-
-impl LineType {
-    fn to_egui(&self) -> egui_plot::LineStyle {
-        match self {
-            Self::Solid => egui_plot::LineStyle::Solid,
-            Self::Dashed => egui_plot::LineStyle::Dashed { length: 10.0 },
-            Self::Dotted => egui_plot::LineStyle::Dotted { spacing: 5.0 },
-        }
-    }
-}
-
-impl Default for LineType {
-    fn default() -> Self {
-        LineType::Solid
-    }
-}
-
-#[derive(PartialEq)]
-enum LineColor {
-    Red,
-    Green,
-    Blue,
-    Black,
-    Yellow,
-    White,
-}
-
-impl LineColor {
-    fn to_egui(&self) -> egui::ecolor::Color32 {
-        match self {
-            Self::Red => egui::ecolor::Color32::RED,
-            Self::Green => egui::ecolor::Color32::GREEN,
-            Self::Blue => egui::ecolor::Color32::BLUE,
-            Self::Black => egui::ecolor::Color32::BLACK,
-            Self::Yellow => egui::ecolor::Color32::YELLOW,
-            Self::White => egui::ecolor::Color32::WHITE,
-        }
-    }
-}
-
-impl Default for LineColor {
-    fn default() -> Self {
-        LineColor::Red
-    }
-}
-
-#[derive(PartialEq, Debug)]
-enum PlotType {
-    XIC,
-    BPC,
-    TIC,
-}
-
-impl Default for PlotType {
-    fn default() -> Self {
-        PlotType::TIC
-    }
-}
 const FILE_FORMAT: &str = "mzML";
 
 #[derive(Default)]
 pub struct MzViewerApp {
     file_path: Option<String>,
-    plot_type: PlotType,
+    plot_type: plot_type::PlotType,
     polarity: ScanPolarity,
     plot_data: Option<Vec<[f64; 2]>>,
     mass_input: String,
     mass_tolerance_input: String,
-    line_type: LineType,
-    line_color: LineColor,
+    line_type: line_type::LineType,
+    line_color: line_color::LineColor,
 
     invalid_file: bool,
     state_changed: bool,
@@ -103,11 +42,13 @@ impl MzViewerApp {
         app
     }
 
-    fn process_plot_data(&mut self, path: &str) -> Option<Vec<[f64; 2]>> {
+    fn process_plot_data(&self, path: &str) -> Option<Vec<[f64; 2]>> {
         let parsed_data = match self.plot_type {
-            PlotType::TIC => parser::get_tic(path, self.polarity),
-            PlotType::BPC => parser::get_bpic(path, self.polarity),
-            PlotType::XIC => parser::get_xic(path, self.mass, self.polarity, self.mass_tolerance),
+            plot_type::PlotType::TIC => parser::get_tic(path, self.polarity),
+            plot_type::PlotType::BPC => parser::get_bpic(path, self.polarity),
+            plot_type::PlotType::XIC => {
+                parser::get_xic(path, self.mass, self.polarity, self.mass_tolerance)
+            }
         };
 
         let prepared_data = parser::prepare_for_plot(parsed_data);
@@ -119,8 +60,7 @@ impl MzViewerApp {
         if let Some(path) = &self.file_path {
             // Only re-process the data if the state has changed
             if self.state_changed {
-                let path_clone = path.clone();
-                self.plot_data = self.process_plot_data(path_clone.as_str());
+                self.plot_data = self.process_plot_data(&path);
                 self.state_changed = false;
             };
         }
@@ -173,19 +113,51 @@ impl MzViewerApp {
                     });
                     ui.menu_button("Line color", |ui| {
                         ui.horizontal(|ui| {
-                            ui.radio_value(&mut self.line_color, LineColor::Red, "Red");
-                            ui.radio_value(&mut self.line_color, LineColor::Blue, "Blue");
-                            ui.radio_value(&mut self.line_color, LineColor::Green, "Green");
-                            ui.radio_value(&mut self.line_color, LineColor::Yellow, "Yellow");
-                            ui.radio_value(&mut self.line_color, LineColor::Black, "Black");
-                            ui.radio_value(&mut self.line_color, LineColor::White, "White");
+                            ui.radio_value(&mut self.line_color, line_color::LineColor::Red, "Red");
+                            ui.radio_value(
+                                &mut self.line_color,
+                                line_color::LineColor::Blue,
+                                "Blue",
+                            );
+                            ui.radio_value(
+                                &mut self.line_color,
+                                line_color::LineColor::Green,
+                                "Green",
+                            );
+                            ui.radio_value(
+                                &mut self.line_color,
+                                line_color::LineColor::Yellow,
+                                "Yellow",
+                            );
+                            ui.radio_value(
+                                &mut self.line_color,
+                                line_color::LineColor::Black,
+                                "Black",
+                            );
+                            ui.radio_value(
+                                &mut self.line_color,
+                                line_color::LineColor::White,
+                                "White",
+                            );
                         });
                     });
                     ui.menu_button("Line style", |ui| {
                         ui.horizontal(|ui| {
-                            ui.radio_value(&mut self.line_type, LineType::Solid, "Solid");
-                            ui.radio_value(&mut self.line_type, LineType::Dashed, "Dashed");
-                            ui.radio_value(&mut self.line_type, LineType::Dotted, "Dotted");
+                            ui.radio_value(
+                                &mut self.line_type,
+                                line_type::LineType::Solid,
+                                "Solid",
+                            );
+                            ui.radio_value(
+                                &mut self.line_type,
+                                line_type::LineType::Dashed,
+                                "Dashed",
+                            );
+                            ui.radio_value(
+                                &mut self.line_type,
+                                line_type::LineType::Dotted,
+                                "Dotted",
+                            );
                         });
                     });
                 });
@@ -290,32 +262,32 @@ impl MzViewerApp {
                         ui.horizontal(|ui| {
                             if ui
                                 .add(egui::RadioButton::new(
-                                    self.plot_type == PlotType::TIC,
+                                    self.plot_type == plot_type::PlotType::TIC,
                                     "TIC",
                                 ))
                                 .clicked()
                             {
-                                self.plot_type = PlotType::TIC;
+                                self.plot_type = plot_type::PlotType::TIC;
                                 self.state_changed = true;
                             }
                             if ui
                                 .add(egui::RadioButton::new(
-                                    self.plot_type == PlotType::BPC,
+                                    self.plot_type == plot_type::PlotType::BPC,
                                     "Base Peak",
                                 ))
                                 .clicked()
                             {
-                                self.plot_type = PlotType::BPC;
+                                self.plot_type = plot_type::PlotType::BPC;
                                 self.state_changed = true;
                             }
                             if ui
                                 .add(egui::RadioButton::new(
-                                    self.plot_type == PlotType::XIC,
+                                    self.plot_type == plot_type::PlotType::XIC,
                                     "XIC",
                                 ))
                                 .clicked()
                             {
-                                self.plot_type = PlotType::XIC;
+                                self.plot_type = plot_type::PlotType::XIC;
                                 self.options_window_open = true;
                             }
                         });

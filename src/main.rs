@@ -1,5 +1,8 @@
 mod gui;
+mod line_color;
+mod line_type;
 mod parser;
+mod plot_type;
 
 use gui::*;
 
