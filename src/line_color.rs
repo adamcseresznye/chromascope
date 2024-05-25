@@ -1,5 +1,6 @@
-#[derive(PartialEq)]
+#[derive(PartialEq, Default)]
 pub enum LineColor {
+    #[default]
     Red,
     Green,
     Blue,
@@ -18,11 +19,5 @@ impl LineColor {
             Self::Yellow => egui::ecolor::Color32::YELLOW,
             Self::White => egui::ecolor::Color32::WHITE,
         }
-    }
-}
-
-impl Default for LineColor {
-    fn default() -> Self {
-        LineColor::Red
     }
 }

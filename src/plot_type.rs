@@ -1,12 +1,7 @@
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Default)]
 pub enum PlotType {
-    XIC,
-    BPC,
-    TIC,
-}
-
-impl Default for PlotType {
-    fn default() -> Self {
-        PlotType::TIC
-    }
+    Xic,
+    Bpc,
+    #[default]
+    Tic,
 }
