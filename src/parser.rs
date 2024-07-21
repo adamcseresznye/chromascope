@@ -1,8 +1,6 @@
 use anyhow::Result;
-use mzdata::prelude::*;
-use mzdata::spectrum::ScanPolarity;
-use mzdata::spectrum::SignalContinuity;
-use mzdata::MZReader;
+use mzdata::spectrum::{ScanPolarity, SignalContinuity};
+use mzdata::{prelude::*, MzMLReader};
 
 const MS_LEVEL: u8 = 1;
 
@@ -29,7 +27,7 @@ pub fn get_xic(
     polarity: ScanPolarity,
     mass_tolerance: f64,
 ) -> Result<MzData> {
-    let reader = MZReader::open_path(path)?;
+    let reader = MzMLReader::open_path(path)?;
     let mut mzdata = MzData::new();
 
     for spectrum in reader {
@@ -54,7 +52,7 @@ pub fn get_xic(
     Ok(mzdata)
 }
 pub fn get_tic(path: &str, polarity: ScanPolarity) -> Result<MzData> {
-    let mut reader = MZReader::open_path(path)?;
+    let mut reader = MzMLReader::open_path(path)?;
 
     let (retention_time, intensity): (Vec<_>, Vec<_>) = reader
         .iter()
@@ -74,7 +72,7 @@ pub fn get_tic(path: &str, polarity: ScanPolarity) -> Result<MzData> {
     })
 }
 pub fn get_bpic(path: &str, polarity: ScanPolarity) -> Result<MzData> {
-    let mut reader = MZReader::open_path(path)?;
+    let mut reader = MzMLReader::open_path(path)?;
 
     let (retention_time, intensity, mz) = reader
         .iter()

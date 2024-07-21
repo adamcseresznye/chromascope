@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use eframe::egui;
 use egui::{Color32, Context, Ui};
-use egui_plot::{Line, PlotPoints};
+use egui_plot::{Line, PlotPoint, PlotPoints, Text};
 
 const FILE_FORMAT: &str = "mzML";
 
@@ -63,6 +63,8 @@ impl MzViewerApp {
         }
 
         egui_plot::Plot::new("chromatogram")
+            .width(ui.available_width() * 0.99)
+            .height(ui.available_height() * 0.6)
             .show(ui, |plot_ui| {
                 if let Some(data) = &self.plot_data {
                     plot_ui.line(
@@ -76,6 +78,36 @@ impl MzViewerApp {
             })
             .response
     }
+
+    fn plot_mass_spectrum(&mut self, ui: &mut egui::Ui) -> egui::Response {
+        // Create example data for m/z and intensity
+        let mz: Vec<f64> = [50.2, 100.03, 125.06, 220.35, 250.65].to_vec();
+        let intensity: Vec<f64> = [16.9, 561.0, 750.2, 26.3, 987.5].to_vec();
+    
+        // Create bar chart data
+        let bars: Vec<egui_plot::Bar> = mz.iter().zip(intensity.iter())
+            .map(|(&m, &i)| {
+                egui_plot::Bar::new(m, i)
+                    .width(0.25) // Adjust width of bars as needed
+                    .fill(self.line_color.to_egui()) // Adjust color as needed
+            })
+            .collect();
+    
+        egui_plot::Plot::new("mass_spectrum")
+            .width(ui.available_width() * 0.99)
+            .height(ui.available_height())
+            .show(ui, |plot_ui| {
+                plot_ui.bar_chart(egui_plot::BarChart::new(bars));
+                
+                // Customize axes
+                //plot_ui.set_plot_bounds(egui_plot::PlotBounds::from_min_max(
+                //    [95.0, 0.0],
+                //    [205.0, 110.0]
+                //));
+            })
+            .response
+    }
+
     fn update_data_selection_panel(&mut self, ctx: &Context) {
         egui::TopBottomPanel::top("data_selection_panel").show(ctx, |ui| {
             ui.horizontal(|ui| {
@@ -208,12 +240,26 @@ impl MzViewerApp {
 
     fn update_central_panel(&mut self, ctx: &Context) {
         egui::CentralPanel::default().show(ctx, |ui| {
-            let chromatogram = self.plot_chromatogram(ui);
-            chromatogram.context_menu(|ui| {
-                ui.heading("Plot Properties");
-                ui.separator();
-                self.add_plot_properties(ui);
-                ui.separator();
+            egui::ScrollArea::both().show(ui, |ui| {
+                egui::CollapsingHeader::new("Chromatogram")
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        let chromatogram = self.plot_chromatogram(ui);
+                        chromatogram.context_menu(|ui| {
+                            ui.heading("Plot Properties");
+                            ui.separator();
+                            self.add_plot_properties(ui);
+                            ui.separator();
+                        });
+                    });
+
+                ui.add_space(8.0); // Add some space between the plots
+
+                egui::CollapsingHeader::new("Mass Spectrum")
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        self.plot_mass_spectrum(ui);
+                    });
             });
         });
     }

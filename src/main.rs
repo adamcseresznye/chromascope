@@ -9,6 +9,7 @@ use std::process;
 
 fn main() {
     let native_options = eframe::NativeOptions::default();
+
     match eframe::run_native(
         "MzViewer",
         native_options,
