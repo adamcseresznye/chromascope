@@ -7,7 +7,9 @@ use std::path::PathBuf;
 
 use eframe::egui;
 use egui::{Color32, Context, Ui};
-use egui_plot::{Line, PlotPoint, PlotPoints, Text};
+use egui_plot::{Line, PlotPoints};
+use mzdata::spectrum::RefPeakDataLevel;
+use mzdata::{prelude::*, MzMLReader};
 
 const FILE_FORMAT: &str = "mzML";
 
@@ -31,6 +33,8 @@ pub struct MzViewerApp {
     checkbox_bool: bool,
     smoothing: u8,
     line_width: f32,
+
+    rt: f32,
 }
 
 impl MzViewerApp {
@@ -80,25 +84,26 @@ impl MzViewerApp {
     }
 
     fn plot_mass_spectrum(&mut self, ui: &mut egui::Ui) -> egui::Response {
-        // Create example data for m/z and intensity
-        let mz: Vec<f64> = [50.2, 100.03, 125.06, 220.35, 250.65].to_vec();
-        let intensity: Vec<f64> = [16.9, 561.0, 750.2, 26.3, 987.5].to_vec();
-    
+        let mz = [100.0, 125.0, 135.3];
+        let intensity = [100.0, 125.0, 135.3];
+
         // Create bar chart data
-        let bars: Vec<egui_plot::Bar> = mz.iter().zip(intensity.iter())
+        let bars: Vec<egui_plot::Bar> = mz
+            .iter()
+            .zip(intensity.iter())
             .map(|(&m, &i)| {
-                egui_plot::Bar::new(m, i)
+                egui_plot::Bar::new(m, i.into())
                     .width(0.25) // Adjust width of bars as needed
                     .fill(self.line_color.to_egui()) // Adjust color as needed
             })
             .collect();
-    
+
         egui_plot::Plot::new("mass_spectrum")
             .width(ui.available_width() * 0.99)
             .height(ui.available_height())
             .show(ui, |plot_ui| {
                 plot_ui.bar_chart(egui_plot::BarChart::new(bars));
-                
+
                 // Customize axes
                 //plot_ui.set_plot_bounds(egui_plot::PlotBounds::from_min_max(
                 //    [95.0, 0.0],
@@ -253,7 +258,7 @@ impl MzViewerApp {
                         });
                     });
 
-                ui.add_space(8.0); // Add some space between the plots
+                ui.add_space(5.0); // Add some space between the plots
 
                 egui::CollapsingHeader::new("Mass Spectrum")
                     .default_open(true)
