@@ -8,61 +8,90 @@ use std::path::PathBuf;
 use eframe::egui;
 use egui::{Color32, Context, Ui};
 use egui_plot::{Line, PlotPoints};
-use mzdata::spectrum::RefPeakDataLevel;
-use mzdata::{prelude::*, MzMLReader};
 
 const FILE_FORMAT: &str = "mzML";
 
 #[derive(Default)]
-pub struct MzViewerApp {
+pub struct UserInput {
     file_path: Option<String>,
     plot_type: PlotType,
     polarity: ScanPolarity,
-    plot_data: Option<Vec<[f64; 2]>>,
     mass_input: String,
     mass_tolerance_input: String,
-    line_type: LineType,
-    line_color: LineColor,
-
-    invalid_file: bool,
-    state_changed: bool,
-
     mass: f64,
     mass_tolerance: f64,
-    options_window_open: bool,
-    checkbox_bool: bool,
+    line_type: LineType,
+    line_color: LineColor,
     smoothing: u8,
     line_width: f32,
+}
 
-    rt: f32,
+#[derive(Default)]
+enum FileValidity {
+    Valid,
+    #[default]
+    Invalid,
+}
+#[derive(Default, PartialEq)]
+enum StateChange {
+    Changed,
+    #[default]
+    Unchanged,
+}
+
+/*
+1. put the configurations into the PlotConfig struct: DONE
+2. use enums for state management: DONE
+3. we need to have immediate access to the datafile so the MzData struct should be added to MzViewerApp
+4. MS files should be opened once when LC is drawn: MzMLReader::open_path(path)?; should be taken out from the parser methods
+*/
+
+#[derive(Default)]
+pub struct MzViewerApp {
+    plot_data: Option<Vec<[f64; 2]>>,
+    user_input: UserInput,
+
+    invalid_file: FileValidity,
+    state_changed: StateChange,
+
+    options_window_open: bool,
+    checkbox_bool: bool,
 }
 
 impl MzViewerApp {
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         Self {
-            line_width: 1.0,
+            user_input: UserInput {
+                line_width: 1.0,
+                ..Default::default()
+            },
             ..Default::default()
         }
     }
 
     fn process_plot_data(&self, path: &str) -> Option<Vec<[f64; 2]>> {
-        let parsed_data = match self.plot_type {
-            PlotType::Tic => parser::get_tic(path, self.polarity),
-            PlotType::Bpc => parser::get_bpic(path, self.polarity),
-            PlotType::Xic => parser::get_xic(path, self.mass, self.polarity, self.mass_tolerance),
+        let parsed_data = match self.user_input.plot_type {
+            PlotType::Tic => parser::get_tic(path, self.user_input.polarity),
+            PlotType::Bpc => parser::get_bpic(path, self.user_input.polarity),
+            PlotType::Xic => parser::get_xic(
+                path,
+                self.user_input.mass,
+                self.user_input.polarity,
+                self.user_input.mass_tolerance,
+            ),
         };
 
         let prepared_data = parser::prepare_for_plot(parsed_data);
-        let smoothed_data = parser::smooth_data(prepared_data, self.smoothing);
+        let smoothed_data = parser::smooth_data(prepared_data, self.user_input.smoothing);
         smoothed_data.ok()
     }
 
     fn plot_chromatogram(&mut self, ui: &mut egui::Ui) -> egui::Response {
-        if let Some(path) = &self.file_path {
+        if let Some(path) = &self.user_input.file_path {
             // Only re-process the data if the state has changed
-            if self.state_changed {
+            if self.state_changed == StateChange::Changed {
                 self.plot_data = self.process_plot_data(path);
-                self.state_changed = false;
+                self.state_changed = StateChange::Unchanged;
             };
         }
 
@@ -73,10 +102,10 @@ impl MzViewerApp {
                 if let Some(data) = &self.plot_data {
                     plot_ui.line(
                         Line::new(PlotPoints::from(data.clone()))
-                            .width(self.line_width)
-                            .style(self.line_type.to_egui())
-                            .color(self.line_color.to_egui())
-                            .name(format!("{:?}", self.plot_type)),
+                            .width(self.user_input.line_width)
+                            .style(self.user_input.line_type.to_egui())
+                            .color(self.user_input.line_color.to_egui())
+                            .name(format!("{:?}", self.user_input.plot_type)),
                     )
                 }
             })
@@ -94,7 +123,7 @@ impl MzViewerApp {
             .map(|(&m, &i)| {
                 egui_plot::Bar::new(m, i.into())
                     .width(0.25) // Adjust width of bars as needed
-                    .fill(self.line_color.to_egui()) // Adjust color as needed
+                    .fill(self.user_input.line_color.to_egui()) // Adjust color as needed
             })
             .collect();
 
@@ -122,7 +151,7 @@ impl MzViewerApp {
                     .clicked()
                 {
                     self.plot_data = None; // clears the plot_data if new file is opened
-                    self.file_path = None; // clears the file_path if new file is opened
+                    self.user_input.file_path = None; // clears the file_path if new file is opened
                     self.handle_file_selection();
                 }
 
@@ -144,19 +173,19 @@ impl MzViewerApp {
 
     fn add_display_options(&mut self, ui: &mut Ui) {
         ui.menu_button("Smoothing", |ui| {
-            let slider = egui::Slider::new(&mut self.smoothing, 0..=11);
+            let slider = egui::Slider::new(&mut self.user_input.smoothing, 0..=11);
             let response = ui.add(slider);
             if response.changed() {
-                self.state_changed = true;
+                self.state_changed = StateChange::Changed;
             }
             response.on_hover_text("Adjust the level of moving average smoothing");
         });
 
         ui.menu_button("Line width", |ui| {
-            let slider = egui::Slider::new(&mut self.line_width, 0.1..=5.0);
+            let slider = egui::Slider::new(&mut self.user_input.line_width, 0.1..=5.0);
             let response = ui.add(slider);
             if response.changed() {
-                self.state_changed = true;
+                self.state_changed = StateChange::Changed;
             }
             response.on_hover_text("Adjust the line width");
         });
@@ -172,20 +201,20 @@ impl MzViewerApp {
 
     fn add_line_color_options(&mut self, ui: &mut Ui) {
         ui.horizontal(|ui| {
-            ui.radio_value(&mut self.line_color, LineColor::Red, "Red");
-            ui.radio_value(&mut self.line_color, LineColor::Blue, "Blue");
-            ui.radio_value(&mut self.line_color, LineColor::Green, "Green");
-            ui.radio_value(&mut self.line_color, LineColor::Yellow, "Yellow");
-            ui.radio_value(&mut self.line_color, LineColor::Black, "Black");
-            ui.radio_value(&mut self.line_color, LineColor::White, "White");
+            ui.radio_value(&mut self.user_input.line_color, LineColor::Red, "Red");
+            ui.radio_value(&mut self.user_input.line_color, LineColor::Blue, "Blue");
+            ui.radio_value(&mut self.user_input.line_color, LineColor::Green, "Green");
+            ui.radio_value(&mut self.user_input.line_color, LineColor::Yellow, "Yellow");
+            ui.radio_value(&mut self.user_input.line_color, LineColor::Black, "Black");
+            ui.radio_value(&mut self.user_input.line_color, LineColor::White, "White");
         });
     }
 
     fn add_line_style_options(&mut self, ui: &mut Ui) {
         ui.horizontal(|ui| {
-            ui.radio_value(&mut self.line_type, LineType::Solid, "Solid");
-            ui.radio_value(&mut self.line_type, LineType::Dashed, "Dashed");
-            ui.radio_value(&mut self.line_type, LineType::Dotted, "Dotted");
+            ui.radio_value(&mut self.user_input.line_type, LineType::Solid, "Solid");
+            ui.radio_value(&mut self.user_input.line_type, LineType::Dashed, "Dashed");
+            ui.radio_value(&mut self.user_input.line_type, LineType::Dotted, "Dotted");
         });
     }
 
@@ -193,17 +222,17 @@ impl MzViewerApp {
         if let Some(path) = rfd::FileDialog::new().pick_file() {
             self.update_file_path_and_validity(path);
         } else {
-            self.invalid_file = true;
+            self.invalid_file = FileValidity::Invalid;
         }
     }
 
     fn update_file_path_and_validity(&mut self, path: PathBuf) {
         let file_path_str = path.display().to_string();
         if file_path_str.ends_with(FILE_FORMAT) {
-            self.invalid_file = false;
-            self.file_path = Some(file_path_str.clone());
+            self.invalid_file = FileValidity::Valid;
+            self.user_input.file_path = Some(file_path_str.clone());
         } else {
-            self.invalid_file = true;
+            self.invalid_file = FileValidity::Invalid;
         }
     }
 
@@ -213,13 +242,13 @@ impl MzViewerApp {
             ui.separator();
 
             match self.invalid_file {
-                true => {
+                FileValidity::Invalid => {
                     ui.colored_label(
                         Color32::LIGHT_RED,
                         format!("Invalid file type. Please select an {} file.", FILE_FORMAT),
                     );
                 }
-                false => match self.file_path {
+                FileValidity::Valid => match self.user_input.file_path {
                     Some(ref file_path) => {
                         self.checkbox_bool = true;
                         if ui
@@ -231,7 +260,7 @@ impl MzViewerApp {
                             .clicked()
                         {
                             self.plot_data = None;
-                            self.file_path = None;
+                            self.user_input.file_path = None;
                             self.checkbox_bool = false;
                         }
                     }
@@ -285,18 +314,26 @@ impl MzViewerApp {
         ui.label("Polarity");
         ui.horizontal(|ui| {
             if ui
-                .radio_value(&mut self.polarity, ScanPolarity::Positive, "Positive")
+                .radio_value(
+                    &mut self.user_input.polarity,
+                    ScanPolarity::Positive,
+                    "Positive",
+                )
                 .clicked()
             {
-                self.polarity = ScanPolarity::Positive;
-                self.state_changed = true;
+                self.user_input.polarity = ScanPolarity::Positive;
+                self.state_changed = StateChange::Changed;
             }
             if ui
-                .radio_value(&mut self.polarity, ScanPolarity::Negative, "Negative")
+                .radio_value(
+                    &mut self.user_input.polarity,
+                    ScanPolarity::Negative,
+                    "Negative",
+                )
                 .clicked()
             {
-                self.polarity = ScanPolarity::Negative;
-                self.state_changed = true;
+                self.user_input.polarity = ScanPolarity::Negative;
+                self.state_changed = StateChange::Changed;
             }
         });
     }
@@ -305,24 +342,24 @@ impl MzViewerApp {
         ui.label("Plot Type");
         ui.horizontal(|ui| {
             if ui
-                .radio_value(&mut self.plot_type, PlotType::Tic, "TIC")
+                .radio_value(&mut self.user_input.plot_type, PlotType::Tic, "TIC")
                 .clicked()
             {
-                self.plot_type = PlotType::Tic;
-                self.state_changed = true;
+                self.user_input.plot_type = PlotType::Tic;
+                self.state_changed = StateChange::Changed;
             }
             if ui
-                .radio_value(&mut self.plot_type, PlotType::Bpc, "Base Peak")
+                .radio_value(&mut self.user_input.plot_type, PlotType::Bpc, "Base Peak")
                 .clicked()
             {
-                self.plot_type = PlotType::Bpc;
-                self.state_changed = true;
+                self.user_input.plot_type = PlotType::Bpc;
+                self.state_changed = StateChange::Changed;
             }
             if ui
-                .radio_value(&mut self.plot_type, PlotType::Xic, "XIC")
+                .radio_value(&mut self.user_input.plot_type, PlotType::Xic, "XIC")
                 .clicked()
             {
-                self.plot_type = PlotType::Xic;
+                self.user_input.plot_type = PlotType::Xic;
                 self.options_window_open = true;
             }
         });
@@ -336,25 +373,31 @@ impl MzViewerApp {
                     ui.label("Enter m/z and mass tolerance values:");
                     if ui
                         .add(
-                            egui::TextEdit::singleline(&mut self.mass_input).hint_text("Enter m/z"),
+                            egui::TextEdit::singleline(&mut self.user_input.mass_input)
+                                .hint_text("Enter m/z"),
                         )
                         .lost_focus()
                     {
-                        self.mass = self.mass_input.parse().unwrap_or(self.mass);
-                        self.state_changed = true;
+                        self.user_input.mass = self
+                            .user_input
+                            .mass_input
+                            .parse()
+                            .unwrap_or(self.user_input.mass);
+                        self.state_changed = StateChange::Changed;
                     };
                     if ui
                         .add(
-                            egui::TextEdit::singleline(&mut self.mass_tolerance_input)
+                            egui::TextEdit::singleline(&mut self.user_input.mass_tolerance_input)
                                 .hint_text("Enter mass tolerance in mmu"),
                         )
                         .lost_focus()
                     {
-                        self.mass_tolerance = self
+                        self.user_input.mass_tolerance = self
+                            .user_input
                             .mass_tolerance_input
                             .parse()
-                            .unwrap_or(self.mass_tolerance);
-                        self.state_changed = true
+                            .unwrap_or(self.user_input.mass_tolerance);
+                        self.state_changed = StateChange::Changed
                     };
                 });
         }
