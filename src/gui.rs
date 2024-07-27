@@ -24,6 +24,7 @@ pub struct UserInput {
     line_color: LineColor,
     smoothing: u8,
     line_width: f32,
+    retention_time_ms_spectrum: Option<f32>,
 }
 
 #[derive(Default)]
@@ -48,6 +49,7 @@ enum StateChange {
 
 #[derive(Default)]
 pub struct MzViewerApp {
+    parsed_ms_data: parser::MzData,
     plot_data: Option<Vec<[f64; 2]>>,
     user_input: UserInput,
 
@@ -69,33 +71,38 @@ impl MzViewerApp {
         }
     }
 
-    fn process_plot_data(&self, path: &str) -> Option<Vec<[f64; 2]>> {
-        let parsed_data = match self.user_input.plot_type {
-            PlotType::Tic => parser::get_tic(path, self.user_input.polarity),
-            PlotType::Bpc => parser::get_bpic(path, self.user_input.polarity),
-            PlotType::Xic => parser::get_xic(
-                path,
+    fn process_plot_data(&mut self) -> Option<Vec<[f64; 2]>> {
+        match self.user_input.plot_type {
+            PlotType::Tic => self.parsed_ms_data.get_tic(self.user_input.polarity),
+            PlotType::Bpc => self.parsed_ms_data.get_bpic(self.user_input.polarity),
+            PlotType::Xic => self.parsed_ms_data.get_xic(
                 self.user_input.mass,
                 self.user_input.polarity,
                 self.user_input.mass_tolerance,
             ),
-        };
+        }
+        .ok();
 
-        let prepared_data = parser::prepare_for_plot(parsed_data);
-        let smoothed_data = parser::smooth_data(prepared_data, self.user_input.smoothing);
-        smoothed_data.ok()
+        let prepared_data = self.parsed_ms_data.prepare_for_plot();
+        self.parsed_ms_data
+            .smooth_data(prepared_data, self.user_input.smoothing)
+            .ok();
+        let plot_data = &self.parsed_ms_data.plot_data;
+        plot_data.clone()
     }
 
     fn plot_chromatogram(&mut self, ui: &mut egui::Ui) -> egui::Response {
         if let Some(path) = &self.user_input.file_path {
             // Only re-process the data if the state has changed
             if self.state_changed == StateChange::Changed {
-                self.plot_data = self.process_plot_data(path);
+                self.plot_data = self.process_plot_data();
                 self.state_changed = StateChange::Unchanged;
             };
         }
 
-        egui_plot::Plot::new("chromatogram")
+        let mut plot_bounds = None;
+
+        let response = egui_plot::Plot::new("chromatogram")
             .width(ui.available_width() * 0.99)
             .height(ui.available_height() * 0.6)
             .show(ui, |plot_ui| {
@@ -106,10 +113,46 @@ impl MzViewerApp {
                             .style(self.user_input.line_type.to_egui())
                             .color(self.user_input.line_color.to_egui())
                             .name(format!("{:?}", self.user_input.plot_type)),
-                    )
+                    );
                 }
+                plot_bounds = Some(plot_ui.plot_bounds());
             })
-            .response
+            .response;
+
+        if response.triple_clicked() {
+            let plot_position = response.interact_pointer_pos();
+            if let Some(plot_position) = plot_position {
+                let rt = plot_position.x;
+
+                // find the max retention time
+                let max_rt = if let Some(plot_data) = &self.plot_data {
+                    if let Some(last_point) = plot_data.last() {
+                        last_point[0] as f32
+                    } else {
+                        // Handle the case where plot_data is empty
+                        0.0
+                    }
+                } else {
+                    // Handle the case where self.plot_data is None
+                    0.0
+                };
+
+                if let Some(bounds) = plot_bounds {
+                    let plot_width = response.rect.width();
+
+                    let min_x = *bounds.range_x().start();
+                    let max_x = *bounds.range_x().end();
+
+                    // Calculate the position relative to the plot area, not the response area
+                    let relative_x = (plot_position.x - response.rect.left()) / plot_width;
+
+                    let converted_rt = min_x + relative_x as f64 * (max_x - min_x);
+
+                    self.user_input.retention_time_ms_spectrum = Some(converted_rt as f32);
+                }
+            }
+        }
+        response
     }
 
     fn plot_mass_spectrum(&mut self, ui: &mut egui::Ui) -> egui::Response {
@@ -231,6 +274,10 @@ impl MzViewerApp {
         if file_path_str.ends_with(FILE_FORMAT) {
             self.invalid_file = FileValidity::Valid;
             self.user_input.file_path = Some(file_path_str.clone());
+            self.parsed_ms_data = parser::MzData::default();
+            self.parsed_ms_data
+                .open_msfile(path.display().to_string().as_str())
+                .ok();
         } else {
             self.invalid_file = FileValidity::Invalid;
         }
