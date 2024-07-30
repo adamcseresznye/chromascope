@@ -1,7 +1,5 @@
 #![deny(clippy::all)]
 
-use anyhow::anyhow;
-use anyhow::{Ok, Result};
 use mzdata::io::mgf::MGFReaderType;
 use mzdata::io::mzml::MzMLReaderType;
 use mzdata::io::MZReaderType;
@@ -10,6 +8,9 @@ use mzdata::spectrum::{ScanPolarity, SignalContinuity};
 use mzdata::{prelude::*, MzMLReader};
 use std::fmt::Debug;
 use std::fs::File;
+use std::time::{Duration, Instant};
+use std::sync::{Arc, Mutex};
+use anyhow::{anyhow, Result};
 
 const MS_LEVEL: u8 = 1;
 
@@ -50,35 +51,60 @@ pub struct MzData {
     pub retention_time: Vec<f32>,
     pub intensity: Vec<f32>,
     pub mz: Vec<f32>,
-    pub msfile: Result<MZFileReaderEnum>,
+    pub msfile: Arc<Mutex<Result<MZFileReaderEnum, anyhow::Error>>>,
     pub plot_data: Option<Vec<[f64; 2]>>,
     pub mass_spectrum: Option<(Vec<f64>, Vec<f32>)>,
 }
+
 impl Default for MzData {
     fn default() -> Self {
         Self::new()
     }
 }
+
+// Manually implement Clone for MzData
+impl Clone for MzData {
+    fn clone(&self) -> Self {
+        MzData {
+            retention_time: self.retention_time.clone(),
+            intensity: self.intensity.clone(),
+            mz: self.mz.clone(),
+            msfile: Arc::new(Mutex::new(Err(anyhow::Error::msg("Clone not supported for msfile")))), // Use Arc and Mutex// or handle it as needed
+            plot_data: self.plot_data.clone(),
+            mass_spectrum: self.mass_spectrum.clone(),
+        }
+    }
+}
+
 impl MzData {
     pub fn new() -> Self {
         Self {
             retention_time: Vec::new(),
             intensity: Vec::new(),
             mz: Vec::new(),
-            msfile: Err(anyhow!("File not opened")),
+            msfile: Arc::new(Mutex::new(Err(anyhow::Error::msg("File not opened")))),
             plot_data: Some(Vec::new()),
             mass_spectrum: Some((Vec::new(), Vec::new())),
         }
     }
+
     pub fn open_msfile(&mut self, path: &str) -> Result<&mut Self> {
         let reader = MzMLReader::open_path(path)?;
-        self.msfile = Ok(MZFileReaderEnum::MzMLReader(DebugMzMLReaderType(reader)));
+        {
+            let mut msfile_lock = self.msfile.lock().map_err(|_| anyhow!("Failed to lock msfile"))?;
+            *msfile_lock = Ok(MZFileReaderEnum::MzMLReader(DebugMzMLReaderType(reader)));
+        }
         Ok(self)
     }
 
     pub fn get_bpic(&mut self, polarity: ScanPolarity) -> Result<&mut Self> {
-        match &mut self.msfile {
-            Result::Ok(MZFileReaderEnum::MzMLReader(DebugMzMLReaderType(reader))) => {
+        // Lock `msfile` to access its contents
+        let msfile_lock = self.msfile.lock().map_err(|_| anyhow!("Failed to lock msfile"))?;
+        
+        // Access the locked data
+        match &*msfile_lock {
+            Ok(MZFileReaderEnum::MzMLReader(DebugMzMLReaderType(reader))) => {
+                // Gather data from reader
                 let (retention_time, intensity, mz) = reader
                     .iter()
                     .filter(|spectrum| spectrum.description.polarity == polarity)
@@ -90,28 +116,41 @@ impl MzData {
                     })
                     .fold(
                         (Vec::new(), Vec::new(), Vec::new()),
-                        |mut acc, (rt, int, mz)| {
-                            acc.0.push(rt);
-                            acc.1.push(int);
-                            acc.2.push(mz);
-                            acc
+                        |(mut rt_acc, mut int_acc, mut mz_acc), (rt, int, mz)| {
+                            rt_acc.push(rt);
+                            int_acc.push(int);
+                            mz_acc.push(mz);
+                            (rt_acc, int_acc, mz_acc)
                         },
                     );
-
+    
+                // Release the lock before mutating `self`
+                drop(msfile_lock);
+    
+                // Mutate `self` after releasing the lock
                 self.retention_time = retention_time;
                 self.intensity = intensity;
                 self.mz = mz;
+                
                 Ok(self)
             }
+            Err(e) => Err(anyhow!("Error accessing msfile: {:?}", e)),
             _ => Err(anyhow!(
                 "Expected MzMLReader, but found something else or an error"
             )),
         }
     }
+    
+    
 
     pub fn get_tic(&mut self, polarity: ScanPolarity) -> Result<&mut Self> {
-        match &mut self.msfile {
-            Result::Ok(MZFileReaderEnum::MzMLReader(DebugMzMLReaderType(reader))) => {
+        // Lock `msfile` to access its contents
+        let msfile_lock = self.msfile.lock().map_err(|_| anyhow!("Failed to lock msfile"))?;
+        
+        // Access the locked data
+        match &*msfile_lock {
+            Ok(MZFileReaderEnum::MzMLReader(DebugMzMLReaderType(reader))) => {
+                // Process the data from the reader
                 let (retention_time, intensity): (Vec<_>, Vec<_>) = reader
                     .iter()
                     .filter(|spectrum| spectrum.description.polarity == polarity)
@@ -123,24 +162,34 @@ impl MzData {
                     .unzip();
                 let mz: Vec<f32> = Vec::new();
 
+                // Release the lock before mutating `self`
+                drop(msfile_lock);
+
+                // Mutate `self` after releasing the lock
                 self.retention_time = retention_time;
                 self.intensity = intensity;
                 self.mz = mz;
+                
                 Ok(self)
             }
+            Err(e) => Err(anyhow!("Error accessing msfile: {:?}", e)),
             _ => Err(anyhow!(
                 "Expected MzMLReader, but found something else or an error"
             )),
         }
     }
+
     pub fn get_xic(
         &mut self,
         mass: f64,
         polarity: ScanPolarity,
         mass_tolerance: f64,
     ) -> Result<&mut Self> {
-        match &mut self.msfile {
-            Result::Ok(MZFileReaderEnum::MzMLReader(DebugMzMLReaderType(reader))) => {
+        // Lock `msfile` to access its contents
+        let msfile_lock = self.msfile.lock().map_err(|_| anyhow!("Failed to lock msfile"))?;
+        
+        match &mut *msfile_lock {
+            Ok(MZFileReaderEnum::MzMLReader(DebugMzMLReaderType(reader))) => {
                 for spectrum in reader {
                     if spectrum.description.ms_level == MS_LEVEL
                         && spectrum.description.polarity == polarity
@@ -160,11 +209,13 @@ impl MzData {
                 }
                 Ok(self)
             }
+            Err(e) => Err(anyhow!("Error accessing msfile: {:?}", e)),
             _ => Err(anyhow!(
                 "Expected MzMLReader, but found something else or an error"
             )),
         }
     }
+
     pub fn prepare_for_plot(&self) -> Result<Vec<[f64; 2]>> {
         let mut data = Vec::new();
         let mut temp_rt = 0.0;
@@ -182,7 +233,7 @@ impl MzData {
             }
             temp_intensity_collector.push(self.intensity[idx].into());
         }
-        //the second if statement after the loop is needed to process the remaining intensities.
+        // The second if statement after the loop is needed to process the remaining intensities.
         if !temp_intensity_collector.is_empty() {
             data.push([
                 temp_rt as f64,
@@ -221,108 +272,88 @@ impl MzData {
     }
 
     pub fn get_mass_spectrum(&mut self, rt: f32) -> Result<&mut Self> {
-        let solution: MassSpectrum = match &mut self.msfile {
-            std::result::Result::Ok(MZFileReaderEnum::MzMLReader(DebugMzMLReaderType(reader))) => {
-                if let Some(spec) = reader.get_spectrum_by_time(rt.into()) {
-                    let peaks = spec.peaks();
+        println!("Entering get_mass_spectrum with rt: {}", rt);
 
-                    match peaks {
-                        RefPeakDataLevel::RawData(raw_data) => {
-                            let peaks = raw_data.mzs()?.to_vec();
-                            let intensities = raw_data.intensities()?.to_vec();
-                            (peaks, intensities)
+        let start_time = Instant::now();
+        let timeout = Duration::from_secs(5); // 5 second timeout
+
+        // Lock `msfile` to access its contents
+        let msfile_lock = self.msfile.lock().map_err(|_| anyhow!("Failed to lock msfile"))?;
+        
+        match &mut *msfile_lock {
+            Ok(MZFileReaderEnum::MzMLReader(DebugMzMLReaderType(reader))) => {
+                println!("Attempting to get spectrum by time");
+
+                while start_time.elapsed() < timeout {
+                    match reader.get_spectrum_by_time(rt.into()) {
+                        Some(spec) => {
+                            println!("Got spectrum, extracting peaks");
+                            let peaks = spec.peaks();
+
+                            let extracted_ms_spectrum = match peaks {
+                                RefPeakDataLevel::RawData(raw_data) => {
+                                    println!("Processing RawData");
+                                    let peaks = raw_data.mzs()?;
+                                    let intensities = raw_data.intensities()?;
+                                    println!(
+                                        "RawData processed. Peaks: {}, Intensities: {}",
+                                        peaks.len(),
+                                        intensities.len()
+                                    );
+                                    (peaks.to_vec(), intensities.to_vec())
+                                }
+                                RefPeakDataLevel::Centroid(centroid_peaks) => {
+                                    println!("Processing Centroid data");
+                                    let peaks =
+                                        centroid_peaks.iter().map(|x| x.mz).collect::<Vec<_>>();
+                                    let intensities = centroid_peaks
+                                        .iter()
+                                        .map(|x| x.intensity)
+                                        .collect::<Vec<_>>();
+                                    println!("Centroid data processed. Peaks: {}", peaks.len());
+                                    (peaks, intensities)
+                                }
+                                RefPeakDataLevel::Deconvoluted(deconv_peaks) => {
+                                    println!("Processing Deconvoluted data");
+                                    let peaks =
+                                        deconv_peaks.iter().map(|x| x.mz()).collect::<Vec<_>>();
+                                    let intensities = deconv_peaks
+                                        .iter()
+                                        .map(|x| x.intensity)
+                                        .collect::<Vec<_>>();
+                                    println!("Deconvoluted data processed. Peaks: {}", peaks.len());
+                                    (peaks, intensities)
+                                }
+                                RefPeakDataLevel::Missing => {
+                                    println!("Spectrum not found at the specified time (Missing)");
+                                    (vec![], vec![])
+                                }
+                            };
+
+                            println!(
+                                "Extracted spectrum with {} data points",
+                                extracted_ms_spectrum.0.len()
+                            );
+                            self.mass_spectrum = Some(extracted_ms_spectrum);
+                            return Ok(self);
                         }
-                        RefPeakDataLevel::Centroid(centroid_peaks) => {
-                            let peaks = centroid_peaks.iter().map(|x| x.mz).collect::<Vec<_>>();
-                            let intensities = centroid_peaks
-                                .iter()
-                                .map(|x| x.intensity)
-                                .collect::<Vec<_>>();
-                            (peaks, intensities)
-                        }
-                        RefPeakDataLevel::Deconvoluted(deconv_peaks) => {
-                            let peaks = deconv_peaks.iter().map(|x| x.mz()).collect::<Vec<_>>();
-                            let intensities =
-                                deconv_peaks.iter().map(|x| x.intensity).collect::<Vec<_>>();
-                            (peaks, intensities)
-                        }
-                        RefPeakDataLevel::Missing => {
-                            println!("Spectrum not found at the specified time");
-                            (vec![], vec![])
+                        None => {
+                            println!("Spectrum not found, retrying...");
+                            std::thread::sleep(Duration::from_millis(100));
                         }
                     }
-                } else {
-                    return Err(anyhow!("Spectrum not found at the specified time"));
                 }
-            }
-            _ => {
-                return Err(anyhow!(
-                    "Expected MzMLReader, but found something else or an error"
-                ))
-            }
-        };
 
-        self.mass_spectrum = Some(solution);
-        Ok(self)
+                println!("Timeout occurred while getting spectrum by time");
+                Err(anyhow!("Timeout occurred while getting spectrum by time"))
+            }
+            Err(e) => Err(anyhow!("Error accessing msfile: {:?}", e)),
+            _ => Err(anyhow!(
+                "Expected MzMLReader, but found something else or an error"
+            )),
+        }
     }
 }
-
-/*
-fn main() -> Result<()> {
-    let file_path = r"C:\Users\s0212777\OneDrive - Universiteit Antwerpen\rust_projects\mammamia\test_file\data_dependent_02.mzML";
-    let mut mzdata = MzData::default();
-
-    mzdata.open_msfile(file_path)?;
-
-    mzdata.get_xic(722.43, ScanPolarity::Positive, 0.05)?;
-
-    let plot_ready = mzdata.prepare_for_plot();
-    mzdata.smooth_data(plot_ready, 3)?;
-    mzdata.get_mass_spectrum(10.92)?;
-    println!("{:?}", mzdata.mass_spectrum);
-    Ok(())
-}
-
-fn main() -> std::io::Result<()> {
-    let file_path = r"C:\Users\s0212777\OneDrive - Universiteit Antwerpen\rust_projects\mz_viewer\data\test_BOTH.mzML";
-    let mut reader = mzdata::MZReader::open_path(file_path)?;
-    let mut solution: (Vec<f64>, Vec<f32>) = (vec![], vec![]);
-
-    if let Some(spec) = reader.get_spectrum_by_time(56.05) {
-        let peaks = spec.peaks();
-
-        solution = match peaks {
-            RefPeakDataLevel::RawData(raw_data) => {
-                let peaks = raw_data.mzs()?.to_vec();
-                let intensities = raw_data.intensities()?.to_vec();
-                (peaks, intensities)
-            }
-            RefPeakDataLevel::Centroid(centroid_peaks) => {
-                let peaks = centroid_peaks.iter().map(|x| x.mz).collect::<Vec<_>>();
-                let intensities = centroid_peaks
-                    .iter()
-                    .map(|x| x.intensity)
-                    .collect::<Vec<_>>();
-                (peaks, intensities)
-            }
-            RefPeakDataLevel::Deconvoluted(deconv_peaks) => {
-                let peaks = deconv_peaks.iter().map(|x| x.mz()).collect::<Vec<_>>();
-                let intensities = deconv_peaks.iter().map(|x| x.intensity).collect::<Vec<_>>();
-                (peaks, intensities)
-            }
-            RefPeakDataLevel::Missing => {
-                println!("Spectrum not found at the specified time");
-                (vec![], vec![])
-            }
-        };
-    }
-    println!("MZ: {:?}", solution.0);
-
-    println!("INTENSITY: {:?}", solution.1);
-
-    Ok(())
-}
-*/
 
 #[cfg(test)]
 mod tests {
@@ -369,6 +400,7 @@ mod tests {
         assert!(!mzdata.retention_time.is_empty());
         assert!(!mzdata.intensity.is_empty());
     }
+
     #[test]
     fn test_get_tic() {
         let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));

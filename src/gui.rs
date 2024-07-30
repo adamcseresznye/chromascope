@@ -8,6 +8,9 @@ use std::path::PathBuf;
 use eframe::egui;
 use egui::{Color32, Context, Ui};
 use egui_plot::{Line, PlotPoints};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use egui_plot::{Plot, BarChart, Bar};
 
 const FILE_FORMAT: &str = "mzML";
 
@@ -58,6 +61,8 @@ pub struct MzViewerApp {
 
     options_window_open: bool,
     checkbox_bool: bool,
+
+    example_mz_extract: Option<(Vec<f32>, Vec<f64>)>
 }
 
 impl MzViewerApp {
@@ -120,70 +125,206 @@ impl MzViewerApp {
             .response;
 
         if response.triple_clicked() {
-            let plot_position = response.interact_pointer_pos();
-            if let Some(plot_position) = plot_position {
-                let rt = plot_position.x;
-
-                // find the max retention time
-                let max_rt = if let Some(plot_data) = &self.plot_data {
-                    if let Some(last_point) = plot_data.last() {
-                        last_point[0] as f32
-                    } else {
-                        // Handle the case where plot_data is empty
-                        0.0
-                    }
-                } else {
-                    // Handle the case where self.plot_data is None
-                    0.0
-                };
-
+            println!("Triple click detected");
+            if let Some(plot_position) = response.interact_pointer_pos() {
+                println!("Plot position: {:?}", plot_position);
                 if let Some(bounds) = plot_bounds {
-                    let plot_width = response.rect.width();
-
                     let min_x = *bounds.range_x().start();
                     let max_x = *bounds.range_x().end();
-
-                    // Calculate the position relative to the plot area, not the response area
-                    let relative_x = (plot_position.x - response.rect.left()) / plot_width;
-
+                    println!("Plot bounds: min_x = {}, max_x = {}", min_x, max_x);
+                    let relative_x =
+                        (plot_position.x - response.rect.left()) / response.rect.width();
                     let converted_rt = min_x + relative_x as f64 * (max_x - min_x);
 
                     self.user_input.retention_time_ms_spectrum = Some(converted_rt as f32);
+                    println!(
+                        "Set retention time: {:?}",
+                        self.user_input.retention_time_ms_spectrum
+                    );
+                    ui.ctx().request_repaint();
+
+                    /*
+                    // just for a test to see if I set the values here and triple click the LC what happens
+                    // 100k values could be easily plotted, 1e6 not so much, started to freeze
+                    let extracted_mzs: Vec<f32> = (0..1_000_00).map(|v| (v + 1) as f32).collect();
+                    let extracted_intensities: Vec<f64> = (0..1_000_00).map(|v| (v + 1) as f64).collect();
+                    
+                    self.example_mz_extract = Some((extracted_mzs, extracted_intensities));
+                    */
+                    
+
+                } else {
+                    println!("Plot bounds not available");
                 }
+            } else {
+                println!("Could not get plot position");
             }
         }
         response
     }
 
+    
     fn plot_mass_spectrum(&mut self, ui: &mut egui::Ui) -> egui::Response {
-        let mz = [100.0, 125.0, 135.3];
-        let intensity = [100.0, 125.0, 135.3];
-
-        // Create bar chart data
-        let bars: Vec<egui_plot::Bar> = mz
-            .iter()
-            .zip(intensity.iter())
-            .map(|(&m, &i)| {
-                egui_plot::Bar::new(m, i.into())
-                    .width(0.25) // Adjust width of bars as needed
-                    .fill(self.user_input.line_color.to_egui()) // Adjust color as needed
-            })
-            .collect();
-
-        egui_plot::Plot::new("mass_spectrum")
-            .width(ui.available_width() * 0.99)
-            .height(ui.available_height())
-            .show(ui, |plot_ui| {
-                plot_ui.bar_chart(egui_plot::BarChart::new(bars));
-
-                // Customize axes
-                //plot_ui.set_plot_bounds(egui_plot::PlotBounds::from_min_max(
-                //    [95.0, 0.0],
-                //    [205.0, 110.0]
-                //));
-            })
-            .response
+        if let Some(rt_spectrum) = self.user_input.retention_time_ms_spectrum {
+            let parsed_ms_data = Arc::clone(&self.parsed_ms_data);
+    
+            let handle = thread::spawn({
+                let parsed_ms_data = Arc::clone(&parsed_ms_data);
+                move || {
+                    let mut data = parsed_ms_data.lock().unwrap();
+                    data.get_mass_spectrum(rt_spectrum).map(|_| {
+                        // No need to return a reference, just update the data
+                        ()
+                    }).ok()
+                }
+            });
+    
+            match handle.join() {
+                Ok(_) => {
+                    let data = parsed_ms_data.lock().unwrap();
+                    if let Some((mz, intensities)) = &data.mass_spectrum {
+                        // Processing and plotting logic
+                        println!(
+                            "Processing mass spectrum data. Number of points: {}",
+                            mz.len()
+                        );
+    
+                        // Limit the number of points to prevent potential performance issues
+                        let max_points = 100; // Adjust as necessary
+                        let step = (mz.len() / max_points).max(1);
+    
+                        let bars: Vec<egui_plot::Bar> = mz
+                            .iter()
+                            .zip(intensities.iter())
+                            .step_by(step)
+                            .take(max_points)
+                            .map(|(&m, &i)| {
+                                egui_plot::Bar::new(m, i as f64)
+                                    .width(0.25)
+                                    .fill(self.user_input.line_color.to_egui())
+                            })
+                            .collect();
+    
+                        println!("Created {} bars for the plot", bars.len());
+    
+                        return egui_plot::Plot::new("mass_spectrum")
+                            .width(ui.available_width() * 0.99)
+                            .height(ui.available_height())
+                            .show(ui, |plot_ui| {
+                                plot_ui.bar_chart(egui_plot::BarChart::new(bars));
+                            })
+                            .response;
+                    } else {
+                        ui.label("No mass spectrum data available")
+                    }
+                }
+                Err(_) => ui.label("Error fetching mass spectrum data"),
+            }
+        } else {
+            ui.label("No mass spectrum data available")
+        }
     }
+    
+    /*
+    fn plot_mass_spectrum(&mut self, ui: &mut egui::Ui) -> egui::Response {
+        if let Some(rt_spectrum) = self.user_input.retention_time_ms_spectrum {
+            println!("Attempting to get mass spectrum for RT: {}", rt_spectrum);
+
+            match self.parsed_ms_data.get_mass_spectrum(rt_spectrum) {
+                Ok(_) => {
+                    println!("Successfully got mass spectrum data");
+                    if let Some((mz, intensities)) = &self.parsed_ms_data.mass_spectrum {
+                        println!(
+                            "Processing mass spectrum data. Number of points: {}",
+                            mz.len()
+                        );
+
+                        // Limit the number of points to prevent potential performance issues
+                        let max_points = 1;
+                        let step = (mz.len() / max_points).max(1);
+
+                        let bars: Vec<egui_plot::Bar> = mz
+                            .iter()
+                            .zip(intensities.iter())
+                            .step_by(step)
+                            .take(max_points)
+                            .map(|(&m, &i)| {
+                                egui_plot::Bar::new(m, i as f64)
+                                    .width(0.25)
+                                    .fill(self.user_input.line_color.to_egui())
+                            })
+                            .collect();
+
+                        println!("Created {} bars for the plot", bars.len());
+
+                        return egui_plot::Plot::new("mass_spectrum")
+                            .width(ui.available_width() * 0.99)
+                            .height(ui.available_height())
+                            .show(ui, |plot_ui| {
+                                plot_ui.bar_chart(egui_plot::BarChart::new(bars));
+                            })
+                            .response;
+                    } else {
+                        println!(
+                            "No mass spectrum data available after successful get_mass_spectrum"
+                        );
+                        return ui.label("No mass spectrum data available");
+                    }
+                }
+                Err(e) => {
+                    println!("Error getting mass spectrum: {:?}", e);
+                    return ui.label(format!("Error: {:?}", e));
+                }
+            }
+        }
+        // else {
+        //    println!("No retention time set for mass spectrum");
+        //}
+
+        ui.label("No mass spectrum data available")
+            .on_hover_text("Triple-click on the chromatogram to select a retention time")
+    }
+    */
+    
+    /*
+    // this was used in combination with setting the extracted_mzs and extracted_intensities in the 
+    // plot_chromatogram method
+    fn plot_mass_spectrum(&mut self, ui: &mut egui::Ui) -> egui::Response {
+        if let Some(example_mz_extract) = &self.example_mz_extract {
+            // Create bar chart data
+            let bars: Vec<egui_plot::Bar> = example_mz_extract.0
+                .iter()
+                .zip(example_mz_extract.1.iter())
+                .map(|(&m, &i)| {
+                    egui_plot::Bar::new(m.into(), i.into())
+                        .width(0.25) // Adjust width of bars as needed
+                        .fill(self.user_input.line_color.to_egui()) // Adjust color as needed
+                })
+                .collect();
+    
+            let response = egui_plot::Plot::new("mass_spectrum")
+                .width(ui.available_width() * 0.99)
+                .height(ui.available_height())
+                .show(ui, |plot_ui| {
+                    plot_ui.bar_chart(egui_plot::BarChart::new(bars));
+    
+                    // Customize axes
+                    //plot_ui.set_plot_bounds(egui_plot::PlotBounds::from_min_max(
+                    //    [95.0, 0.0],
+                    //    [205.0, 110.0]
+                    //));
+                });
+            // Reset the user input
+            //self.user_input.retention_time_ms_spectrum = None;
+            response.response
+        } else {
+            // Handle the case where example_mz_extract is None
+            ui.label("No data available for plotting.")
+            
+        }
+    }
+    */
+    
 
     fn update_data_selection_panel(&mut self, ctx: &Context) {
         egui::TopBottomPanel::top("data_selection_panel").show(ctx, |ui| {
@@ -339,6 +480,10 @@ impl MzViewerApp {
                 egui::CollapsingHeader::new("Mass Spectrum")
                     .default_open(true)
                     .show(ui, |ui| {
+                        if ui.button("Clear Mass Spectrum").clicked() {
+                            self.user_input.retention_time_ms_spectrum = None;
+                            println!("Cleared retention time");
+                        }
                         self.plot_mass_spectrum(ui);
                     });
             });
