@@ -265,6 +265,47 @@ impl MzData {
         self.mass_spectrum = Some(solution);
         Ok(self)
     }
+    pub fn get_mass_spectrum_by_ID(&mut self, index: usize) {
+        // Invalid Index: If the index provided is out of range or does not correspond to any spectrum in the reader, get_spectrum_by_index might return None.
+        // Empty Data: If the reader has no spectra loaded or available, any index might result in None.
+        // Corrupted Data: If the data being read is corrupted or improperly formatted, the reader might fail to retrieve a spectrum
+        println!("self.msfile = {:?}", self.msfile);
+
+        match &self.msfile {
+            std::result::Result::Ok(MZFileReaderEnum::MzMLReader(DebugMzMLReaderType(reader))) => {
+                println!("spectrum_index = {:?}", reader.spectrum_index)
+            }
+            _ => println!("All else"),
+        }
+
+        match &mut self.msfile {
+            std::result::Result::Ok(MZFileReaderEnum::MzMLReader(DebugMzMLReaderType(reader))) => {
+                if let Some(spec) = reader.get_spectrum_by_index(index.into()) {
+                    let peaks = &spec.arrays.as_ref().unwrap().mzs().unwrap().to_vec();
+                    let intensities = &spec
+                        .arrays
+                        .as_ref()
+                        .unwrap()
+                        .intensities()
+                        .unwrap()
+                        .to_vec();
+                    self.mass_spectrum = Some((peaks.to_vec(), intensities.to_vec()));
+
+                    println!("{:?}", self.mass_spectrum);
+                } else {
+                    println!("This is the else arm of the MzMLReader")
+                }
+            }
+            std::result::Result::Ok(MZFileReaderEnum::MZReader(DebugMZReaderType(reader))) => {
+                if let Some(spec) = reader.get_spectrum_by_index(index.into()) {
+                    println!("MZReader Index nr: {:?} The masses are {:?}", index, spec);
+                } else {
+                    println!("This is the else arm of the MZReader")
+                }
+            }
+            _ => println!("_ arm variant"),
+        }
+    }
 }
 
 /*
