@@ -2,7 +2,8 @@
 
 use crate::{line_color::LineColor, line_type::LineType, parser, plot_type::PlotType};
 
-use mzdata::spectrum::ScanPolarity;
+use anyhow::Ok;
+use mzdata::{io::SpectrumSource, spectrum::ScanPolarity};
 use std::path::PathBuf;
 
 use eframe::egui;
@@ -120,6 +121,7 @@ impl MzViewerApp {
             .response;
 
         if response.triple_clicked() {
+            /*
             let plot_position = response.interact_pointer_pos();
             if let Some(plot_position) = plot_position {
                 let rt = plot_position.x;
@@ -149,41 +151,55 @@ impl MzViewerApp {
                     let converted_rt = min_x + relative_x as f64 * (max_x - min_x);
 
                     self.user_input.retention_time_ms_spectrum = Some(converted_rt as f32);
+                    println!(
+                        "Rt clicked: {:?}",
+                        self.user_input.retention_time_ms_spectrum
+                    );
+                    //
+                    println!(
+                        "Rt clicked: {:?}",
+                        self.parsed_ms_data.get_mass_spectrum_by_ID(0)
+                    );
+
                 }
             }
+            */
+            self.parsed_ms_data.get_mass_spectrum_by_ID(0)
         }
         response
     }
 
     fn plot_mass_spectrum(&mut self, ui: &mut egui::Ui) -> egui::Response {
-        let mz = [100.0, 125.0, 135.3];
-        let intensity = [100.0, 125.0, 135.3];
-
-        // Create bar chart data
-        let bars: Vec<egui_plot::Bar> = mz
-            .iter()
-            .zip(intensity.iter())
-            .map(|(&m, &i)| {
-                egui_plot::Bar::new(m, i.into())
-                    .width(0.25) // Adjust width of bars as needed
-                    .fill(self.user_input.line_color.to_egui()) // Adjust color as needed
-            })
-            .collect();
-
-        egui_plot::Plot::new("mass_spectrum")
-            .width(ui.available_width() * 0.99)
-            .height(ui.available_height())
-            .show(ui, |plot_ui| {
-                plot_ui.bar_chart(egui_plot::BarChart::new(bars));
-
-                // Customize axes
-                //plot_ui.set_plot_bounds(egui_plot::PlotBounds::from_min_max(
-                //    [95.0, 0.0],
-                //    [205.0, 110.0]
-                //));
-            })
-            .response
+        if let Some((mz, intensity)) = &self.parsed_ms_data.mass_spectrum {
+            // Create bar chart data
+            let bars: Vec<egui_plot::Bar> = mz
+                .iter()
+                .zip(intensity.iter())
+                .map(|(&m, &i)| {
+                    egui_plot::Bar::new(m, i.into())
+                        .width(0.25) // Adjust width of bars as needed
+                        .fill(self.user_input.line_color.to_egui()) // Adjust color as needed
+                })
+                .collect();
+    
+            egui_plot::Plot::new("mass_spectrum")
+                .width(ui.available_width() * 0.99)
+                .height(ui.available_height())
+                .show(ui, |plot_ui| {
+                    plot_ui.bar_chart(egui_plot::BarChart::new(bars));
+    
+                    // Customize axes
+                    //plot_ui.set_plot_bounds(egui_plot::PlotBounds::from_min_max(
+                    //    [95.0, 0.0],
+                    //    [205.0, 110.0]
+                    //));
+                })
+                .response
+        } else {
+            ui.label("No mass spectrum data available")
+        }
     }
+    
 
     fn update_data_selection_panel(&mut self, ctx: &Context) {
         egui::TopBottomPanel::top("data_selection_panel").show(ctx, |ui| {
