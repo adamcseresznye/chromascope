@@ -9,6 +9,8 @@ use std::path::PathBuf;
 use eframe::egui;
 use egui::{Color32, Context, Ui};
 use egui_plot::{Line, PlotPoints};
+use mzdata::meta::MSDataFileMetadata;
+use mzdata::spectrum::ChromatogramLike;
 
 const FILE_FORMAT: &str = "mzML";
 
@@ -46,6 +48,8 @@ enum StateChange {
 2. use enums for state management: DONE
 3. we need to have immediate access to the datafile so the MzData struct should be added to MzViewerApp
 4. MS files should be opened once when LC is drawn: MzMLReader::open_path(path)?; should be taken out from the parser methods
+5. when the file is opened, iterate over the spectra (https://docs.rs/mzdata/0.25.0/mzdata/spectrum/trait.ChromatogramLike.html#tymethod.description) and create a hashmap with the rt and id 
+    so that when the LC is clicked we can quickly figure out what the id of the spectra is thats needed to retrieve, we can save the hashmap in the parser::MzData
 */
 
 #[derive(Default)]
@@ -121,53 +125,57 @@ impl MzViewerApp {
             .response;
 
         if response.triple_clicked() {
-            /*
-            let plot_position = response.interact_pointer_pos();
-            if let Some(plot_position) = plot_position {
-                let rt = plot_position.x;
-
-                // find the max retention time
-                let max_rt = if let Some(plot_data) = &self.plot_data {
-                    if let Some(last_point) = plot_data.last() {
-                        last_point[0] as f32
-                    } else {
-                        // Handle the case where plot_data is empty
-                        0.0
-                    }
-                } else {
-                    // Handle the case where self.plot_data is None
-                    0.0
-                };
-
-                if let Some(bounds) = plot_bounds {
-                    let plot_width = response.rect.width();
-
-                    let min_x = *bounds.range_x().start();
-                    let max_x = *bounds.range_x().end();
-
-                    // Calculate the position relative to the plot area, not the response area
-                    let relative_x = (plot_position.x - response.rect.left()) / plot_width;
-
-                    let converted_rt = min_x + relative_x as f64 * (max_x - min_x);
-
-                    self.user_input.retention_time_ms_spectrum = Some(converted_rt as f32);
-                    println!(
-                        "Rt clicked: {:?}",
-                        self.user_input.retention_time_ms_spectrum
-                    );
-                    //
-                    println!(
-                        "Rt clicked: {:?}",
-                        self.parsed_ms_data.get_mass_spectrum_by_ID(0)
-                    );
-
-                }
-            }
-            */
-            self.parsed_ms_data.get_mass_spectrum_by_ID(0)
+            self.parsed_ms_data.get_mass_spectrum_by_index(0);
+            self.determine_rt_clicked(&response, plot_bounds);
         }
         response
     }
+
+    fn determine_rt_clicked(
+        &mut self,
+        response: &egui::Response,
+        plot_bounds: Option<egui_plot::PlotBounds>,
+    ) -> Option<f32> {
+        if let Some(plot_position) = response.interact_pointer_pos() {
+            let rt = plot_position.x;
+
+            // Find the max retention time
+            let max_rt = if let Some(plot_data) = &self.plot_data {
+                if let Some(last_point) = plot_data.last() {
+                    last_point[0] as f32
+                } else {
+                    // Handle the case where plot_data is empty
+                    0.0
+                }
+            } else {
+                // Handle the case where self.plot_data is None
+                0.0
+            };
+
+            if let Some(bounds) = plot_bounds {
+                let plot_width = response.rect.width();
+
+                let min_x = *bounds.range_x().start();
+                let max_x = *bounds.range_x().end();
+
+                // Calculate the position relative to the plot area, not the response area
+                let relative_x = (plot_position.x - response.rect.left()) / plot_width;
+
+                let converted_rt = min_x + relative_x as f64 * (max_x - min_x);
+
+                self.user_input.retention_time_ms_spectrum = Some(converted_rt as f32);
+                println!(
+                    "Rt clicked: {:?}",
+                    self.user_input.retention_time_ms_spectrum
+                );
+
+                return Some(converted_rt as f32);
+            }
+        }
+        None
+    }
+
+    fn convert_rt_to_index() {}
 
     fn plot_mass_spectrum(&mut self, ui: &mut egui::Ui) -> egui::Response {
         if let Some((mz, intensity)) = &self.parsed_ms_data.mass_spectrum {
@@ -181,25 +189,18 @@ impl MzViewerApp {
                         .fill(self.user_input.line_color.to_egui()) // Adjust color as needed
                 })
                 .collect();
-    
+
             egui_plot::Plot::new("mass_spectrum")
                 .width(ui.available_width() * 0.99)
                 .height(ui.available_height())
                 .show(ui, |plot_ui| {
                     plot_ui.bar_chart(egui_plot::BarChart::new(bars));
-    
-                    // Customize axes
-                    //plot_ui.set_plot_bounds(egui_plot::PlotBounds::from_min_max(
-                    //    [95.0, 0.0],
-                    //    [205.0, 110.0]
-                    //));
                 })
                 .response
         } else {
             ui.label("No mass spectrum data available")
         }
     }
-    
 
     fn update_data_selection_panel(&mut self, ctx: &Context) {
         egui::TopBottomPanel::top("data_selection_panel").show(ctx, |ui| {

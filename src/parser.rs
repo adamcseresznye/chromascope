@@ -5,7 +5,7 @@ use anyhow::{Ok, Result};
 use mzdata::io::mgf::MGFReaderType;
 use mzdata::io::mzml::MzMLReaderType;
 use mzdata::io::MZReaderType;
-use mzdata::spectrum::RefPeakDataLevel;
+use mzdata::spectrum::{self, RefPeakDataLevel};
 use mzdata::spectrum::{ScanPolarity, SignalContinuity};
 use mzdata::{prelude::*, MzMLReader};
 use std::fmt::Debug;
@@ -47,6 +47,8 @@ pub enum MZFileReaderEnum {
 
 #[derive(Debug)]
 pub struct MzData {
+    pub min_max_rt: Option<(f32, f32)>,
+    pub min_max_index: Option<(usize, usize)>,
     pub retention_time: Vec<f32>,
     pub intensity: Vec<f32>,
     pub mz: Vec<f32>,
@@ -62,6 +64,8 @@ impl Default for MzData {
 impl MzData {
     pub fn new() -> Self {
         Self {
+            min_max_rt: None,
+            min_max_index: None,
             retention_time: Vec::new(),
             intensity: Vec::new(),
             mz: Vec::new(),
@@ -73,6 +77,20 @@ impl MzData {
     pub fn open_msfile(&mut self, path: &str) -> Result<&mut Self> {
         let reader = MzMLReader::open_path(path)?;
         self.msfile = Ok(MZFileReaderEnum::MzMLReader(DebugMzMLReaderType(reader)));
+        println!("Index {:?}", self.msfile);
+
+        match &mut self.msfile {
+            std::result::Result::Ok(MZFileReaderEnum::MzMLReader(DebugMzMLReaderType(reader))) => {
+                let min_index = reader.iter().nth(0).map(|x| x.index()).unwrap_or(0);
+                let max_index = reader.iter().last().map(|x| x.index()).unwrap_or(0);
+                self.min_max_index = Some((min_index, max_index));
+
+                println!("{:?}", self.min_max_index)
+            }
+
+            _ => println!("_ arm variant"),
+        }
+
         Ok(self)
     }
 
@@ -101,6 +119,10 @@ impl MzData {
                 self.retention_time = retention_time;
                 self.intensity = intensity;
                 self.mz = mz;
+                self.min_max_rt = Some((
+                    self.retention_time.iter().nth(0).copied().unwrap_or(0.0),
+                    self.retention_time.iter().last().copied().unwrap_or(0.0),
+                ));
                 Ok(self)
             }
             _ => Err(anyhow!(
@@ -126,6 +148,10 @@ impl MzData {
                 self.retention_time = retention_time;
                 self.intensity = intensity;
                 self.mz = mz;
+                self.min_max_rt = Some((
+                    self.retention_time.iter().nth(0).copied().unwrap_or(0.0),
+                    self.retention_time.iter().last().copied().unwrap_or(0.0),
+                ));
                 Ok(self)
             }
             _ => Err(anyhow!(
@@ -220,7 +246,7 @@ impl MzData {
         Ok(self)
     }
 
-    pub fn get_mass_spectrum(&mut self, rt: f32) -> Result<&mut Self> {
+    pub fn get_mass_spectrum_by_time(&mut self, rt: f32) -> Result<&mut Self> {
         let solution: MassSpectrum = match &mut self.msfile {
             std::result::Result::Ok(MZFileReaderEnum::MzMLReader(DebugMzMLReaderType(reader))) => {
                 if let Some(spec) = reader.get_spectrum_by_time(rt.into()) {
@@ -265,18 +291,10 @@ impl MzData {
         self.mass_spectrum = Some(solution);
         Ok(self)
     }
-    pub fn get_mass_spectrum_by_ID(&mut self, index: usize) {
+    pub fn get_mass_spectrum_by_index(&mut self, index: usize) {
         // Invalid Index: If the index provided is out of range or does not correspond to any spectrum in the reader, get_spectrum_by_index might return None.
         // Empty Data: If the reader has no spectra loaded or available, any index might result in None.
         // Corrupted Data: If the data being read is corrupted or improperly formatted, the reader might fail to retrieve a spectrum
-        println!("self.msfile = {:?}", self.msfile);
-
-        match &self.msfile {
-            std::result::Result::Ok(MZFileReaderEnum::MzMLReader(DebugMzMLReaderType(reader))) => {
-                println!("spectrum_index = {:?}", reader.spectrum_index)
-            }
-            _ => println!("All else"),
-        }
 
         match &mut self.msfile {
             std::result::Result::Ok(MZFileReaderEnum::MzMLReader(DebugMzMLReaderType(reader))) => {
@@ -290,10 +308,6 @@ impl MzData {
                         .unwrap()
                         .to_vec();
                     self.mass_spectrum = Some((peaks.to_vec(), intensities.to_vec()));
-
-                    println!("{:?}", self.mass_spectrum);
-                } else {
-                    println!("This is the else arm of the MzMLReader")
                 }
             }
             std::result::Result::Ok(MZFileReaderEnum::MZReader(DebugMZReaderType(reader))) => {
