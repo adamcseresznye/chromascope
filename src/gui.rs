@@ -4,6 +4,7 @@ use crate::{line_color::LineColor, line_type::LineType, parser, plot_type::PlotT
 
 use anyhow::Ok;
 use mzdata::{io::SpectrumSource, spectrum::ScanPolarity};
+use std::ops::Div;
 use std::path::PathBuf;
 
 use eframe::egui;
@@ -11,6 +12,7 @@ use egui::{Color32, Context, Ui};
 use egui_plot::{Line, PlotPoints};
 use mzdata::meta::MSDataFileMetadata;
 use mzdata::spectrum::ChromatogramLike;
+use std::cmp::Ordering;
 
 const FILE_FORMAT: &str = "mzML";
 
@@ -48,7 +50,7 @@ enum StateChange {
 2. use enums for state management: DONE
 3. we need to have immediate access to the datafile so the MzData struct should be added to MzViewerApp
 4. MS files should be opened once when LC is drawn: MzMLReader::open_path(path)?; should be taken out from the parser methods
-5. when the file is opened, iterate over the spectra (https://docs.rs/mzdata/0.25.0/mzdata/spectrum/trait.ChromatogramLike.html#tymethod.description) and create a hashmap with the rt and id 
+5. when the file is opened, iterate over the spectra (https://docs.rs/mzdata/0.25.0/mzdata/spectrum/trait.ChromatogramLike.html#tymethod.description) and create a hashmap with the rt and id
     so that when the LC is clicked we can quickly figure out what the id of the spectra is thats needed to retrieve, we can save the hashmap in the parser::MzData
 */
 
@@ -125,8 +127,11 @@ impl MzViewerApp {
             .response;
 
         if response.triple_clicked() {
-            self.parsed_ms_data.get_mass_spectrum_by_index(0);
-            self.determine_rt_clicked(&response, plot_bounds);
+            let rt_clicked = self.determine_rt_clicked(&response, plot_bounds);
+
+            if let Some(rt) = self.find_closest_spectrum(rt_clicked) {
+                self.parsed_ms_data.get_mass_spectrum_by_index(rt);
+            }
         }
         response
     }
@@ -175,7 +180,38 @@ impl MzViewerApp {
         None
     }
 
-    fn convert_rt_to_index() {}
+    fn find_closest_spectrum(&self, clicked_rt: Option<f32>) -> Option<usize> {
+        if let Some(rt) = clicked_rt {
+            match self
+                .parsed_ms_data
+                .retention_time
+                .binary_search_by(|spectrum| spectrum.partial_cmp(&rt).unwrap_or(Ordering::Equal))
+            {
+                std::result::Result::Ok(found_index) => {
+                    Some(self.parsed_ms_data.index[found_index])
+                }
+                Err(found_index) => {
+                    // If the exact RT is not found, return the closest one
+                    if found_index == 0 {
+                        self.parsed_ms_data.index.first().copied()
+                    } else if found_index == self.parsed_ms_data.index.len() {
+                        self.parsed_ms_data.index.last().copied()
+                    } else {
+                        // Compare the two closest values and return the closer one
+                        let prev = &self.parsed_ms_data.retention_time[found_index - 1];
+                        let next = &self.parsed_ms_data.retention_time[found_index];
+                        if (rt - prev).abs() < (next - rt).abs() {
+                            Some(self.parsed_ms_data.index[found_index - 1])
+                        } else {
+                            Some(self.parsed_ms_data.index[found_index])
+                        }
+                    }
+                }
+            }
+        } else {
+            None
+        }
+    }
 
     fn plot_mass_spectrum(&mut self, ui: &mut egui::Ui) -> egui::Response {
         if let Some((mz, intensity)) = &self.parsed_ms_data.mass_spectrum {
@@ -185,7 +221,7 @@ impl MzViewerApp {
                 .zip(intensity.iter())
                 .map(|(&m, &i)| {
                     egui_plot::Bar::new(m, i.into())
-                        .width(0.25) // Adjust width of bars as needed
+                        .width(self.user_input.line_width.div(2.0).into()) // Adjust width of bars as needed
                         .fill(self.user_input.line_color.to_egui()) // Adjust color as needed
                 })
                 .collect();
