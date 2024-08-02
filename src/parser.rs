@@ -10,10 +10,18 @@ use mzdata::spectrum::{ScanPolarity, SignalContinuity};
 use mzdata::{prelude::*, MzMLReader};
 use std::fmt::Debug;
 use std::fs::File;
+use std::ops::Index;
+use std::ptr::read;
 
 const MS_LEVEL: u8 = 1;
 
 type MassSpectrum = (Vec<f64>, Vec<f32>);
+
+#[derive(Debug)]
+pub struct SingleSpectrum {
+    pub rt: f64,
+    pub index: usize,
+}
 
 // Wrapper structs with public visibility
 pub struct DebugMZReaderType(pub MZReaderType<File>);
@@ -47,6 +55,8 @@ pub enum MZFileReaderEnum {
 
 #[derive(Debug)]
 pub struct MzData {
+    pub list_of_spectra: Vec<SingleSpectrum>,
+    pub index: Vec<usize>,
     pub min_max_rt: Option<(f32, f32)>,
     pub min_max_index: Option<(usize, usize)>,
     pub retention_time: Vec<f32>,
@@ -64,6 +74,8 @@ impl Default for MzData {
 impl MzData {
     pub fn new() -> Self {
         Self {
+            list_of_spectra: Vec::new(),
+            index: Vec::new(),
             min_max_rt: None,
             min_max_index: None,
             retention_time: Vec::new(),
@@ -97,21 +109,23 @@ impl MzData {
     pub fn get_bpic(&mut self, polarity: ScanPolarity) -> Result<&mut Self> {
         match &mut self.msfile {
             Result::Ok(MZFileReaderEnum::MzMLReader(DebugMzMLReaderType(reader))) => {
-                let (retention_time, intensity, mz) = reader
+                let (retention_time, intensity, mz, index) = reader
                     .iter()
                     .filter(|spectrum| spectrum.description.polarity == polarity)
                     .map(|spectrum| {
                         let retention_time = spectrum.start_time() as f32;
                         let intensity = spectrum.peaks().base_peak().intensity;
                         let mz = spectrum.peaks().base_peak().mz as f32;
-                        (retention_time, intensity, mz)
+                        let index = spectrum.index() as usize;
+                        (retention_time, intensity, mz, index)
                     })
                     .fold(
-                        (Vec::new(), Vec::new(), Vec::new()),
-                        |mut acc, (rt, int, mz)| {
+                        (Vec::new(), Vec::new(), Vec::new(), Vec::new()),
+                        |mut acc, (rt, int, mz, index)| {
                             acc.0.push(rt);
                             acc.1.push(int);
                             acc.2.push(mz);
+                            acc.3.push(index);
                             acc
                         },
                     );
@@ -123,6 +137,7 @@ impl MzData {
                     self.retention_time.iter().nth(0).copied().unwrap_or(0.0),
                     self.retention_time.iter().last().copied().unwrap_or(0.0),
                 ));
+                self.index = index;
                 Ok(self)
             }
             _ => Err(anyhow!(
@@ -134,24 +149,30 @@ impl MzData {
     pub fn get_tic(&mut self, polarity: ScanPolarity) -> Result<&mut Self> {
         match &mut self.msfile {
             Result::Ok(MZFileReaderEnum::MzMLReader(DebugMzMLReaderType(reader))) => {
-                let (retention_time, intensity): (Vec<_>, Vec<_>) = reader
+                let mut retention_time = Vec::new();
+                let mut intensity = Vec::new();
+                let mut index = Vec::new();
+
+                for spectrum in reader
                     .iter()
                     .filter(|spectrum| spectrum.description.polarity == polarity)
-                    .map(|spectrum| {
-                        let retention_time = spectrum.start_time() as f32;
-                        let total_intensity = spectrum.peaks().tic();
-                        (retention_time, total_intensity)
-                    })
-                    .unzip();
+                {
+                    retention_time.push(spectrum.start_time() as f32);
+                    intensity.push(spectrum.peaks().tic());
+                    index.push(spectrum.index());
+                }
+
                 let mz: Vec<f32> = Vec::new();
 
                 self.retention_time = retention_time;
+                self.index = index;
                 self.intensity = intensity;
                 self.mz = mz;
                 self.min_max_rt = Some((
                     self.retention_time.iter().nth(0).copied().unwrap_or(0.0),
                     self.retention_time.iter().last().copied().unwrap_or(0.0),
                 ));
+
                 Ok(self)
             }
             _ => Err(anyhow!(
@@ -159,6 +180,7 @@ impl MzData {
             )),
         }
     }
+
     pub fn get_xic(
         &mut self,
         mass: f64,
@@ -184,6 +206,7 @@ impl MzData {
                         }
                     }
                 }
+                println!("XIC extracted: {:?} peaks", self.retention_time.len());
                 Ok(self)
             }
             _ => Err(anyhow!(
