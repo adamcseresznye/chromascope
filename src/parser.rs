@@ -5,13 +5,12 @@ use anyhow::{Ok, Result};
 use mzdata::io::mgf::MGFReaderType;
 use mzdata::io::mzml::MzMLReaderType;
 use mzdata::io::MZReaderType;
+use mzdata::spectrum::ArrayType;
 use mzdata::spectrum::{self, RefPeakDataLevel};
 use mzdata::spectrum::{ScanPolarity, SignalContinuity};
 use mzdata::{prelude::*, MzMLReader};
 use std::fmt::Debug;
 use std::fs::File;
-use std::ops::Index;
-use std::ptr::read;
 
 const MS_LEVEL: u8 = 1;
 
@@ -187,26 +186,55 @@ impl MzData {
         polarity: ScanPolarity,
         mass_tolerance: f64,
     ) -> Result<&mut Self> {
-        match &mut self.msfile {
-            Result::Ok(MZFileReaderEnum::MzMLReader(DebugMzMLReaderType(reader))) => {
-                for spectrum in reader {
-                    if spectrum.description.ms_level == MS_LEVEL
-                        && spectrum.description.polarity == polarity
-                        && spectrum.signal_continuity() == SignalContinuity::Centroid
-                    {
-                        let peak_picked = spectrum.clone().into_centroid()?;
-                        let matching_peaks = peak_picked
-                            .peaks
-                            .all_peaks_for(mass, Tolerance::Da(mass_tolerance));
+        println!("Starting XIC extraction");
+        println!(
+            "Mass: {}, Polarity: {:?}, Mass Tolerance: {}",
+            mass, polarity, mass_tolerance
+        );
 
-                        for peak in matching_peaks {
+        self.retention_time.clear();
+        self.intensity.clear();
+        //self.mz.clear();
+        self.index.clear();
+
+        match &mut self.msfile {
+            std::result::Result::Ok(MZFileReaderEnum::MzMLReader(DebugMzMLReaderType(reader))) => {
+                for spectrum in reader.iter() {
+                    if spectrum.description.ms_level == 1
+                        && spectrum.description.polarity == polarity
+                    {
+                        let rt = spectrum.start_time() as f32;
+
+                        let centroided = spectrum.clone().into_centroid()?;
+                        let sg = centroided
+                            .peaks
+                            .all_peaks_for(mass, Tolerance::PPM(mass_tolerance));
+
+                        for peak in sg {
                             self.retention_time
                                 .push(spectrum.description.acquisition.scans[0].start_time as f32);
                             self.intensity.push(peak.intensity);
+                            self.index.push(peak.index as usize)
                         }
                     }
                 }
-                println!("XIC extracted: {:?} peaks", self.retention_time.len());
+
+                println!("Indexes: {:?}", self.index);
+                println!("Rts: {:?}", self.retention_time);
+                //println!("XIC points extracted: {}", self.retention_time.len());
+
+                if self.retention_time.is_empty() {
+                    println!("No matching peaks found");
+                    return Err(anyhow!(
+                        "No matching peaks found for the given mass and tolerance"
+                    ));
+                }
+
+                self.min_max_rt = Some((
+                    *self.retention_time.first().unwrap(),
+                    *self.retention_time.last().unwrap(),
+                ));
+
                 Ok(self)
             }
             _ => Err(anyhow!(
@@ -214,6 +242,7 @@ impl MzData {
             )),
         }
     }
+
     pub fn prepare_for_plot(&self) -> Result<Vec<[f64; 2]>> {
         let mut data = Vec::new();
         let mut temp_rt = 0.0;

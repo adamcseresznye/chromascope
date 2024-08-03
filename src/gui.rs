@@ -89,6 +89,10 @@ impl MzViewerApp {
             ),
         }
         .ok();
+        println!(
+            "user input mass: {:?}, user input polarity: {:?}, user input mass tolerance: {:?}",
+            self.user_input.mass, self.user_input.polarity, self.user_input.mass_tolerance
+        );
 
         let prepared_data = self.parsed_ms_data.prepare_for_plot();
         self.parsed_ms_data
@@ -127,6 +131,7 @@ impl MzViewerApp {
             .response;
 
         if response.triple_clicked() {
+
             let rt_clicked = self.determine_rt_clicked(&response, plot_bounds);
 
             if let Some(rt) = self.find_closest_spectrum(rt_clicked) {
@@ -188,10 +193,13 @@ impl MzViewerApp {
                 .binary_search_by(|spectrum| spectrum.partial_cmp(&rt).unwrap_or(Ordering::Equal))
             {
                 std::result::Result::Ok(found_index) => {
+                    println!("Ok variant; index found: {:?}", found_index);
                     Some(self.parsed_ms_data.index[found_index])
+                    
                 }
                 Err(found_index) => {
                     // If the exact RT is not found, return the closest one
+                    println!("Err variant; index found: {:?}", found_index);
                     if found_index == 0 {
                         self.parsed_ms_data.index.first().copied()
                     } else if found_index == self.parsed_ms_data.index.len() {
@@ -209,6 +217,7 @@ impl MzViewerApp {
                 }
             }
         } else {
+            println!("Did not find a close rt match. So mass spectrum cant be extracted/displayed.");
             None
         }
     }
