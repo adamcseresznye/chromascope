@@ -1,17 +1,21 @@
-#![warn(clippy::all)]
+#![warn(
+    clippy::all,
+    clippy::restriction,
+    clippy::pedantic,
+    clippy::nursery,
+    clippy::cargo
+)]
 
 use crate::{line_color::LineColor, line_type::LineType, parser, plot_type::PlotType};
 
-use anyhow::Ok;
-use mzdata::{io::SpectrumSource, spectrum::ScanPolarity};
+use mzdata::spectrum::ScanPolarity;
 use std::ops::Div;
 use std::path::PathBuf;
 
 use eframe::egui;
 use egui::{Color32, Context, Ui};
 use egui_plot::{Line, PlotPoints};
-use mzdata::meta::MSDataFileMetadata;
-use mzdata::spectrum::ChromatogramLike;
+use log::{error, info, warn};
 use std::cmp::Ordering;
 
 const FILE_FORMAT: &str = "mzML";
@@ -44,15 +48,6 @@ enum StateChange {
     #[default]
     Unchanged,
 }
-
-/*
-1. put the configurations into the PlotConfig struct: DONE
-2. use enums for state management: DONE
-3. we need to have immediate access to the datafile so the MzData struct should be added to MzViewerApp
-4. MS files should be opened once when LC is drawn: MzMLReader::open_path(path)?; should be taken out from the parser methods
-5. when the file is opened, iterate over the spectra (https://docs.rs/mzdata/0.25.0/mzdata/spectrum/trait.ChromatogramLike.html#tymethod.description) and create a hashmap with the rt and id
-    so that when the LC is clicked we can quickly figure out what the id of the spectra is thats needed to retrieve, we can save the hashmap in the parser::MzData
-*/
 
 #[derive(Default)]
 pub struct MzViewerApp {
@@ -103,7 +98,7 @@ impl MzViewerApp {
     }
 
     fn plot_chromatogram(&mut self, ui: &mut egui::Ui) -> egui::Response {
-        if let Some(path) = &self.user_input.file_path {
+        if let Some(_path) = &self.user_input.file_path {
             // Only re-process the data if the state has changed
             if self.state_changed == StateChange::Changed {
                 self.plot_data = self.process_plot_data();
@@ -122,8 +117,7 @@ impl MzViewerApp {
                         Line::new(PlotPoints::from(data.clone()))
                             .width(self.user_input.line_width)
                             .style(self.user_input.line_type.to_egui())
-                            .color(self.user_input.line_color.to_egui())
-                            .name(format!("{:?}", self.user_input.plot_type)),
+                            .color(self.user_input.line_color.to_egui()), //.name(format!("{:?}", self.user_input.plot_type)),
                     );
                 }
                 plot_bounds = Some(plot_ui.plot_bounds());
@@ -131,11 +125,10 @@ impl MzViewerApp {
             .response;
 
         if response.triple_clicked() {
-
             let rt_clicked = self.determine_rt_clicked(&response, plot_bounds);
 
-            if let Some(rt) = self.find_closest_spectrum(rt_clicked) {
-                self.parsed_ms_data.get_mass_spectrum_by_index(rt);
+            if let Some(index) = self.find_closest_spectrum(rt_clicked) {
+                self.parsed_ms_data.get_mass_spectrum_by_index(index);
             }
         }
         response
@@ -147,21 +140,6 @@ impl MzViewerApp {
         plot_bounds: Option<egui_plot::PlotBounds>,
     ) -> Option<f32> {
         if let Some(plot_position) = response.interact_pointer_pos() {
-            let rt = plot_position.x;
-
-            // Find the max retention time
-            let max_rt = if let Some(plot_data) = &self.plot_data {
-                if let Some(last_point) = plot_data.last() {
-                    last_point[0] as f32
-                } else {
-                    // Handle the case where plot_data is empty
-                    0.0
-                }
-            } else {
-                // Handle the case where self.plot_data is None
-                0.0
-            };
-
             if let Some(bounds) = plot_bounds {
                 let plot_width = response.rect.width();
 
@@ -235,13 +213,30 @@ impl MzViewerApp {
                 })
                 .collect();
 
-            egui_plot::Plot::new("mass_spectrum")
+            let response = egui_plot::Plot::new("mass_spectrum")
                 .width(ui.available_width() * 0.99)
                 .height(ui.available_height())
                 .show(ui, |plot_ui| {
-                    plot_ui.bar_chart(egui_plot::BarChart::new(bars));
+                    let bounds = plot_ui.plot_bounds();
+                    let zoom_level = (bounds.max()[0] - bounds.min()[0]).abs(); // Calculate zoom level based on plot bounds
+
+                    let bar_width = zoom_level * 0.001; // Adjust bar width based on zoom level
+                    let adjusted_bars: Vec<egui_plot::Bar> = mz
+                        .iter()
+                        .zip(intensity.iter())
+                        .map(|(&m, &i)| {
+                            egui_plot::Bar::new(m, i.into())
+                                .width(bar_width) // Adjust width of bars based on zoom level
+                                .fill(self.user_input.line_color.to_egui()) // Adjust color as needed
+                                .name(format!("m/z = {:.4}", m))
+                        })
+                        .collect();
+
+                    plot_ui.bar_chart(egui_plot::BarChart::new(adjusted_bars));
                 })
-                .response
+                .response;
+
+            response
         } else {
             ui.label("No mass spectrum data available")
         }
@@ -337,9 +332,7 @@ impl MzViewerApp {
             self.invalid_file = FileValidity::Valid;
             self.user_input.file_path = Some(file_path_str.clone());
             self.parsed_ms_data = parser::MzData::default();
-            self.parsed_ms_data
-                .open_msfile(path.display().to_string().as_str())
-                .ok();
+            self.parsed_ms_data.open_msfile(path).ok();
         } else {
             self.invalid_file = FileValidity::Invalid;
         }
