@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use eframe::egui;
 use egui::{Color32, Context, Ui};
 use egui_plot::{Line, PlotPoints};
-use log::{error, info, warn};
+use log::{debug, error, info, trace, warn};
 use std::cmp::Ordering;
 
 const FILE_FORMAT: &str = "mzML";
@@ -74,7 +74,19 @@ impl MzViewerApp {
     }
 
     fn process_plot_data(&mut self) -> Option<Vec<[f64; 2]>> {
-        match self.user_input.plot_type {
+        info!("Starting to process plot data");
+
+        // Log user inputs
+        debug!(
+        "User input - mass: {:?}, polarity: {:?}, mass tolerance: {:?}, plot type: {:?}, smoothing: {}",
+        self.user_input.mass,
+        self.user_input.polarity,
+        self.user_input.mass_tolerance,
+        self.user_input.plot_type,
+        self.user_input.smoothing
+    );
+
+        let result = match self.user_input.plot_type {
             PlotType::Tic => self.parsed_ms_data.get_tic(self.user_input.polarity),
             PlotType::Bpc => self.parsed_ms_data.get_bpic(self.user_input.polarity),
             PlotType::Xic => self.parsed_ms_data.get_xic(
@@ -82,18 +94,27 @@ impl MzViewerApp {
                 self.user_input.polarity,
                 self.user_input.mass_tolerance,
             ),
+        };
+
+        if result.is_err() {
+            error!("Failed to get plot data for the specified plot type");
         }
-        .ok();
-        println!(
-            "user input mass: {:?}, user input polarity: {:?}, user input mass tolerance: {:?}",
-            self.user_input.mass, self.user_input.polarity, self.user_input.mass_tolerance
-        );
 
         let prepared_data = self.parsed_ms_data.prepare_for_plot();
-        self.parsed_ms_data
+        if prepared_data.is_err() {
+            error!("Failed to prepare data for plotting");
+        }
+        if self
+            .parsed_ms_data
             .smooth_data(prepared_data, self.user_input.smoothing)
-            .ok();
+            .is_err()
+        {
+            error!("Failed to smooth data");
+            return None;
+        };
+
         let plot_data = &self.parsed_ms_data.plot_data;
+        info!("Finished processing plot data");
         plot_data.clone()
     }
 
@@ -101,9 +122,10 @@ impl MzViewerApp {
         if let Some(_path) = &self.user_input.file_path {
             // Only re-process the data if the state has changed
             if self.state_changed == StateChange::Changed {
+                info!("State has changed, starting to plot chromatogram");
                 self.plot_data = self.process_plot_data();
                 self.state_changed = StateChange::Unchanged;
-            };
+            }
         }
 
         let mut plot_bounds = None;
@@ -119,6 +141,8 @@ impl MzViewerApp {
                             .style(self.user_input.line_type.to_egui())
                             .color(self.user_input.line_color.to_egui()), //.name(format!("{:?}", self.user_input.plot_type)),
                     );
+                } else {
+                    warn!("No plot data available");
                 }
                 plot_bounds = Some(plot_ui.plot_bounds());
             })
@@ -126,11 +150,16 @@ impl MzViewerApp {
 
         if response.triple_clicked() {
             let rt_clicked = self.determine_rt_clicked(&response, plot_bounds);
+            info!("Triple click detected on plot at {:?}", &rt_clicked);
 
             if let Some(index) = self.find_closest_spectrum(rt_clicked) {
+                info!("Found closest spectrum at index: {}", index);
                 self.parsed_ms_data.get_mass_spectrum_by_index(index);
+            } else {
+                warn!("No close spectrum found for the clicked retention time");
             }
         }
+
         response
     }
 
@@ -152,53 +181,63 @@ impl MzViewerApp {
                 let converted_rt = min_x + relative_x as f64 * (max_x - min_x);
 
                 self.user_input.retention_time_ms_spectrum = Some(converted_rt as f32);
-                println!(
-                    "Rt clicked: {:?}",
+                info!(
+                    "Retention time clicked: {:?}",
                     self.user_input.retention_time_ms_spectrum
                 );
 
                 return Some(converted_rt as f32);
+            } else {
+                warn!("Plot bounds are None");
             }
+        } else {
+            warn!("No plot position detected");
         }
         None
     }
 
     fn find_closest_spectrum(&self, clicked_rt: Option<f32>) -> Option<usize> {
         if let Some(rt) = clicked_rt {
-            match self
-                .parsed_ms_data
-                .retention_time
-                .binary_search_by(|spectrum| spectrum.partial_cmp(&rt).unwrap_or(Ordering::Equal))
-            {
-                std::result::Result::Ok(found_index) => {
-                    println!("Ok variant; index found: {:?}", found_index);
-                    Some(self.parsed_ms_data.index[found_index])
-                    
-                }
-                Err(found_index) => {
-                    // If the exact RT is not found, return the closest one
-                    println!("Err variant; index found: {:?}", found_index);
-                    if found_index == 0 {
-                        self.parsed_ms_data.index.first().copied()
-                    } else if found_index == self.parsed_ms_data.index.len() {
-                        self.parsed_ms_data.index.last().copied()
-                    } else {
-                        // Compare the two closest values and return the closer one
-                        let prev = &self.parsed_ms_data.retention_time[found_index - 1];
-                        let next = &self.parsed_ms_data.retention_time[found_index];
-                        if (rt - prev).abs() < (next - rt).abs() {
-                            Some(self.parsed_ms_data.index[found_index - 1])
+            if let (Some(retention_times), Some(indices)) = (
+                &self.parsed_ms_data.retention_time,
+                &self.parsed_ms_data.index,
+            ) {
+                match retention_times.binary_search_by(|spectrum| {
+                    spectrum.partial_cmp(&rt).unwrap_or(Ordering::Equal)
+                }) {
+                    Ok(found_index) => {
+                        info!("Exact Rt match found at index: {:?}", found_index);
+                        Some(indices[found_index])
+                    }
+                    Err(found_index) => {
+                        // If the exact RT is not found, return the closest one
+                        info!("Closest Rt match not found, using nearest index: {:?}", found_index);
+                        if found_index == 0 {
+                            indices.first().copied()
+                        } else if found_index == indices.len() {
+                            indices.last().copied()
                         } else {
-                            Some(self.parsed_ms_data.index[found_index])
+                            // Compare the two closest values and return the closer one
+                            let prev = &retention_times[found_index - 1];
+                            let next = &retention_times[found_index];
+                            if (rt - prev).abs() < (next - rt).abs() {
+                                Some(indices[found_index - 1])
+                            } else {
+                                Some(indices[found_index])
+                            }
                         }
                     }
                 }
+            } else {
+                warn!("Retention time or index data is missing.");
+                None
             }
         } else {
-            println!("Did not find a close rt match. So mass spectrum cant be extracted/displayed.");
+            warn!("No close RT match found. Mass spectrum can't be extracted/displayed.");
             None
         }
     }
+    
 
     fn plot_mass_spectrum(&mut self, ui: &mut egui::Ui) -> egui::Response {
         if let Some((mz, intensity)) = &self.parsed_ms_data.mass_spectrum {
