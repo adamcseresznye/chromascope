@@ -1,113 +1,89 @@
-#![deny(clippy::all)]
+#![warn(
+    clippy::all,
+    clippy::restriction,
+    clippy::pedantic,
+    clippy::nursery,
+    clippy::cargo
+)]
 
 use anyhow::anyhow;
-use anyhow::{Ok, Result};
-use mzdata::io::mgf::MGFReaderType;
+use anyhow::Result;
+use log::{debug, error, info, warn, trace};
 use mzdata::io::mzml::MzMLReaderType;
-use mzdata::io::MZReaderType;
-use mzdata::spectrum::ArrayType;
-use mzdata::spectrum::{self, RefPeakDataLevel};
-use mzdata::spectrum::{ScanPolarity, SignalContinuity};
+use mzdata::spectrum::ScanPolarity;
 use mzdata::{prelude::*, MzMLReader};
-use std::fmt::Debug;
 use std::fs::File;
+use std::path::PathBuf;
 
 const MS_LEVEL: u8 = 1;
 
-type MassSpectrum = (Vec<f64>, Vec<f32>);
-
-#[derive(Debug)]
-pub struct SingleSpectrum {
-    pub rt: f64,
-    pub index: usize,
-}
-
-// Wrapper structs with public visibility
-pub struct DebugMZReaderType(pub MZReaderType<File>);
-pub struct DebugMGFReaderType(pub MGFReaderType<File>);
-pub struct DebugMzMLReaderType(pub MzMLReaderType<File>);
-
-impl Debug for DebugMZReaderType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "DebugMZReaderType")
-    }
-}
-
-impl Debug for DebugMGFReaderType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "DebugMGFReaderType")
-    }
-}
-
-impl Debug for DebugMzMLReaderType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "DebugMzMLReaderType")
-    }
-}
-
-#[derive(Debug)]
-pub enum MZFileReaderEnum {
-    MZReader(DebugMZReaderType),
-    MGFReader(DebugMGFReaderType),
-    MzMLReader(DebugMzMLReaderType),
-}
-
-#[derive(Debug)]
 pub struct MzData {
-    pub list_of_spectra: Vec<SingleSpectrum>,
+    pub file_name: String,
     pub index: Vec<usize>,
-    pub min_max_rt: Option<(f32, f32)>,
-    pub min_max_index: Option<(usize, usize)>,
     pub retention_time: Vec<f32>,
     pub intensity: Vec<f32>,
     pub mz: Vec<f32>,
-    pub msfile: Result<MZFileReaderEnum>,
+    pub msfile: Result<MzMLReaderType<File>>,
     pub plot_data: Option<Vec<[f64; 2]>>,
     pub mass_spectrum: Option<(Vec<f64>, Vec<f32>)>,
 }
+
 impl Default for MzData {
     fn default() -> Self {
         Self::new()
     }
 }
+
+impl std::fmt::Debug for MzData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MzData")
+            .field("file_name", &self.file_name)
+            .field("retention_time", &self.retention_time)
+            .field("intensity", &self.intensity)
+            .field("mz", &self.mz)
+            .field("msfile", &"Result<MzMLReaderType<File>>")
+            .field("plot_data", &self.plot_data)
+            .field("mass_spectrum", &self.mass_spectrum)
+            .finish()
+    }
+}
 impl MzData {
     pub fn new() -> Self {
         Self {
-            list_of_spectra: Vec::new(),
+            file_name: String::new(),
             index: Vec::new(),
-            min_max_rt: None,
-            min_max_index: None,
             retention_time: Vec::new(),
             intensity: Vec::new(),
             mz: Vec::new(),
             msfile: Err(anyhow!("File not opened")),
-            plot_data: Some(Vec::new()),
-            mass_spectrum: Some((Vec::new(), Vec::new())),
+            plot_data: None,
+            mass_spectrum: None,
         }
     }
-    pub fn open_msfile(&mut self, path: &str) -> Result<&mut Self> {
-        let reader = MzMLReader::open_path(path)?;
-        self.msfile = Ok(MZFileReaderEnum::MzMLReader(DebugMzMLReaderType(reader)));
-        println!("Index {:?}", self.msfile);
+    pub fn open_msfile(&mut self, path: PathBuf) -> Result<&mut Self> {
+        info!("Attempting to open MzML file at path: {:?}", &path);
 
-        match &mut self.msfile {
-            std::result::Result::Ok(MZFileReaderEnum::MzMLReader(DebugMzMLReaderType(reader))) => {
-                let min_index = reader.iter().nth(0).map(|x| x.index()).unwrap_or(0);
-                let max_index = reader.iter().last().map(|x| x.index()).unwrap_or(0);
-                self.min_max_index = Some((min_index, max_index));
-
-                println!("{:?}", self.min_max_index)
+        match MzMLReader::open_path(&path) {
+            Ok(reader) => {
+                self.msfile = Ok(reader);
+                self.file_name = path.display().to_string();
+                debug!("Successfully opened MzML file at path: {:?}", &path);
+                Ok(self)
             }
-
-            _ => println!("_ arm variant"),
+            Err(e) => {
+                error!(
+                    "Failed to open MzML file at path: {:?} with error: {:?}",
+                    &path, e
+                );
+                Err(e.into())
+            }
         }
-
-        Ok(self)
     }
 
     pub fn get_bpic(&mut self, polarity: ScanPolarity) -> Result<&mut Self> {
+        info!("Attempting to read BIC of {:?}", &self.file_name);
         match &mut self.msfile {
-            Result::Ok(MZFileReaderEnum::MzMLReader(DebugMzMLReaderType(reader))) => {
+            Ok(reader) => {
                 let (retention_time, intensity, mz, index) = reader
                     .iter()
                     .filter(|spectrum| spectrum.description.polarity == polarity)
@@ -115,7 +91,7 @@ impl MzData {
                         let retention_time = spectrum.start_time() as f32;
                         let intensity = spectrum.peaks().base_peak().intensity;
                         let mz = spectrum.peaks().base_peak().mz as f32;
-                        let index = spectrum.index() as usize;
+                        let index = spectrum.index();
                         (retention_time, intensity, mz, index)
                     })
                     .fold(
@@ -132,22 +108,17 @@ impl MzData {
                 self.retention_time = retention_time;
                 self.intensity = intensity;
                 self.mz = mz;
-                self.min_max_rt = Some((
-                    self.retention_time.iter().nth(0).copied().unwrap_or(0.0),
-                    self.retention_time.iter().last().copied().unwrap_or(0.0),
-                ));
                 self.index = index;
-                Ok(self)
+                trace!("Successfully extracted the BIC of {:?}. Rt is {:?}, Index is {:?}, Mz is {:?}, Intensity is {:?}, ", &self.file_name, &self.retention_time, &self.index, &self.mz, &self.intensity);
             }
-            _ => Err(anyhow!(
-                "Expected MzMLReader, but found something else or an error"
-            )),
+            Err(e) => error!("Failed to get BIC due to {:?}", e),
         }
+        Ok(self)
     }
 
     pub fn get_tic(&mut self, polarity: ScanPolarity) -> Result<&mut Self> {
         match &mut self.msfile {
-            Result::Ok(MZFileReaderEnum::MzMLReader(DebugMzMLReaderType(reader))) => {
+            Ok(reader) => {
                 let mut retention_time = Vec::new();
                 let mut intensity = Vec::new();
                 let mut index = Vec::new();
@@ -167,10 +138,6 @@ impl MzData {
                 self.index = index;
                 self.intensity = intensity;
                 self.mz = mz;
-                self.min_max_rt = Some((
-                    self.retention_time.iter().nth(0).copied().unwrap_or(0.0),
-                    self.retention_time.iter().last().copied().unwrap_or(0.0),
-                ));
 
                 Ok(self)
             }
@@ -192,19 +159,18 @@ impl MzData {
             mass, polarity, mass_tolerance
         );
 
-        self.retention_time.clear();
-        self.intensity.clear();
+        self.retention_time.clear(); // the rt should be cleared before otherwise the XIC is overlayed on the TIC or BIC
+        //self.intensity.clear(); 
+        //self.index.clear(); // if the index is cleared, when triple clicked one cannot extract the mass spectrum
+
         //self.mz.clear();
-        self.index.clear();
 
         match &mut self.msfile {
-            std::result::Result::Ok(MZFileReaderEnum::MzMLReader(DebugMzMLReaderType(reader))) => {
+            Ok(reader) => {
                 for spectrum in reader.iter() {
-                    if spectrum.description.ms_level == 1
+                    if spectrum.description.ms_level == MS_LEVEL
                         && spectrum.description.polarity == polarity
                     {
-                        let rt = spectrum.start_time() as f32;
-
                         let centroided = spectrum.clone().into_centroid()?;
                         let sg = centroided
                             .peaks
@@ -229,11 +195,6 @@ impl MzData {
                         "No matching peaks found for the given mass and tolerance"
                     ));
                 }
-
-                self.min_max_rt = Some((
-                    *self.retention_time.first().unwrap(),
-                    *self.retention_time.last().unwrap(),
-                ));
 
                 Ok(self)
             }
@@ -298,59 +259,10 @@ impl MzData {
         Ok(self)
     }
 
-    pub fn get_mass_spectrum_by_time(&mut self, rt: f32) -> Result<&mut Self> {
-        let solution: MassSpectrum = match &mut self.msfile {
-            std::result::Result::Ok(MZFileReaderEnum::MzMLReader(DebugMzMLReaderType(reader))) => {
-                if let Some(spec) = reader.get_spectrum_by_time(rt.into()) {
-                    let peaks = spec.peaks();
-
-                    match peaks {
-                        RefPeakDataLevel::RawData(raw_data) => {
-                            let peaks = raw_data.mzs()?.to_vec();
-                            let intensities = raw_data.intensities()?.to_vec();
-                            (peaks, intensities)
-                        }
-                        RefPeakDataLevel::Centroid(centroid_peaks) => {
-                            let peaks = centroid_peaks.iter().map(|x| x.mz).collect::<Vec<_>>();
-                            let intensities = centroid_peaks
-                                .iter()
-                                .map(|x| x.intensity)
-                                .collect::<Vec<_>>();
-                            (peaks, intensities)
-                        }
-                        RefPeakDataLevel::Deconvoluted(deconv_peaks) => {
-                            let peaks = deconv_peaks.iter().map(|x| x.mz()).collect::<Vec<_>>();
-                            let intensities =
-                                deconv_peaks.iter().map(|x| x.intensity).collect::<Vec<_>>();
-                            (peaks, intensities)
-                        }
-                        RefPeakDataLevel::Missing => {
-                            println!("Spectrum not found at the specified time");
-                            (vec![], vec![])
-                        }
-                    }
-                } else {
-                    return Err(anyhow!("Spectrum not found at the specified time"));
-                }
-            }
-            _ => {
-                return Err(anyhow!(
-                    "Expected MzMLReader, but found something else or an error"
-                ))
-            }
-        };
-
-        self.mass_spectrum = Some(solution);
-        Ok(self)
-    }
     pub fn get_mass_spectrum_by_index(&mut self, index: usize) {
-        // Invalid Index: If the index provided is out of range or does not correspond to any spectrum in the reader, get_spectrum_by_index might return None.
-        // Empty Data: If the reader has no spectra loaded or available, any index might result in None.
-        // Corrupted Data: If the data being read is corrupted or improperly formatted, the reader might fail to retrieve a spectrum
-
         match &mut self.msfile {
-            std::result::Result::Ok(MZFileReaderEnum::MzMLReader(DebugMzMLReaderType(reader))) => {
-                if let Some(spec) = reader.get_spectrum_by_index(index.into()) {
+            Ok(reader) => {
+                if let Some(spec) = reader.get_spectrum_by_index(index) {
                     let peaks = &spec.arrays.as_ref().unwrap().mzs().unwrap().to_vec();
                     let intensities = &spec
                         .arrays
@@ -362,74 +274,11 @@ impl MzData {
                     self.mass_spectrum = Some((peaks.to_vec(), intensities.to_vec()));
                 }
             }
-            std::result::Result::Ok(MZFileReaderEnum::MZReader(DebugMZReaderType(reader))) => {
-                if let Some(spec) = reader.get_spectrum_by_index(index.into()) {
-                    println!("MZReader Index nr: {:?} The masses are {:?}", index, spec);
-                } else {
-                    println!("This is the else arm of the MZReader")
-                }
-            }
+
             _ => println!("_ arm variant"),
         }
     }
 }
-
-/*
-fn main() -> Result<()> {
-    let file_path = r"C:\Users\s0212777\OneDrive - Universiteit Antwerpen\rust_projects\mammamia\test_file\data_dependent_02.mzML";
-    let mut mzdata = MzData::default();
-
-    mzdata.open_msfile(file_path)?;
-
-    mzdata.get_xic(722.43, ScanPolarity::Positive, 0.05)?;
-
-    let plot_ready = mzdata.prepare_for_plot();
-    mzdata.smooth_data(plot_ready, 3)?;
-    mzdata.get_mass_spectrum(10.92)?;
-    println!("{:?}", mzdata.mass_spectrum);
-    Ok(())
-}
-
-fn main() -> std::io::Result<()> {
-    let file_path = r"C:\Users\s0212777\OneDrive - Universiteit Antwerpen\rust_projects\mz_viewer\data\test_BOTH.mzML";
-    let mut reader = mzdata::MZReader::open_path(file_path)?;
-    let mut solution: (Vec<f64>, Vec<f32>) = (vec![], vec![]);
-
-    if let Some(spec) = reader.get_spectrum_by_time(56.05) {
-        let peaks = spec.peaks();
-
-        solution = match peaks {
-            RefPeakDataLevel::RawData(raw_data) => {
-                let peaks = raw_data.mzs()?.to_vec();
-                let intensities = raw_data.intensities()?.to_vec();
-                (peaks, intensities)
-            }
-            RefPeakDataLevel::Centroid(centroid_peaks) => {
-                let peaks = centroid_peaks.iter().map(|x| x.mz).collect::<Vec<_>>();
-                let intensities = centroid_peaks
-                    .iter()
-                    .map(|x| x.intensity)
-                    .collect::<Vec<_>>();
-                (peaks, intensities)
-            }
-            RefPeakDataLevel::Deconvoluted(deconv_peaks) => {
-                let peaks = deconv_peaks.iter().map(|x| x.mz()).collect::<Vec<_>>();
-                let intensities = deconv_peaks.iter().map(|x| x.intensity).collect::<Vec<_>>();
-                (peaks, intensities)
-            }
-            RefPeakDataLevel::Missing => {
-                println!("Spectrum not found at the specified time");
-                (vec![], vec![])
-            }
-        };
-    }
-    println!("MZ: {:?}", solution.0);
-
-    println!("INTENSITY: {:?}", solution.1);
-
-    Ok(())
-}
-*/
 
 #[cfg(test)]
 mod tests {
@@ -455,7 +304,7 @@ mod tests {
         d.push(TEST_FILE);
 
         let mut mzdata = MzData::new();
-        let result = mzdata.open_msfile(d.display().to_string().as_str());
+        let result = mzdata.open_msfile(d);
         assert!(result.is_ok());
         assert!(mzdata.msfile.is_ok());
     }
@@ -467,9 +316,7 @@ mod tests {
 
         let mut mzdata = MzData::new();
 
-        mzdata
-            .open_msfile(d.display().to_string().as_str())
-            .unwrap();
+        mzdata.open_msfile(d).unwrap();
 
         let result = mzdata.get_xic(722.43, ScanPolarity::Positive, 0.05);
         assert!(result.is_ok());
@@ -483,9 +330,7 @@ mod tests {
 
         let mut mzdata = MzData::new();
 
-        mzdata
-            .open_msfile(d.display().to_string().as_str())
-            .unwrap();
+        mzdata.open_msfile(d).unwrap();
 
         let result = mzdata.get_tic(ScanPolarity::Positive);
         assert!(result.is_ok());

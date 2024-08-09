@@ -4,10 +4,12 @@ mod line_type;
 mod parser;
 mod plot_type;
 
+use env_logger;
 use gui::*;
 use std::process;
 
 fn main() {
+    env_logger::init();
     let native_options = eframe::NativeOptions::default();
 
     match eframe::run_native(
