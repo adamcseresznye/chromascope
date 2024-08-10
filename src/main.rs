@@ -4,25 +4,47 @@ mod line_type;
 mod parser;
 mod plot_type;
 
+use egui::IconData;
 use env_logger;
 use gui::*;
+use log::{error, info};
 use std::process;
 
 fn main() {
     env_logger::init();
-    let native_options = eframe::NativeOptions::default();
+
+    // include icon in the compiled binary
+    let icon_image = image::load_from_memory(include_bytes!(r"../assets/1cut_256.png"))
+        .expect("Should be able to open icon PNG file");
+
+    let width = icon_image.width();
+    let height = icon_image.height();
+    let icon_rgba8 = icon_image.into_rgba8().to_vec();
+    let icon_data = IconData {
+        rgba: icon_rgba8,
+        width,
+        height,
+    };
+
+    let native_options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            //.with_inner_size([400.0, 300.0])
+            //.with_min_inner_size([300.0, 220.0])
+            .with_icon(icon_data),
+        ..Default::default()
+    };
 
     match eframe::run_native(
-        "MzViewer",
+        "Chromascope",
         native_options,
         Box::new(|cc| Box::new(MzViewerApp::new(cc))),
     ) {
         Ok(_) => {
-            println!("Application exited succesfully.");
+            info!("Application exited succesfully.");
             process::exit(0)
         }
         Err(e) => {
-            eprintln!("Error occured: {:?}.", e);
+            error!("Error occured: {:?}.", e);
             process::exit(1)
         }
     }

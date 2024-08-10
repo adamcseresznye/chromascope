@@ -1,1 +1,2 @@
 $env:RUST_LOG = "mz_viewer=debug"
+
