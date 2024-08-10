@@ -211,7 +211,10 @@ impl MzViewerApp {
                     }
                     Err(found_index) => {
                         // If the exact RT is not found, return the closest one
-                        info!("Closest Rt match not found, using nearest index: {:?}", found_index);
+                        info!(
+                            "Closest Rt match not found, using nearest index: {:?}",
+                            found_index
+                        );
                         if found_index == 0 {
                             indices.first().copied()
                         } else if found_index == indices.len() {
@@ -237,12 +240,13 @@ impl MzViewerApp {
             None
         }
     }
-    
 
     fn plot_mass_spectrum(&mut self, ui: &mut egui::Ui) -> egui::Response {
         if let Some((mz, intensity)) = &self.parsed_ms_data.mass_spectrum {
+            info!("Mass spectrum data available. Plotting the spectrum.");
+
             // Create bar chart data
-            let bars: Vec<egui_plot::Bar> = mz
+            let _bars: Vec<egui_plot::Bar> = mz
                 .iter()
                 .zip(intensity.iter())
                 .map(|(&m, &i)| {
@@ -258,6 +262,7 @@ impl MzViewerApp {
                 .show(ui, |plot_ui| {
                     let bounds = plot_ui.plot_bounds();
                     let zoom_level = (bounds.max()[0] - bounds.min()[0]).abs(); // Calculate zoom level based on plot bounds
+                    debug!("Zoom level calculated: {}", zoom_level);
 
                     let bar_width = zoom_level * 0.001; // Adjust bar width based on zoom level
                     let adjusted_bars: Vec<egui_plot::Bar> = mz
@@ -274,9 +279,9 @@ impl MzViewerApp {
                     plot_ui.bar_chart(egui_plot::BarChart::new(adjusted_bars));
                 })
                 .response;
-
             response
         } else {
+            warn!("No mass spectrum data available");
             ui.label("No mass spectrum data available")
         }
     }
@@ -289,13 +294,17 @@ impl MzViewerApp {
                     .on_hover_text("Click to Open File")
                     .clicked()
                 {
+                    debug!("File button clicked.");
                     self.plot_data = None; // clears the plot_data if new file is opened
                     self.user_input.file_path = None; // clears the file_path if new file is opened
                     self.handle_file_selection();
+                    info!("File selection handled.");
                 }
 
                 ui.menu_button("Display", |ui| {
+                    debug!("Display menu button clicked.");
                     self.add_display_options(ui);
+                    info!("Display options added.");
                 });
 
                 if let Some(new_visuals) = ui
@@ -304,7 +313,9 @@ impl MzViewerApp {
                     .clone()
                     .light_dark_small_toggle_button(ui)
                 {
+                    debug!("Visuals toggle button clicked.");
                     ctx.set_visuals(new_visuals);
+                    info!("Visuals updated.");
                 }
             });
         });
@@ -316,6 +327,7 @@ impl MzViewerApp {
             let response = ui.add(slider);
             if response.changed() {
                 self.state_changed = StateChange::Changed;
+                info!("Smoothing level changed to {}", self.user_input.smoothing);
             }
             response.on_hover_text("Adjust the level of moving average smoothing");
         });
@@ -325,16 +337,21 @@ impl MzViewerApp {
             let response = ui.add(slider);
             if response.changed() {
                 self.state_changed = StateChange::Changed;
+                info!("Line width changed to {}", self.user_input.line_width);
             }
             response.on_hover_text("Adjust the line width");
         });
 
         ui.menu_button("Line color", |ui| {
+            debug!("Line color menu button clicked.");
             self.add_line_color_options(ui);
+            info!("Line color options added.");
         });
 
         ui.menu_button("Line style", |ui| {
+            debug!("Line style menu button clicked.");
             self.add_line_style_options(ui);
+            info!("Line style options added.");
         });
     }
 
@@ -347,6 +364,8 @@ impl MzViewerApp {
             ui.radio_value(&mut self.user_input.line_color, LineColor::Black, "Black");
             ui.radio_value(&mut self.user_input.line_color, LineColor::White, "White");
         });
+
+        info!("Line color changed.")
     }
 
     fn add_line_style_options(&mut self, ui: &mut Ui) {
@@ -355,24 +374,34 @@ impl MzViewerApp {
             ui.radio_value(&mut self.user_input.line_type, LineType::Dashed, "Dashed");
             ui.radio_value(&mut self.user_input.line_type, LineType::Dotted, "Dotted");
         });
+        info!("Line style changed.")
     }
 
     fn handle_file_selection(&mut self) {
         if let Some(path) = rfd::FileDialog::new().pick_file() {
+            info!("File selected: {:?}", path);
             self.update_file_path_and_validity(path);
         } else {
+            warn!("No file selected. Setting file validity to Invalid.");
             self.invalid_file = FileValidity::Invalid;
         }
     }
 
     fn update_file_path_and_validity(&mut self, path: PathBuf) {
         let file_path_str = path.display().to_string();
+        info!("Updating file path and validity for: {}", file_path_str);
+
         if file_path_str.ends_with(FILE_FORMAT) {
+            info!("File format is valid.");
             self.invalid_file = FileValidity::Valid;
             self.user_input.file_path = Some(file_path_str.clone());
             self.parsed_ms_data = parser::MzData::default();
-            self.parsed_ms_data.open_msfile(path).ok();
+            match self.parsed_ms_data.open_msfile(path) {
+                Ok(_) => info!("File opened successfully."),
+                Err(e) => warn!("Failed to open file: {}", e),
+            }
         } else {
+            warn!("Invalid file format.");
             self.invalid_file = FileValidity::Invalid;
         }
     }
@@ -384,6 +413,7 @@ impl MzViewerApp {
 
             match self.invalid_file {
                 FileValidity::Invalid => {
+                    warn!("Invalid file type. Please select an {} file.", FILE_FORMAT);
                     ui.colored_label(
                         Color32::LIGHT_RED,
                         format!("Invalid file type. Please select an {} file.", FILE_FORMAT),
@@ -391,6 +421,7 @@ impl MzViewerApp {
                 }
                 FileValidity::Valid => match self.user_input.file_path {
                     Some(ref file_path) => {
+                        info!("Valid file selected: {}", file_path);
                         self.checkbox_bool = true;
                         if ui
                             .checkbox(
@@ -400,12 +431,14 @@ impl MzViewerApp {
                             .on_hover_text("Click to Close File")
                             .clicked()
                         {
+                            info!("File closed: {}", file_path);
                             self.plot_data = None;
                             self.user_input.file_path = None;
                             self.checkbox_bool = false;
                         }
                     }
                     None => {
+                        warn!("No file selected");
                         ui.colored_label(Color32::LIGHT_RED, "No file selected".to_string());
                     }
                 },
@@ -414,18 +447,22 @@ impl MzViewerApp {
     }
 
     fn update_central_panel(&mut self, ctx: &Context) {
+        debug!("Updating central panel.");
         egui::CentralPanel::default().show(ctx, |ui| {
             egui::ScrollArea::both().show(ui, |ui| {
                 egui::CollapsingHeader::new("Chromatogram")
                     .default_open(true)
                     .show(ui, |ui| {
+                        debug!("Plotting chromatogram.");
                         let chromatogram = self.plot_chromatogram(ui);
                         chromatogram.context_menu(|ui| {
                             ui.heading("Plot Properties");
                             ui.separator();
+                            debug!("Adding plot properties.");
                             self.add_plot_properties(ui);
                             ui.separator();
                         });
+                        info!("Chromatogram plotted successfully.");
                     });
 
                 ui.add_space(5.0); // Add some space between the plots
@@ -433,10 +470,13 @@ impl MzViewerApp {
                 egui::CollapsingHeader::new("Mass Spectrum")
                     .default_open(true)
                     .show(ui, |ui| {
+                        debug!("Plotting mass spectrum.");
                         self.plot_mass_spectrum(ui);
+                        info!("Mass spectrum plotted successfully.");
                     });
             });
         });
+        info!("Central panel updated successfully.");
     }
 
     fn add_plot_properties(&mut self, ui: &mut Ui) {
