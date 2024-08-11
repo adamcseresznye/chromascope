@@ -1,12 +1,9 @@
-#![warn(
-    clippy::all,
-    clippy::restriction,
-    clippy::pedantic,
-    clippy::nursery,
-    clippy::cargo
-)]
+#![warn(clippy::all)]
 
-use crate::{line_color::LineColor, line_type::LineType, parser, plot_type::PlotType};
+use crate::{
+    parser, plotting_parameters::LineColor, plotting_parameters::LineType,
+    plotting_parameters::PlotType,
+};
 
 use mzdata::spectrum::ScanPolarity;
 use std::ops::Div;
@@ -15,7 +12,7 @@ use std::path::PathBuf;
 use eframe::egui;
 use egui::{Color32, Context, Ui};
 use egui_plot::{Line, PlotPoints};
-use log::{debug, error, info, trace, warn};
+use log::{debug, error, info, warn};
 use std::cmp::Ordering;
 
 const FILE_FORMAT: &str = "mzML";
@@ -380,14 +377,14 @@ impl MzViewerApp {
     fn handle_file_selection(&mut self) {
         if let Some(path) = rfd::FileDialog::new().pick_file() {
             info!("File selected: {:?}", path);
-            self.update_file_path_and_validity(path);
+            self.update_file_path_and_validity(&path);
         } else {
             warn!("No file selected. Setting file validity to Invalid.");
             self.invalid_file = FileValidity::Invalid;
         }
     }
 
-    fn update_file_path_and_validity(&mut self, path: PathBuf) {
+    fn update_file_path_and_validity(&mut self, path: &PathBuf) {
         let file_path_str = path.display().to_string();
         info!("Updating file path and validity for: {}", file_path_str);
 
@@ -396,7 +393,7 @@ impl MzViewerApp {
             self.invalid_file = FileValidity::Valid;
             self.user_input.file_path = Some(file_path_str.clone());
             self.parsed_ms_data = parser::MzData::default();
-            match self.parsed_ms_data.open_msfile(path) {
+            match self.parsed_ms_data.open_msfile(&path) {
                 Ok(_) => info!("File opened successfully."),
                 Err(e) => warn!("Failed to open file: {}", e),
             }
@@ -569,7 +566,7 @@ impl MzViewerApp {
                     if ui
                         .add(
                             egui::TextEdit::singleline(&mut self.user_input.mass_tolerance_input)
-                                .hint_text("Enter mass tolerance in mmu"),
+                                .hint_text("Enter mass tolerance in ppm"),
                         )
                         .lost_focus()
                     {

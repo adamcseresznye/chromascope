@@ -1,8 +1,8 @@
+#![windows_subsystem = "windows"]
+
 mod gui;
-mod line_color;
-mod line_type;
 mod parser;
-mod plot_type;
+mod plotting_parameters;
 
 use egui::IconData;
 use env_logger;
@@ -14,7 +14,7 @@ fn main() {
     env_logger::init();
 
     // include icon in the compiled binary
-    let icon_image = image::load_from_memory(include_bytes!(r"../assets/1cut_256.png"))
+    let icon_image = image::load_from_memory(include_bytes!(r"../assets/chromascope_icon.png"))
         .expect("Should be able to open icon PNG file");
 
     let width = icon_image.width();
@@ -27,10 +27,7 @@ fn main() {
     };
 
     let native_options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            //.with_inner_size([400.0, 300.0])
-            //.with_min_inner_size([300.0, 220.0])
-            .with_icon(icon_data),
+        viewport: egui::ViewportBuilder::default().with_icon(icon_data),
         ..Default::default()
     };
 
