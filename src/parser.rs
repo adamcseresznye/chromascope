@@ -1,10 +1,4 @@
-#![warn(
-    clippy::all,
-    clippy::restriction,
-    clippy::pedantic,
-    clippy::nursery,
-    clippy::cargo
-)]
+#![warn(clippy::all)]
 
 use anyhow::anyhow;
 use anyhow::Result;
@@ -34,8 +28,8 @@ impl Default for MzData {
     }
 }
 
-impl std::fmt::Debug for MzData {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for MzData {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("MzData")
             .field("file_name", &self.file_name)
             .field("retention_time", &self.retention_time)
@@ -60,7 +54,7 @@ impl MzData {
             mass_spectrum: None,
         }
     }
-    pub fn open_msfile(&mut self, path: PathBuf) -> Result<&mut Self> {
+    pub fn open_msfile(&mut self, path: &PathBuf) -> Result<&mut Self> {
         info!("Attempting to open MzML file at path: {:?}", &path);
 
         match MzMLReader::open_path(&path) {
@@ -168,19 +162,21 @@ impl MzData {
                         && spectrum.description.polarity == polarity
                     {
                         let centroided = spectrum.clone().into_centroid()?;
-                        let sg = centroided
+                        let extracted_centroided = centroided
                             .peaks
                             .all_peaks_for(mass, Tolerance::PPM(mass_tolerance));
 
-                        for peak in sg {
+                        for peak in extracted_centroided {
                             if let Some(rt) = &mut self.retention_time {
-                                rt.push(spectrum.description.acquisition.scans[0].start_time as f32)
+                                rt.push(
+                                    spectrum.description.acquisition.scans[0].start_time as f32,
+                                );
                             };
                             if let Some(intensity) = &mut self.intensity {
-                                intensity.push(peak.intensity)
+                                intensity.push(peak.intensity);
                             };
                             if let Some(index) = &mut self.index {
-                                index.push(peak.index as usize)
+                                index.push(peak.index as usize);
                             };
                         }
                     }
@@ -274,17 +270,14 @@ impl MzData {
                     .iter()
                     .map(|point| point[1])
                     .sum();
-                let average = sum / (window_size as f64 * 2.0 + 1.0);
+                let average = sum / (f64::from(window_size) * 2.0_f64 + 1.0_f64);
                 smoothed_data.push([data[i][0], average]);
                 trace!("Smoothed data point at index {}: {}", i, average);
             }
         }
 
         self.plot_data = Some(smoothed_data);
-        debug!(
-            "Data smoothing complete. Smoothed {} data points.",
-            self.plot_data.as_ref().unwrap().len()
-        );
+        debug!("Data smoothing complete",);
 
         Ok(self)
     }
@@ -295,27 +288,25 @@ impl MzData {
         match &mut self.msfile {
             Ok(reader) => {
                 if let Some(spec) = reader.get_spectrum_by_index(index) {
-                    let peaks = &spec.arrays.as_ref().unwrap().mzs().unwrap().to_vec();
-                    let intensities = &spec
-                        .arrays
-                        .as_ref()
-                        .unwrap()
-                        .intensities()
-                        .unwrap()
-                        .to_vec();
-                    self.mass_spectrum = Some((peaks.to_vec(), intensities.to_vec()));
-
-                    debug!(
-                        "Successfully retrieved mass spectrum at index: {:?} with {} peaks and {} intensities",
-                        index,
-                        peaks.len(),
-                        intensities.len()
-                    );
-                } else {
-                    warn!("No spectrum found at index: {:?}", index);
+                    let arrays = spec.arrays.as_ref();
+                    if let Some(arrays) = arrays {
+                        let peaks = arrays.mzs().map(|mzs| mzs.to_vec());
+                        let intensities = arrays.intensities().map(|ints| ints.to_vec());
+                        if peaks.is_ok() && intensities.is_ok() {
+                            self.mass_spectrum =
+                                Some((peaks.clone().unwrap(), intensities.clone().unwrap()));
+                            debug!(
+                                "Successfully retrieved mass spectrum at index: {:?} with {} peaks and {} intensities",
+                                index,
+                                peaks.unwrap().len(),
+                                intensities.unwrap().len()
+                            );
+                        }
+                    } else {
+                        warn!("No spectrum found at index: {:?}", index);
+                    }
                 }
             }
-
             Err(e) => error!("Failed to get mass spectrum at {:?} due to {:?}", &index, e),
         }
 
@@ -347,7 +338,7 @@ mod tests {
         d.push(TEST_FILE);
 
         let mut mzdata = MzData::new();
-        let result = mzdata.open_msfile(d);
+        let result = mzdata.open_msfile(&d);
         assert!(result.is_ok());
         assert!(mzdata.msfile.is_ok());
     }
@@ -359,7 +350,7 @@ mod tests {
 
         let mut mzdata = MzData::new();
 
-        mzdata.open_msfile(d).unwrap();
+        mzdata.open_msfile(&d).unwrap();
 
         let result = mzdata.get_xic(722.43, ScanPolarity::Positive, 1000.0);
         assert!(result.is_ok());
@@ -373,7 +364,7 @@ mod tests {
 
         let mut mzdata = MzData::new();
 
-        mzdata.open_msfile(d).unwrap();
+        mzdata.open_msfile(&d).unwrap();
 
         let result = mzdata.get_tic(ScanPolarity::Positive);
         assert!(result.is_ok());
