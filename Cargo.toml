@@ -1,5 +1,5 @@
 [package]
-name = "mz_viewer"
+name = "chromascope"
 version = "0.1.0"
 authors = ["Adam Cseresznye <csenye.chem@gmail.com>"]
 edition = "2021"

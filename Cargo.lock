@@ -716,6 +716,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "chromascope"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "eframe",
+ "egui",
+ "egui_plot",
+ "env_logger",
+ "image 0.25.2",
+ "libz-sys",
+ "log",
+ "mzdata",
+ "rfd",
+ "serde",
+ "wasm-bindgen-futures",
+]
+
+[[package]]
 name = "chrono"
 version = "0.4.38"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1858,24 +1876,6 @@ checksum = "e7810e0be55b428ada41041c41f32c9f1a42817901b4ccf45fa3d4b6561e74c7"
 dependencies = [
  "adler",
  "simd-adler32",
-]
-
-[[package]]
-name = "mz_viewer"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "eframe",
- "egui",
- "egui_plot",
- "env_logger",
- "image 0.25.2",
- "libz-sys",
- "log",
- "mzdata",
- "rfd",
- "serde",
- "wasm-bindgen-futures",
 ]
 
 [[package]]

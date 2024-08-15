@@ -1,3 +1,18 @@
+//! # Parses and prepares MzML files for plotting
+
+//! The `parser` module provides functionality for reading and processing mass spectrometry data from MzML files. It allows users to extract various types of data, including Base Peak Intensity (BIC), Total Ion Chromatogram (TIC), and Extracted Ion Chromatogram (XIC). Additionally, it offers methods for data smoothing and preparation for plotting.
+
+//! ## Overview
+
+//!The main struct in this crate is `MzData`, which encapsulates the data and methods necessary for handling MzML files. The struct includes fields for storing file information, retention times, intensities, mass-to-charge ratios (m/z), and more.
+
+//!## Features
+
+//!- **File Handling**: Open and read MzML files.
+//!- **Data Extraction**: Extract BIC, TIC, and XIC based on specified parameters.
+//!- **Data Processing**: Smooth data for better visualization and analysis.
+//!- **Plot Preparation**: Prepare data for plotting with appropriate formatting.
+
 #![warn(clippy::all)]
 
 use anyhow::anyhow;
@@ -9,20 +24,32 @@ use mzdata::{prelude::*, MzMLReader};
 use std::fs::File;
 use std::path::PathBuf;
 
+/// Represents a data structure for storing mass spectrometry data.
 const MS_LEVEL: u8 = 1;
 
+/// Represents a data structure for storing mass spectrometry data.
 pub struct MzData {
+    /// An optional `String` representing the name of the data file.
     pub file_name: Option<String>,
+    /// An optional vector of `usize`corresponding to the indices.
     pub index: Option<Vec<usize>>,
+    /// An optional vector of `f32` values representing retention times.
     pub retention_time: Option<Vec<f32>>,
+    /// An optional vector of `f32` values representing intensity values.
     pub intensity: Option<Vec<f32>>,
+    /// An optional vector of `f32` values representing m/z (mass-to-charge) ratios.
     pub mz: Option<Vec<f32>>,
+    /// A `Result` containing the `MzMLReaderType<File>`, which represents the parsed mass spectrometry file.
     pub msfile: Result<MzMLReaderType<File>>,
+    /// An optional vector of tuples, each containing two `f64` values for plotting data points.
     pub plot_data: Option<Vec<[f64; 2]>>,
+    /// An optional tuple containing two vectors: one for mass values (`Vec<f64>`) and one for corresponding intensity values (`Vec<f32>`).
     pub mass_spectrum: Option<(Vec<f64>, Vec<f32>)>,
 }
 
+/// Provides a default implementation for `MzData`.
 impl Default for MzData {
+    /// Creates a new instance of `MzData` with default values.
     fn default() -> Self {
         Self::new()
     }
@@ -42,6 +69,14 @@ impl core::fmt::Debug for MzData {
     }
 }
 impl MzData {
+    /// Creates a new instance of `MzData` with default values.
+    ///
+    /// This method initializes all fields of `MzData` to `None`, except for the `msfile` field,
+    /// which is set to an error indicating that the file has not been opened.
+    ///
+    /// # Returns
+    ///
+    /// A new instance of `MzData` with all fields initialized.
     pub fn new() -> Self {
         Self {
             file_name: None,
@@ -54,6 +89,26 @@ impl MzData {
             mass_spectrum: None,
         }
     }
+    /// Opens an MzML file at the specified path and sets it as the current file for the `self` object.
+    ///
+    /// # Arguments
+    /// * `path` - A reference to a `PathBuf` representing the file path of the MzML file to be opened.
+    ///
+    /// # Returns
+    /// * `Result<&mut Self>` - A result containing either a reference to the `self` object if the file was successfully opened, or an error if the file could not be opened.
+    ///
+    /// # Errors
+    /// This function may return the following errors:
+    /// * `anyhow::Error` - If the MzML file could not be opened for any reason.
+    ///
+    /// # Examples
+    /// ```
+    /// use std::path::PathBuf;
+    ///
+    /// let mut example_struct = Mzdata::default();
+    /// let file_path = PathBuf::from("path/to/your/mzml/file.mzml");
+    /// example_struct.open_msfile(&file_path).unwrap();
+    /// ```
     pub fn open_msfile(&mut self, path: &PathBuf) -> Result<&mut Self> {
         info!("Attempting to open MzML file at path: {:?}", &path);
 
@@ -73,7 +128,26 @@ impl MzData {
             }
         }
     }
-
+    /// Method to read the Base Peak Intensity Chromatogram (BPIC) from the associated mass spectrometry file.
+    ///
+    /// # Parameters
+    /// - `polarity: ScanPolarity` - The polarity of the mass spectrometry scans to be considered.
+    ///
+    /// # Returns
+    /// - `Result<&mut Self>` - A mutable reference to the current instance of the struct, or an error if the operation fails.
+    ///
+    /// # Functionality
+    /// 1. Logs an informational message about the attempt to read the BPIC.
+    /// 2. Matches the `msfile` field, which is a `Result<MsFile, Error>`, and performs the following steps:
+    ///     a. Iterates over the spectra in the `MsFile` and filters them based on the provided `polarity`.
+    ///     b. For each filtered spectrum, extracts the retention time, intensity, m/z, and index, and stores them in separate vectors.
+    ///     c. Assigns the extracted values to the corresponding fields in the current instance of the struct (`retention_time`, `intensity`, `mz`, `index`).
+    /// 3. Logs a debug message indicating the successful extraction of the BPIC.
+    /// 4. Logs a trace message with the details of the extracted BPIC (retention time, index, m/z, and intensity).
+    /// 5. Returns the mutable reference to the current instance of the struct.
+    ///
+    /// # Errors
+    /// If there is an error while accessing the `msfile` field, an error message is logged, and the function returns an error.
     pub fn get_bpic(&mut self, polarity: ScanPolarity) -> Result<&mut Self> {
         info!("Attempting to read BIC of {:?}", &self.file_name);
         match &mut self.msfile {
@@ -110,6 +184,28 @@ impl MzData {
         }
         Ok(self)
     }
+    /// Method to read the Total Ion Chromatogram (TIC) from the associated mass spectrometry file.
+    ///
+    /// # Parameters
+    /// - `polarity: ScanPolarity` - The polarity of the mass spectrometry scans to be considered.
+    ///
+    /// # Returns
+    /// - `Result<&mut Self>` - A mutable reference to the current instance of the struct, or an error if the operation fails.
+    ///
+    /// # Functionality
+    /// 1. Logs an informational message about the attempt to read the TIC.
+    /// 2. Matches the `msfile` field, which is a `Result<MsFile, Error>`, and performs the following steps:
+    ///     a. Initializes empty vectors for `retention_time`, `intensity`, and `index`.
+    ///     b. Iterates over the spectra in the `MsFile` and filters them based on the provided `polarity`.
+    ///     c. For each filtered spectrum, extracts the retention time, total ion intensity, and index, and appends them to the corresponding vectors.
+    ///     d. Initializes an empty vector for `mz`.
+    ///     e. Assigns the extracted vectors to the corresponding fields in the current instance of the struct (`retention_time`, `intensity`, `mz`, `index`).
+    /// 3. Logs a debug message indicating the successful extraction of the TIC.
+    /// 4. Logs a trace message with the details of the extracted TIC (retention time, index, m/z, and intensity).
+    /// 5. Returns the mutable reference to the current instance of the struct.
+    ///
+    /// # Errors
+    /// If there is an error while accessing the `msfile` field, an error message is logged, and the function returns an error.
 
     pub fn get_tic(&mut self, polarity: ScanPolarity) -> Result<&mut Self> {
         info!("Attempting to read TIC of {:?}", &self.file_name);
@@ -141,6 +237,33 @@ impl MzData {
         }
         Ok(self)
     }
+    /// Method to read the Extracted Ion Chromatogram (XIC) for the specified mass and polarity from the associated mass spectrometry file.
+    ///
+    /// # Parameters
+    /// - `mass: f64` - The mass value to be extracted.
+    /// - `polarity: ScanPolarity` - The polarity of the mass spectrometry scans to be considered.
+    /// - `mass_tolerance: f64` - The mass tolerance (in parts per million) to be used for peak extraction.
+    ///
+    /// # Returns
+    /// - `Result<&mut Self>` - A mutable reference to the current instance of the struct, or an error if the operation fails.
+    ///
+    /// # Functionality
+    /// 1. Logs an informational message about the attempt to read the XIC.
+    /// 2. Initializes empty vectors for `retention_time`, `intensity`, `index`, and `mz` in the current instance of the struct.
+    /// 3. Matches the `msfile` field, which is a `Result<MsFile, Error>`, and performs the following steps:
+    ///     a. Iterates over the spectra in the `MsFile`.
+    ///     b. For each spectrum, checks if the MS level is the expected level and the polarity matches the provided one.
+    ///     c. If the conditions are met, the spectrum is cloned and converted to a centroided spectrum.
+    ///     d. The centroided spectrum is then used to extract the peaks that match the provided mass and mass tolerance.
+    ///     e. For each extracted peak, the retention time, intensity, and index are appended to the corresponding vectors in the current instance of the struct.
+    /// 4. If the `index` vector was populated, it is sorted to ensure the data is in the correct order.
+    /// 5. Logs a debug message indicating the successful extraction of the XIC.
+    /// 6. Logs a trace message with the details of the extracted XIC (retention time, index, m/z, and intensity).
+    /// 7. If no matching peaks were found, a warning message is logged.
+    /// 8. Returns the mutable reference to the current instance of the struct.
+    ///
+    /// # Errors
+    /// If there is an error while accessing the `msfile` field or converting the spectrum to a centroided spectrum, an error message is logged, and the function returns an error.
 
     pub fn get_xic(
         &mut self,
@@ -152,7 +275,7 @@ impl MzData {
 
         self.retention_time = Some(Vec::new());
         self.intensity = Some(Vec::new());
-        //self.index = Some(Vec::new()); if the self.index is cleared, when triple clicked one cannot extract the mass spectrum
+        self.index = Some(Vec::new()); // if the self.index is cleared, when triple clicked one cannot extract the mass spectrum
         self.mz = Some(Vec::new());
 
         match &mut self.msfile {
@@ -181,6 +304,9 @@ impl MzData {
                         }
                     }
                 }
+                if let Some(index) = &mut self.index {
+                    index.sort()
+                }; // self.index was unordered in case of XIC
 
                 debug!("Successfully extracted XIC from: {:?}", &self.file_name);
                 trace!("Successfully extracted the XIC of {:?}. Rt is {:?}, Index is {:?}, Mz is {:?}, Intensity is {:?}, ", &self.file_name, &self.retention_time, &self.index, &self.mz, &self.intensity);
@@ -193,6 +319,29 @@ impl MzData {
         }
         Ok(self)
     }
+
+    /// Prepares the data for plotting by processing the retention times and intensities.
+    ///
+    /// # Returns
+    /// - `Result<Vec<[f64; 2]>>` - A vector of data points, where each data point is an array of two `f64` values representing the retention time and the average intensity, or an error if the operation fails.
+    ///
+    /// # Functionality
+    /// 1. Logs an informational message about the start of the data preparation for plotting.
+    /// 2. Initializes an empty vector `data` to store the prepared data points.
+    /// 3. Initializes variables `temp_rt` (to store the current retention time) and `temp_intensity_collector` (to store the intensities for the current retention time).
+    /// 4. Checks if the `retention_time` and `intensity` fields in the current instance of the struct are not `None`.
+    /// 5. If the fields are not `None`, the function performs the following steps:
+    ///     a. Logs a trace message with the number of retention times and intensities being processed.
+    ///     b. Iterates over the retention times and intensities, and for each unique retention time:
+    ///         i. Calculates the average intensity for the current retention time and adds a data point (retention time, average intensity) to the `data` vector.
+    ///         ii. Clears the `temp_intensity_collector` and updates the `temp_rt` variable.
+    ///     c. After the loop, if there are any remaining intensities, the function adds a final data point to the `data` vector.
+    /// 6. If the `retention_time` or `intensity` fields are `None`, the function logs a warning message.
+    /// 7. Logs a debug message with the number of data points prepared for plotting.
+    /// 8. Returns the `data` vector.
+    ///
+    /// # Errors
+    /// The function does not return any errors, but it may log warning messages if the required data is missing.
 
     pub fn prepare_for_plot(&self) -> Result<Vec<[f64; 2]>> {
         info!(
@@ -246,6 +395,29 @@ impl MzData {
         Ok(data)
     }
 
+    /// Method to smooth the provided data using a moving average filter.
+    ///
+    /// # Parameters
+    /// - `data: Result<Vec<[f64; 2]>>` - The data to be smoothed, represented as a vector of arrays with two `f64` values (x and y).
+    /// - `window_size: u8` - The size of the smoothing window.
+    ///
+    /// # Returns
+    /// - `Result<&mut Self>` - A mutable reference to the current instance of the struct, with the smoothed data stored in the `plot_data` field, or an error if the operation fails.
+    ///
+    /// # Functionality
+    /// 1. Logs an informational message about the start of the data smoothing process with the specified window size.
+    /// 2. Unwraps the `data` parameter, which is a `Result<Vec<[f64; 2]>>`.
+    /// 3. Logs a debug message with the number of data points received for smoothing.
+    /// 4. Initializes an empty vector `smoothed_data` to store the smoothed data points.
+    /// 5. Iterates over the input data points:
+    ///     a. If the current index is less than the window size or greater than or equal to the length of the data minus the window size, the original data point is added to the `smoothed_data` vector.
+    ///     b. Otherwise, the function calculates the average of the data points within the smoothing window (the current point and the `window_size` points before and after it) and adds the smoothed data point (original x-value, average y-value) to the `smoothed_data` vector.
+    /// 6. Assigns the `smoothed_data` vector to the `plot_data` field in the current instance of the struct.
+    /// 7. Logs a debug message indicating that the data smoothing is complete.
+    /// 8. Returns the mutable reference to the current instance of the struct.
+    ///
+    /// # Errors
+    /// If there is an error unwrapping the `data` parameter, the function returns the error.
     pub fn smooth_data(
         &mut self,
         data: Result<Vec<[f64; 2]>>,
@@ -282,6 +454,23 @@ impl MzData {
         Ok(self)
     }
 
+    /// Method to retrieve the mass spectrum for the specified index from the associated mass spectrometry file.
+    ///
+    /// # Parameters
+    /// - `index: usize` - The index of the mass spectrum to be retrieved.
+    ///
+    /// # Functionality
+    /// 1. Logs an informational message about the start of the mass spectrum retrieval process for the specified index.
+    /// 2. Matches the `msfile` field, which is a `Result<MsFile, Error>`, and performs the following steps:
+    ///     a. Attempts to get the spectrum at the specified index using the `get_spectrum_by_index` method of the `MsFile`.
+    ///     b. If a spectrum is found, the function extracts the m/z values and intensities from the spectrum's arrays.
+    ///     c. If the extraction of m/z values and intensities is successful, the function stores the data in the `mass_spectrum` field of the current instance of the struct.
+    /// 3. If no spectrum is found at the specified index, a warning message is logged.
+    /// 4. If there is an error while accessing the `msfile` field or retrieving the spectrum, an error message is logged.
+    /// 5. Logs a debug message indicating that the mass spectrum retrieval process is complete.
+    ///
+    /// # Notes
+    /// This function does not return any value. It directly modifies the `mass_spectrum` field of the current instance of the struct.
     pub fn get_mass_spectrum_by_index(&mut self, index: usize) {
         info!("Starting to get mass spectrum at index: {:?}", &index);
 
