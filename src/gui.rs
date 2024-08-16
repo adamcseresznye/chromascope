@@ -184,6 +184,13 @@ impl MzViewerApp {
             ..Default::default()
         }
     }
+    /// Resets the internal state of the instance.
+    ///
+    /// This function clears the parsed measurement data and sets the plot data to `None`.
+    pub fn reset_state(&mut self) {
+        self.parsed_ms_data = parser::MzData::default();
+        self.plot_data = None;
+    }
 
     /// Processes the plot data based on the user's input.
     ///
@@ -488,10 +495,13 @@ impl MzViewerApp {
                     .clicked()
                 {
                     debug!("File button clicked.");
+                    self.reset_state();
+                    /*
                     // todo: we should completely clear and get a brand new self
                     self.plot_data = None; // clears the plot_data if new file is opened
                     self.parsed_ms_data = parser::MzData::default(); // clears the parser::MzData struct if new file is opened
                     self.user_input.file_path = None; // clears the file_path if new file is opened
+                    */
                     self.handle_file_selection();
 
                     info!("File selection handled.");

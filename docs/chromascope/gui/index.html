@@ -1,0 +1,74 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="MzViewerApp Module"><title>chromascope::gui - Rust</title><script> if (window.location.protocol !== "file:") document.write(`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/SourceSerif4-Regular-46f98efaafac5295.ttf.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/FiraSans-Regular-018c141bf0843ffd.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/FiraSans-Medium-8f9a781e4970d388.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/SourceCodePro-Regular-562dcc5011b6de7d.ttf.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/SourceCodePro-Semibold-d899c5a5c4aeb14a.ttf.woff2">`)</script><link rel="stylesheet" href="../../static.files/normalize-76eba96aa4d2e634.css"><link rel="stylesheet" href="../../static.files/rustdoc-e935ef01ae1c1829.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="chromascope" data-themes="" data-resource-suffix="" data-rustdoc-version="1.78.0 (9b00956e5 2024-04-29)" data-channel="1.78.0" data-search-js="search-42d8da7a6b9792c2.js" data-settings-js="settings-4313503d2e1961c2.js" ><script src="../../static.files/storage-4c98445ec4002617.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../static.files/main-12cf3b4f4f9dc36d.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-04d5337699b92874.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-16x16-8b506e7a72182f1c.png"><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-422f7d1d52889060.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-2c020d218678b618.svg"></head><body class="rustdoc mod"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="mobile-topbar"><button class="sidebar-menu-toggle" title="show sidebar"></button></nav><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../chromascope/index.html">chromascope</a><span class="version">0.1.0</span></h2></div><h2 class="location"><a href="#">Module gui</a></h2><div class="sidebar-elems"><section><ul class="block"><li><a href="#structs">Structs</a></li><li><a href="#enums">Enums</a></li><li><a href="#constants">Constants</a></li></ul></section><h2><a href="../index.html">In crate chromascope</a></h2></div></nav><div class="sidebar-resizer"></div>
+    <main><div class="width-limiter"><nav class="sub"><form class="search-form"><span></span><div id="sidebar-button" tabindex="-1"><a href="../../chromascope/all.html" title="show sidebar"></a></div><input class="search-input" name="search" aria-label="Run search in the documentation" autocomplete="off" spellcheck="false" placeholder="Click or press ‘S’ to search, ‘?’ for more options…" type="search"><div id="help-button" tabindex="-1"><a href="../../help.html" title="help">?</a></div><div id="settings-menu" tabindex="-1"><a href="../../settings.html" title="settings"><img width="22" height="22" alt="Change settings" src="../../static.files/wheel-7b819b6101059cd0.svg"></a></div></form></nav><section id="main-content" class="content"><div class="main-heading"><h1>Module <a href="../index.html">chromascope</a>::<wbr><a class="mod" href="#">gui</a><button id="copy-path" title="Copy item path to clipboard"><img src="../../static.files/clipboard-7571035ce49a181d.svg" width="19" height="18" alt="Copy item path"></button></h1><span class="out-of-band"><a class="src" href="../../src/chromascope/gui.rs.html#1-962">source</a> · <button id="toggle-all-docs" title="collapse all docs">[<span>&#x2212;</span>]</button></span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><h2 id="mzviewerapp-module"><a class="doc-anchor" href="#mzviewerapp-module">§</a>MzViewerApp Module</h2>
+<p>The <code>mzviewer</code> module provides a graphical user interface (GUI) for visualizing mass spectrometry data from MzML files.
+It allows users to load mass spectrometry data, select various plotting options, and visualize chromatograms and mass spectra.
+The module utilizes the <code>eframe</code> and <code>egui</code> libraries for building the GUI and rendering plots.</p>
+<h3 id="overview"><a class="doc-anchor" href="#overview">§</a>Overview</h3>
+<p>The main struct in this module is <code>MzViewerApp</code>, which encapsulates the application state, user inputs, and methods for processing and displaying mass spectrometry data.
+The module also defines several supporting structs and enums to manage user inputs and the validity of file selections.</p>
+<h4 id="key-features"><a class="doc-anchor" href="#key-features">§</a>Key Features</h4>
+<ul>
+<li><strong>User Input Handling</strong>: Collects user inputs for file selection, plot type, mass, and other parameters.</li>
+<li><strong>Data Processing</strong>: Processes mass spectrometry data to generate Total Ion Chromatograms (TIC), Base Peak Chromatograms (BPC), and Extracted Ion Chromatograms (XIC).</li>
+<li><strong>Plotting</strong>: Renders chromatograms and mass spectra using the <code>egui_plot</code> library.</li>
+<li><strong>File Management</strong>: Handles file selection and validation to ensure that only valid MzML files are processed.</li>
+</ul>
+<h3 id="structs"><a class="doc-anchor" href="#structs">§</a>Structs</h3><h4 id="userinput"><a class="doc-anchor" href="#userinput">§</a><code>UserInput</code></h4>
+<p>A struct that holds user input parameters for the application, including file path, plot type, mass, and other parameters.</p>
+<h5 id="fields-1"><a class="doc-anchor" href="#fields-1">§</a>Fields</h5>
+<ul>
+<li><code>file_path</code>: An optional string representing the path to the selected MzML file.</li>
+<li><code>plot_type</code>: The type of plot to be generated (TIC, BPC, or XIC).</li>
+<li><code>polarity</code>: The scan polarity for the mass spectrometry data.</li>
+<li><code>mass_input</code>: A string representation of the mass input provided by the user.</li>
+<li><code>mass_tolerance_input</code>: A string representation of the mass tolerance input provided by the user.</li>
+<li><code>mass</code>: The mass value parsed from the mass_input.</li>
+<li><code>mass_tolerance</code>: The mass tolerance value parsed from the mass_tolerance_input.</li>
+<li><code>line_type</code>: The type of line to be used in the plot (solid, dashed, dotted).</li>
+<li><code>line_color</code>: The color of the line in the plot.</li>
+<li><code>smoothing</code>: The level of smoothing to be applied to the plot data.</li>
+<li><code>line_width</code>: The width of the line in the plot.</li>
+<li><code>retention_time_ms_spectrum</code>: An optional retention time for the mass spectrum.</li>
+</ul>
+<h4 id="mzviewerapp"><a class="doc-anchor" href="#mzviewerapp">§</a><code>MzViewerApp</code></h4>
+<p>The main application struct that manages the state of the MzViewer application.</p>
+<h5 id="fields-2"><a class="doc-anchor" href="#fields-2">§</a>Fields</h5>
+<ul>
+<li><code>parsed_ms_data</code>: An instance of <code>parser::MzData</code> that holds the parsed mass spectrometry data.</li>
+<li><code>plot_data</code>: An optional vector of plot data points.</li>
+<li><code>user_input</code>: An instance of <code>UserInput</code> that holds user-defined parameters.</li>
+<li><code>invalid_file</code>: An enum indicating the validity of the selected file.</li>
+<li><code>state_changed</code>: An enum indicating whether the application state has changed.</li>
+<li><code>options_window_open</code>: A boolean indicating if the options window is open.</li>
+<li><code>checkbox_bool</code>: A boolean for managing checkbox states.</li>
+</ul>
+<h5 id="methods"><a class="doc-anchor" href="#methods">§</a>Methods</h5>
+<ul>
+<li><code>new()</code>: Creates a new instance of <code>MzViewerApp</code> with default values.</li>
+<li><code>process_plot_data()</code>: Processes the plot data based on user inputs and returns the prepared data for plotting.</li>
+<li><code>plot_chromatogram()</code>: Renders the chromatogram plot based on the processed data.</li>
+<li><code>determine_rt_clicked()</code>: Determines the retention time clicked on the plot.</li>
+<li><code>find_closest_spectrum()</code>: Finds the closest spectrum index based on the clicked retention time.</li>
+<li><code>plot_mass_spectrum()</code>: Renders the mass spectrum plot based on the parsed mass spectrum data.</li>
+<li><code>update_data_selection_panel()</code>: Updates the data selection panel in the GUI.</li>
+<li><code>add_display_options()</code>: Adds options for adjusting display settings such as smoothing, line width, and color.</li>
+<li><code>handle_file_selection()</code>: Handles the file selection process and updates the file path and validity.</li>
+<li><code>update_file_path_and_validity()</code>: Updates the file path and checks the validity of the selected file.</li>
+<li><code>update_file_information_panel()</code>: Updates the file information panel in the GUI.</li>
+</ul>
+<h3 id="enums"><a class="doc-anchor" href="#enums">§</a>Enums</h3><h4 id="filevalidity"><a class="doc-anchor" href="#filevalidity">§</a><code>FileValidity</code></h4>
+<p>An enum representing the validity of the selected file.</p>
+<ul>
+<li><code>Valid</code>: Indicates that the file is valid.</li>
+<li><code>Invalid</code>: Indicates that the file is invalid.</li>
+</ul>
+<h4 id="statechange"><a class="doc-anchor" href="#statechange">§</a><code>StateChange</code></h4>
+<p>An enum representing the state change of the application.</p>
+<ul>
+<li><code>Changed</code>: Indicates that the state has changed.</li>
+<li><code>Unchanged</code>: Indicates that the state has not changed.</li>
+</ul>
+<h3 id="usage"><a class="doc-anchor" href="#usage">§</a>Usage</h3>
+<p>To use this module, integrate it into your Rust application that requires visualization of mass spectrometry data.
+Ensure that the necessary dependencies (<code>eframe</code>, <code>egui</code>, <code>egui_plot</code>, etc.) are included in your <code>Cargo.toml</code>.</p>
+</div></details><h2 id="structs-1" class="section-header">Structs<a href="#structs-1" class="anchor">§</a></h2><ul class="item-table"><li><div class="item-name"><a class="struct" href="struct.MzViewerApp.html" title="struct chromascope::gui::MzViewerApp">MzViewerApp</a></div></li><li><div class="item-name"><a class="struct" href="struct.UserInput.html" title="struct chromascope::gui::UserInput">UserInput</a></div></li></ul><h2 id="enums-1" class="section-header">Enums<a href="#enums-1" class="anchor">§</a></h2><ul class="item-table"><li><div class="item-name"><a class="enum" href="enum.FileValidity.html" title="enum chromascope::gui::FileValidity">FileValidity</a><span title="Restricted Visibility">&nbsp;🔒</span> </div></li><li><div class="item-name"><a class="enum" href="enum.StateChange.html" title="enum chromascope::gui::StateChange">StateChange</a><span title="Restricted Visibility">&nbsp;🔒</span> </div></li></ul><h2 id="constants" class="section-header">Constants<a href="#constants" class="anchor">§</a></h2><ul class="item-table"><li><div class="item-name"><a class="constant" href="constant.FILE_FORMAT.html" title="constant chromascope::gui::FILE_FORMAT">FILE_FORMAT</a><span title="Restricted Visibility">&nbsp;🔒</span> </div></li></ul></section></div></main></body></html>
