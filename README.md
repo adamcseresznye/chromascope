@@ -1,84 +1,98 @@
-# eframe template
+# Chromascope
 
-[![dependency status](https://deps.rs/repo/github/emilk/eframe_template/status.svg)](https://deps.rs/repo/github/emilk/eframe_template)
-[![Build Status](https://github.com/emilk/eframe_template/workflows/CI/badge.svg)](https://github.com/emilk/eframe_template/actions?workflow=CI)
+Chromascope is an easy-to-use GUI application designed for handling and reading mzML mass spectrometry data. It provides a user-friendly interface to visualize and analyze mass spectrometry data, making it accessible for both beginners and experienced users in the field of mass spectrometry.
 
-This is a template repo for [eframe](https://github.com/emilk/egui/tree/master/crates/eframe), a framework for writing apps using [egui](https://github.com/emilk/egui/).
+## Features
 
-The goal is for this to be the simplest way to get started writing a GUI app in Rust.
+- **mzML File Support**: Chromascope supports the mzML format, a widely used open standard for mass spectrometry data.
+- **Intuitive User Interface**: The GUI is designed with simplicity in mind, allowing users to easily navigate and interact with their data.
+- **Data Visualization**: Chromascope provides various visualization tools to help users analyze and interpret their mass spectrometry data.
+- **Customizable Views**: Users can customize their view settings to match their specific needs and preferences.
+- **Cross-Platform**: The application is built to run smoothly on multiple operating systems, including Windows, macOS, and Linux.
 
-You can compile your app natively or for the web, and share it using Github Pages.
+## Installation
 
-## Getting started
+### Prerequisites
 
-Start by clicking "Use this template" at https://github.com/emilk/eframe_template/ or follow [these instructions](https://docs.github.com/en/free-pro-team@latest/github/creating-cloning-and-archiving-repositories/creating-a-repository-from-a-template).
+Before installing Chromascope, ensure that you have the following installed on your system:
 
-Change the name of the crate: Chose a good name for your project, and change the name to it in:
-* `Cargo.toml`
-    * Change the `package.name` from `eframe_template` to `your_crate`.
-    * Change the `package.authors`
-* `main.rs`
-    * Change `eframe_template::TemplateApp` to `your_crate::TemplateApp`
-* `index.html`
-    * Change the `<title>eframe template</title>` to `<title>your_crate</title>`. optional.
-* `assets/sw.js`
-  * Change the `'./eframe_template.js'` to `./your_crate.js` (in `filesToCache` array)
-  * Change the `'./eframe_template_bg.wasm'` to `./your_crate_bg.wasm` (in `filesToCache` array)
+- **Rust** (for building the application from source)
+- **Cargo** (Rust package manager)
+- **Git** (to clone the repository)
 
-### Learning about egui
+### Building from Source
 
-`src/app.rs` contains a simple example app. This is just to give some inspiration - most of it can be removed if you like.
+To build Chromascope from source, follow these steps:
 
-The official egui docs are at <https://docs.rs/egui>. If you prefer watching a video introduction, check out <https://www.youtube.com/watch?v=NtUkr_z7l84>. For inspiration, check out the [the egui web demo](https://emilk.github.io/egui/index.html) and follow the links in it to its source code.
+1. **Clone the Repository**:
+   ```bash
+   git clone https://github.com/your-username/chromascope.git
+   cd chromascope
+   ```
 
-### Testing locally
+2. **Build the Application**:
+   ```bash
+   cargo build --release
+   ```
 
-Make sure you are using the latest version of stable rust by running `rustup update`.
+3. **Run the Application**:
+   ```bash
+   ./target/release/chromascope
+   ```
 
-`cargo run --release`
+### Downloading Pre-built Binaries
 
-On Linux you need to first run:
+If you prefer not to build from source, you can download pre-built binaries for your operating system from the [Releases](https://github.com/your-username/chromascope/releases) page.
 
-`sudo apt-get install libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libssl-dev`
+## Usage
 
-On Fedora Rawhide you need to run:
+1. **Launch Chromascope**:
+   - Run the application by executing the binary or running `cargo run` from the project directory.
 
-`dnf install clang clang-devel clang-tools-extra libxkbcommon-devel pkg-config openssl-devel libxcb-devel gtk3-devel atk fontconfig-devel`
+2. **Open an mzML File**:
+   - Use the `File -> Open` menu to load an mzML file into Chromascope.
 
-### Web Locally
+3. **Explore Data**:
+   - Once the mzML file is loaded, you can use the visualization tools provided to explore the mass spectrometry data.
 
-You can compile your app to [WASM](https://en.wikipedia.org/wiki/WebAssembly) and publish it as a web page.
+4. **Customizing Views**:
+   - Adjust the display settings via the `View` menu to customize how your data is presented.
 
-We use [Trunk](https://trunkrs.dev/) to build for web target.
-1. Install the required target with `rustup target add wasm32-unknown-unknown`.
-2. Install Trunk with `cargo install --locked trunk`.
-3. Run `trunk serve` to build and serve on `http://127.0.0.1:8080`. Trunk will rebuild automatically if you edit the project.
-4. Open `http://127.0.0.1:8080/index.html#dev` in a browser. See the warning below.
+## Contributing
 
-> `assets/sw.js` script will try to cache our app, and loads the cached version when it cannot connect to server allowing your app to work offline (like PWA).
-> appending `#dev` to `index.html` will skip this caching, allowing us to load the latest builds during development.
+We welcome contributions to Chromascope! If you have suggestions for new features, bug reports, or would like to contribute code, please open an issue or submit a pull request on our [GitHub repository](https://github.com/your-username/chromascope).
 
-### Web Deploy
-1. Just run `trunk build --release`.
-2. It will generate a `dist` directory as a "static html" website
-3. Upload the `dist` directory to any of the numerous free hosting websites including [GitHub Pages](https://docs.github.com/en/free-pro-team@latest/github/working-with-github-pages/configuring-a-publishing-source-for-your-github-pages-site).
-4. we already provide a workflow that auto-deploys our app to GitHub pages if you enable it.
-> To enable Github Pages, you need to go to Repository -> Settings -> Pages -> Source -> set to `gh-pages` branch and `/` (root).
->
-> If `gh-pages` is not available in `Source`, just create and push a branch called `gh-pages` and it should be available.
->
-> If you renamed the `main` branch to something else (say you re-initialized the repository with `master` as the initial branch), be sure to edit the github workflows `.github/workflows/pages.yml` file to reflect the change
-> ```yml
-> on:
->   push:
->     branches:
->       - <branch name>
-> ```
+### Development Setup
 
-You can test the template app at <https://emilk.github.io/eframe_template/>.
+1. **Fork the Repository**:
+   - Create a fork of the Chromascope repository on GitHub.
 
-## Updating egui
+2. **Clone Your Fork**:
+   ```bash
+   git clone https://github.com/your-username/chromascope.git
+   cd chromascope
+   ```
 
-As of 2023, egui is in active development with frequent releases with breaking changes. [eframe_template](https://github.com/emilk/eframe_template/) will be updated in lock-step to always use the latest version of egui.
+3. **Create a New Branch**:
+   ```bash
+   git checkout -b feature/your-feature-name
+   ```
 
-When updating `egui` and `eframe` it is recommended you do so one version at the time, and read about the changes in [the egui changelog](https://github.com/emilk/egui/blob/master/CHANGELOG.md) and [eframe changelog](https://github.com/emilk/egui/blob/master/crates/eframe/CHANGELOG.md).
+4. **Make Your Changes**:
+   - Implement your changes, then commit them.
+
+5. **Push to Your Fork**:
+   ```bash
+   git push origin feature/your-feature-name
+   ```
+
+6. **Submit a Pull Request**:
+   - Open a pull request on the original repository to merge your changes.
+
+## License
+
+Chromascope is licensed under the MIT License. See the [LICENSE](LICENSE) file for more details.
+
+## Contact
+
+For any questions or support, feel free to open an issue on the GitHub repository.
