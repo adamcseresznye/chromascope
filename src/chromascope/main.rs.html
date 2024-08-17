@@ -67,7 +67,7 @@
 //!
 //! The application is designed to run on Windows systems, and the `#![windows_subsystem = "windows"]` directive is included to ensure proper integration with the Windows environment.
 
-</span><span class="attr">#![windows_subsystem = <span class="string">"windows"</span>]
+</span><span class="attr">#![cfg_attr(target_os = <span class="string">"windows"</span>, windows_subsystem = <span class="string">"windows"</span>)]
 
 </span><span class="kw">mod </span>gui;
 <span class="kw">mod </span>parser;
