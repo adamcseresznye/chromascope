@@ -5,8 +5,7 @@
 //! 1. `gui.rs`: This module contains the implementation of the graphical user interface (GUI) using the `egui` library.
 //! 2. `parser.rs`: This module handles the parsing and processing of the mzML data files.
 //! 3. `plotting_parameters.rs`: This module defines the parameters and settings for the data plotting functionality.
-//!
-//! The application is designed to run on Windows systems, and the `#![windows_subsystem = "windows"]` directive is included to ensure proper integration with the Windows environment.
+
 
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
