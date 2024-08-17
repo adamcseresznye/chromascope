@@ -15,7 +15,6 @@ mod parser;
 mod plotting_parameters;
 
 use egui::IconData;
-use env_logger;
 use gui::*;
 use log::{error, info};
 use std::process;

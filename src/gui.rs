@@ -657,7 +657,7 @@ impl MzViewerApp {
             self.invalid_file = FileValidity::Valid;
             self.user_input.file_path = Some(file_path_str.clone());
             self.parsed_ms_data = parser::MzData::default();
-            match self.parsed_ms_data.open_msfile(&path) {
+            match self.parsed_ms_data.open_msfile(path) {
                 Ok(_) => info!("File opened successfully."),
                 Err(e) => warn!("Failed to open file: {}", e),
             }
