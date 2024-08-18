@@ -1,6 +1,6 @@
-//! # Line Properties Module
+//! # contains enums for defining line properties
 //!
-//! This module defines various enumerations and their associated methods for representing line properties in a graphical context. It includes definitions for line colors, line types, and plot types, which can be used in conjunction with the `egui` and `egui_plot` libraries for rendering graphics.
+//! This module defines various enums and their associated methods for representing line properties in a graphical context. It includes definitions for line colors, line types, and plot types, which can be used in conjunction with the `egui` and `egui_plot` libraries for rendering graphics.
 //!
 //! ## Enums
 //!

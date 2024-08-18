@@ -1,4 +1,4 @@
-//! Chromascope is an easy-to-use GUI application designed to handle and read mzML mass spectrometry data.
+//! Chromascope is a lightweight and easy-to-use GUI application designed to read mzML mass spectrometry data.
 //!
 //! The crate consists of three main modules:
 //!
