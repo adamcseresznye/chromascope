@@ -1,4 +1,4 @@
-//! # Parses and prepares MzML files for plotting
+//! # backend for parsing MzML files for plotting
 
 //! The `parser` module provides functionality for reading and processing mass spectrometry data from MzML files. It allows users to extract various types of data, including Base Peak Intensity (BIC), Total Ion Chromatogram (TIC), and Extracted Ion Chromatogram (XIC). Additionally, it offers methods for data smoothing and preparation for plotting.
 

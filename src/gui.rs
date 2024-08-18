@@ -1,4 +1,4 @@
-//! # MzViewerApp Module
+//! # gui logic and components
 
 //! The `mzviewer` module provides a graphical user interface (GUI) for visualizing mass spectrometry data from MzML files.
 //! It allows users to load mass spectrometry data, select various plotting options, and visualize chromatograms and mass spectra.
