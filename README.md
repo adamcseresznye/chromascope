@@ -25,7 +25,7 @@ Chromascope, a fusion of ‘chromatography’ and ‘scope, as in telescope,’ 
 ## Usage
 
 <p align="center">
-<img src="assets/demo.gif" alt="demo" width="600" />
+<img src="assets/demo.gif" alt="demo" width="900" />
 </p>
 
 1. **Launch Chromascope**:

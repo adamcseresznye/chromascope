@@ -6,7 +6,6 @@
 //! 2. `parser.rs`: This module handles the parsing and processing of the mzML data files.
 //! 3. `plotting_parameters.rs`: This module defines the parameters and settings for the data plotting functionality.
 
-
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
 mod gui;
