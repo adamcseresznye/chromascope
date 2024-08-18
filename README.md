@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-<a target="_blank" href="adamcseresznye.github.io/chromascope/" title="Documentation"><img src="https://img.shields.io/badge/README-Documentation-green.svg"></a>
+<a target="_blank" href="https://adamcseresznye.github.io/chromascope/docs/chromascope/index.html" title="Documentation"><img src="https://img.shields.io/badge/README-Documentation-green.svg"></a>
 </p>
 
 # Chromascope
