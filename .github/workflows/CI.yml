@@ -36,7 +36,7 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: test
-          args: --lib
+          args: --verbose
 
   fmt:
     name: Rustfmt
