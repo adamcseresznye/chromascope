@@ -2,6 +2,10 @@
 <img src="assets/original_icons/logo1.png" alt="Chromascope logo" width="200" />
 </p>
 
+<p align="center">
+<a target="_blank" href="adamcseresznye.github.io/chromascope/" title="Documentation"><img src="https://img.shields.io/badge/README-Documentation-green.svg"></a>
+</p>
+
 # Chromascope
 
 Chromascope is a lightweight and easy-to-use GUI application designed for reading and visualizing mzML mass spectrometry data.
