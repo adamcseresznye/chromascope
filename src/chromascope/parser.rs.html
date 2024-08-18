@@ -576,6 +576,15 @@
 <a href="#575" id="575">575</a>
 <a href="#576" id="576">576</a>
 <a href="#577" id="577">577</a>
+<a href="#578" id="578">578</a>
+<a href="#579" id="579">579</a>
+<a href="#580" id="580">580</a>
+<a href="#581" id="581">581</a>
+<a href="#582" id="582">582</a>
+<a href="#583" id="583">583</a>
+<a href="#584" id="584">584</a>
+<a href="#585" id="585">585</a>
+<a href="#586" id="586">586</a>
 </pre></div><pre class="rust"><code><span class="doccomment">//! # backend for parsing MzML files for plotting
 
 //! The `parser` module provides functionality for reading and processing mass spectrometry data from MzML files. It allows users to extract various types of data, including Base Peak Intensity (BIC), Total Ion Chromatogram (TIC), and Extracted Ion Chromatogram (XIC). Additionally, it offers methods for data smoothing and preparation for plotting.
@@ -1104,8 +1113,11 @@
         <span class="kw">let </span><span class="kw-2">mut </span>d = PathBuf::from(<span class="macro">env!</span>(<span class="string">"CARGO_MANIFEST_DIR"</span>));
         d.push(TEST_FILE);
 
+        <span class="comment">// Normalize the path to account for different separators
+        </span><span class="kw">let </span>normalized_d = PathBuf::from(d.to_str().unwrap().replace(<span class="string">"\\"</span>, <span class="string">"/"</span>));
+
         <span class="kw">let </span><span class="kw-2">mut </span>mzdata = MzData::new();
-        <span class="kw">let </span>result = mzdata.open_msfile(<span class="kw-2">&amp;</span>d);
+        <span class="kw">let </span>result = mzdata.open_msfile(<span class="kw-2">&amp;</span>normalized_d);
         <span class="macro">assert!</span>(result.is_ok());
         <span class="macro">assert!</span>(mzdata.msfile.is_ok());
     }
@@ -1115,9 +1127,12 @@
         <span class="kw">let </span><span class="kw-2">mut </span>d = PathBuf::from(<span class="macro">env!</span>(<span class="string">"CARGO_MANIFEST_DIR"</span>));
         d.push(TEST_FILE);
 
+        <span class="comment">// Normalize the path to account for different separators
+        </span><span class="kw">let </span>normalized_d = PathBuf::from(d.to_str().unwrap().replace(<span class="string">"\\"</span>, <span class="string">"/"</span>));
+
         <span class="kw">let </span><span class="kw-2">mut </span>mzdata = MzData::new();
 
-        mzdata.open_msfile(<span class="kw-2">&amp;</span>d).unwrap();
+        mzdata.open_msfile(<span class="kw-2">&amp;</span>normalized_d).unwrap();
 
         <span class="kw">let </span>result = mzdata.get_xic(<span class="number">722.43</span>, ScanPolarity::Positive, <span class="number">1000.0</span>);
         <span class="macro">assert!</span>(result.is_ok());
@@ -1129,9 +1144,12 @@
         <span class="kw">let </span><span class="kw-2">mut </span>d = PathBuf::from(<span class="macro">env!</span>(<span class="string">"CARGO_MANIFEST_DIR"</span>));
         d.push(TEST_FILE);
 
+        <span class="comment">// Normalize the path to account for different separators
+        </span><span class="kw">let </span>normalized_d = PathBuf::from(d.to_str().unwrap().replace(<span class="string">"\\"</span>, <span class="string">"/"</span>));
+
         <span class="kw">let </span><span class="kw-2">mut </span>mzdata = MzData::new();
 
-        mzdata.open_msfile(<span class="kw-2">&amp;</span>d).unwrap();
+        mzdata.open_msfile(<span class="kw-2">&amp;</span>normalized_d).unwrap();
 
         <span class="kw">let </span>result = mzdata.get_tic(ScanPolarity::Positive);
         <span class="macro">assert!</span>(result.is_ok());
