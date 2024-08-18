@@ -526,8 +526,11 @@ mod tests {
         let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         d.push(TEST_FILE);
 
+        // Normalize the path to account for different separators
+        let normalized_d = PathBuf::from(d.to_str().unwrap().replace("\\", "/"));
+
         let mut mzdata = MzData::new();
-        let result = mzdata.open_msfile(&d);
+        let result = mzdata.open_msfile(&normalized_d);
         assert!(result.is_ok());
         assert!(mzdata.msfile.is_ok());
     }
@@ -537,9 +540,12 @@ mod tests {
         let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         d.push(TEST_FILE);
 
+        // Normalize the path to account for different separators
+        let normalized_d = PathBuf::from(d.to_str().unwrap().replace("\\", "/"));
+
         let mut mzdata = MzData::new();
 
-        mzdata.open_msfile(&d).unwrap();
+        mzdata.open_msfile(&normalized_d).unwrap();
 
         let result = mzdata.get_xic(722.43, ScanPolarity::Positive, 1000.0);
         assert!(result.is_ok());
@@ -551,9 +557,12 @@ mod tests {
         let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         d.push(TEST_FILE);
 
+        // Normalize the path to account for different separators
+        let normalized_d = PathBuf::from(d.to_str().unwrap().replace("\\", "/"));
+
         let mut mzdata = MzData::new();
 
-        mzdata.open_msfile(&d).unwrap();
+        mzdata.open_msfile(&normalized_d).unwrap();
 
         let result = mzdata.get_tic(ScanPolarity::Positive);
         assert!(result.is_ok());

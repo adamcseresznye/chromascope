@@ -962,7 +962,7 @@
 <a href="#960" id="960">960</a>
 <a href="#961" id="961">961</a>
 <a href="#962" id="962">962</a>
-</pre></div><pre class="rust"><code><span class="doccomment">//! # MzViewerApp Module
+</pre></div><pre class="rust"><code><span class="doccomment">//! # gui logic and components
 
 //! The `mzviewer` module provides a graphical user interface (GUI) for visualizing mass spectrometry data from MzML files.
 //! It allows users to load mass spectrometry data, select various plotting options, and visualize chromatograms and mass spectra.
@@ -1621,7 +1621,7 @@
             <span class="self">self</span>.invalid_file = FileValidity::Valid;
             <span class="self">self</span>.user_input.file_path = <span class="prelude-val">Some</span>(file_path_str.clone());
             <span class="self">self</span>.parsed_ms_data = parser::MzData::default();
-            <span class="kw">match </span><span class="self">self</span>.parsed_ms_data.open_msfile(<span class="kw-2">&amp;</span>path) {
+            <span class="kw">match </span><span class="self">self</span>.parsed_ms_data.open_msfile(path) {
                 <span class="prelude-val">Ok</span>(<span class="kw">_</span>) =&gt; <span class="macro">info!</span>(<span class="string">"File opened successfully."</span>),
                 <span class="prelude-val">Err</span>(e) =&gt; <span class="macro">warn!</span>(<span class="string">"Failed to open file: {}"</span>, e),
             }

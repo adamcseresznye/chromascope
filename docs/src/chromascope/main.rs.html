@@ -55,27 +55,21 @@
 <a href="#53" id="53">53</a>
 <a href="#54" id="54">54</a>
 <a href="#55" id="55">55</a>
-<a href="#56" id="56">56</a>
-<a href="#57" id="57">57</a>
-<a href="#58" id="58">58</a>
-</pre></div><pre class="rust"><code><span class="doccomment">//! Chromascope is an easy-to-use GUI application designed to handle and read mzML mass spectrometry data.
+</pre></div><pre class="rust"><code><span class="doccomment">//! Chromascope is a lightweight and easy-to-use GUI application designed to read mzML mass spectrometry data.
 //!
 //! The crate consists of three main modules:
 //!
 //! 1. `gui.rs`: This module contains the implementation of the graphical user interface (GUI) using the `egui` library.
 //! 2. `parser.rs`: This module handles the parsing and processing of the mzML data files.
 //! 3. `plotting_parameters.rs`: This module defines the parameters and settings for the data plotting functionality.
-//!
-//! The application is designed to run on Windows systems, and the `#![windows_subsystem = "windows"]` directive is included to ensure proper integration with the Windows environment.
 
-</span><span class="attr">#![windows_subsystem = <span class="string">"windows"</span>]
+</span><span class="attr">#![cfg_attr(target_os = <span class="string">"windows"</span>, windows_subsystem = <span class="string">"windows"</span>)]
 
 </span><span class="kw">mod </span>gui;
 <span class="kw">mod </span>parser;
 <span class="kw">mod </span>plotting_parameters;
 
 <span class="kw">use </span>egui::IconData;
-<span class="kw">use </span>env_logger;
 <span class="kw">use </span>gui::<span class="kw-2">*</span>;
 <span class="kw">use </span>log::{error, info};
 <span class="kw">use </span>std::process;
