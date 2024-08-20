@@ -59,5 +59,5 @@ We strive to create a welcoming and inclusive community. Please be respectful an
 
 ### Additional Resources
 
-- (Project Documentation)[https://adamcseresznye.github.io/chromascope/docs/chromascope/index.html]
+- [Project Documentation](https://adamcseresznye.github.io/chromascope/docs/chromascope/index.html)
 
