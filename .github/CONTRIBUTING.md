@@ -1,4 +1,4 @@
-### Reporting Issues
+## Reporting Issues
 
 If you encounter any bugs or have feature requests, please open an issue on our issue tracker. When reporting an issue, please include:
 - A clear and descriptive title.
@@ -37,14 +37,14 @@ We welcome contributions to Chromascope! If you have suggestions for new feature
 6. **Submit a Pull Request**:
    - Open a pull request on the original repository to merge your changes.
 
-### Coding Standards
+## Coding Standards
 
 Please follow our coding standards to ensure consistency in the codebase:
 - Use meaningful variable names and comments.
 - Follow the Chromascope Style Guide.
 - Ensure your code passes all tests before submitting a pull request.
 
-### Review and Merge Process
+## Review and Merge Process
 
 All pull requests will be reviewed by a maintainer. Please ensure that your code:
 - Adheres to our coding standards.
@@ -53,11 +53,11 @@ All pull requests will be reviewed by a maintainer. Please ensure that your code
 
 Once your pull request is reviewed and approved, it will be merged into the main branch.
 
-### Community and Behavioral Expectations
+## Community and Behavioral Expectations
 
 We strive to create a welcoming and inclusive community. Please be respectful and considerate in your interactions. Follow our Code of Conduct to ensure a positive experience for everyone.
 
-### Additional Resources
+## Additional Resources
 
 - [Project Documentation](https://adamcseresznye.github.io/chromascope/docs/chromascope/index.html)
 
