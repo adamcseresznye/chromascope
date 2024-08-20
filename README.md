@@ -16,7 +16,7 @@ mzML is an open, XML-based format, commonly used for storing and processing mass
 
 ## The name
 
-Chromascope, a fusion of ‘chromatography’ and ‘scope, as in telescope,’ embodies the spirit of exploration, in-depth analysis, and the pursuit of insight as you work with mass spectrometry data.
+Chromascope, a fusion of ‘chromatography’ and ‘scope, as in telescope,’ embodies the spirit of exploration, analysis, and the pursuit of insight as you work with mass spectrometry data.
 
 ## Features
 
@@ -73,34 +73,7 @@ To build Chromascope from source, follow these steps:
 
 ## Contributing
 
-We welcome contributions to Chromascope! If you have suggestions for new features, bug reports, or would like to contribute code, please open an issue or submit a pull request on our [GitHub repository](https://github.com/adamcseresznye/chromascope).
-
-### Development Setup
-
-1. **Fork the Repository**:
-   - Create a fork of the Chromascope repository on GitHub.
-
-2. **Clone Your Fork**:
-   ```bash
-   git clone https://github.com/adamcseresznye/chromascope.git
-   cd chromascope
-   ```
-
-3. **Create a New Branch**:
-   ```bash
-   git checkout -b feature/your-feature-name
-   ```
-
-4. **Make Your Changes**:
-   - Implement your changes, then commit them.
-
-5. **Push to Your Fork**:
-   ```bash
-   git push origin feature/your-feature-name
-   ```
-
-6. **Submit a Pull Request**:
-   - Open a pull request on the original repository to merge your changes.
+We welcome contributions to Chromascope! If you have suggestions for new features, bug reports, or would like to contribute code, please open an issue or submit a pull request. For the contribution guidelines see [here](https://github.com/adamcseresznye/chromascope/blob/main/.github/CONTRIBUTING.md).
 
 ## Planned improvements
 - 🚧 Enable display of MS2 chromatograms and spectra.
