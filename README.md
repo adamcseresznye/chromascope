@@ -10,6 +10,10 @@
 
 Chromascope is a lightweight and easy-to-use GUI application designed for reading and visualizing mzML mass spectrometry data.
 
+<p align="center">
+<img src="assets/demo.gif" alt="demo" width="900" />
+</p>
+
 ## Why
 
 mzML is an open, XML-based format, commonly used for storing and processing mass spectrometry data. While vendor-specific mass spectrometry files are straightforward to open and read, finding a GUI-based tool that handles mzML files with the same ease can be challenging. This project aims to offer a simple, lightweight application for quickly inspecting mass spectrometry data.
@@ -27,10 +31,6 @@ Chromascope, a fusion of ‘chromatography’ and ‘scope, as in telescope,’ 
 - **Cross-Platform**: The application is built to run smoothly on multiple operating systems, including Windows, macOS, and Linux.
 
 ## Usage
-
-<p align="center">
-<img src="assets/demo.gif" alt="demo" width="900" />
-</p>
 
 1. **Launch Chromascope**:
    - Run the application by executing the binary or running `cargo run` from the project directory.
@@ -76,7 +76,7 @@ To build Chromascope from source, follow these steps:
 We welcome contributions to Chromascope! If you have suggestions for new features, bug reports, or would like to contribute code, please open an issue or submit a pull request. For the contribution guidelines see [here](https://github.com/adamcseresznye/chromascope/blob/main/.github/CONTRIBUTING.md).
 
 ## Planned improvements
-- 🚧 Enable display of MS2 chromatograms and spectra.
+- 🚧 Enable display of SIM and MS2 chromatograms and spectra.
 - 🚧 Introduce functionality for simple peak integration.
 - 🚧 Provide support for handling and processing multiple files simultaneously.
 
