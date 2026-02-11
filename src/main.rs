@@ -17,6 +17,7 @@ use gui::*;
 use log::{error, info};
 use std::process;
 
+#[cfg(not(target_arch = "wasm32"))]
 fn main() {
     env_logger::init();
 
