@@ -21,6 +21,7 @@ use log::{debug, error, info, trace, warn};
 use mzdata::io::mzml::MzMLReaderType;
 use mzdata::spectrum::ScanPolarity;
 use mzdata::{prelude::*, MzMLReader};
+use std::cmp::Ordering;
 use std::fs::File;
 use std::path::PathBuf;
 
@@ -30,21 +31,21 @@ const MS_LEVEL: u8 = 1;
 /// Represents a data structure for storing mass spectrometry data.
 pub struct MzData {
     /// An optional `String` representing the name of the data file.
-    pub file_name: Option<String>,
+    file_name: Option<String>,
     /// An optional vector of `usize`corresponding to the indices.
-    pub index: Option<Vec<usize>>,
+    index: Option<Vec<usize>>,
     /// An optional vector of `f32` values representing retention times.
-    pub retention_time: Option<Vec<f32>>,
+    retention_time: Option<Vec<f32>>,
     /// An optional vector of `f32` values representing intensity values.
-    pub intensity: Option<Vec<f32>>,
+    intensity: Option<Vec<f32>>,
     /// An optional vector of `f32` values representing m/z (mass-to-charge) ratios.
-    pub mz: Option<Vec<f32>>,
+    mz: Option<Vec<f32>>,
     /// A `Result` containing the `MzMLReaderType<File>`, which represents the parsed mass spectrometry file.
-    pub msfile: Result<MzMLReaderType<File>>,
+    msfile: Result<MzMLReaderType<File>>,
     /// An optional vector of tuples, each containing two `f64` values for plotting data points.
-    pub plot_data: Option<Vec<[f64; 2]>>,
+    plot_data: Option<Vec<[f64; 2]>>,
     /// An optional tuple containing two vectors: one for mass values (`Vec<f64>`) and one for corresponding intensity values (`Vec<f32>`).
-    pub mass_spectrum: Option<(Vec<f64>, Vec<f32>)>,
+    mass_spectrum: Option<(Vec<f64>, Vec<f32>)>,
 }
 
 /// Provides a default implementation for `MzData`.
@@ -501,6 +502,109 @@ impl MzData {
 
         debug!("Finished getting mass spectrum at index: {:?}", &index);
     }
+
+    /// Finds the closest spectrum index by retention time using binary search.
+    ///
+    /// This method performs a binary search on the retention time vector to find
+    /// the spectrum index closest to the given target retention time.
+    ///
+    /// # Arguments
+    ///
+    /// * `clicked_rt` - An optional retention time value to search for
+    ///
+    /// # Returns
+    ///
+    /// * `Some(usize)` - The spectrum index closest to the target retention time
+    /// * `None` - If clicked_rt is None or if retention time data is unavailable
+    pub fn get_closest_index_by_time(&self, clicked_rt: Option<f32>) -> Option<usize> {
+        if let Some(rt) = clicked_rt {
+            if let (Some(retention_times), Some(indices)) = (&self.retention_time, &self.index) {
+                match retention_times.binary_search_by(|spectrum| {
+                    spectrum.partial_cmp(&rt).unwrap_or(Ordering::Equal)
+                }) {
+                    Ok(found_index) => {
+                        info!("Exact Rt match found at index: {:?}", found_index);
+                        Some(indices[found_index])
+                    }
+                    Err(found_index) => {
+                        // If the exact RT is not found, return the closest one
+                        info!(
+                            "Closest Rt match not found, using nearest index: {:?}",
+                            found_index
+                        );
+                        if found_index == 0 {
+                            info!("Returning the first index: {:?}", indices.first());
+                            indices.first().copied()
+                        } else if found_index == indices.len() {
+                            info!("Returning the last index: {:?}", indices.last());
+                            indices.last().copied()
+                        } else {
+                            // Compare the two closest values and return the closer one
+                            let prev = &retention_times[found_index - 1];
+                            let next = &retention_times[found_index];
+                            info!(
+                                "Comparing previous: {:?} and next: {:?} for RT: {:?}",
+                                prev, next, rt
+                            );
+                            if (rt - prev).abs() < (next - rt).abs() {
+                                info!("Returning previous index: {:?}", indices[found_index - 1]);
+                                Some(indices[found_index - 1])
+                            } else {
+                                info!("Returning next index: {:?}", indices[found_index]);
+                                Some(indices[found_index])
+                            }
+                        }
+                    }
+                }
+            } else {
+                warn!("Retention time or index data is missing.");
+                None
+            }
+        } else {
+            warn!("No RT provided. Mass spectrum can't be extracted/displayed.");
+            None
+        }
+    }
+
+    /// Returns a reference to the file name.
+    pub fn file_name(&self) -> &Option<String> {
+        &self.file_name
+    }
+
+    /// Returns a reference to the index vector.
+    pub fn index(&self) -> &Option<Vec<usize>> {
+        &self.index
+    }
+
+    /// Returns a reference to the retention time vector.
+    pub fn retention_time(&self) -> &Option<Vec<f32>> {
+        &self.retention_time
+    }
+
+    /// Returns a reference to the intensity vector.
+    pub fn intensity(&self) -> &Option<Vec<f32>> {
+        &self.intensity
+    }
+
+    /// Returns a reference to the mz vector.
+    pub fn mz(&self) -> &Option<Vec<f32>> {
+        &self.mz
+    }
+
+    /// Returns a reference to the msfile Result.
+    pub fn msfile(&self) -> &Result<MzMLReaderType<File>> {
+        &self.msfile
+    }
+
+    /// Returns a reference to the plot data.
+    pub fn plot_data(&self) -> &Option<Vec<[f64; 2]>> {
+        &self.plot_data
+    }
+
+    /// Returns a reference to the mass spectrum data.
+    pub fn mass_spectrum(&self) -> &Option<(Vec<f64>, Vec<f32>)> {
+        &self.mass_spectrum
+    }
 }
 
 #[cfg(test)]
@@ -513,12 +617,12 @@ mod tests {
     #[test]
     fn test_new() {
         let mzdata = MzData::new();
-        assert!(mzdata.retention_time.is_none());
-        assert!(mzdata.intensity.is_none());
-        assert!(mzdata.mz.is_none());
-        assert!(mzdata.msfile.is_err());
-        assert!(mzdata.plot_data.is_none());
-        assert!(mzdata.mass_spectrum.is_none());
+        assert!(mzdata.retention_time().is_none());
+        assert!(mzdata.intensity().is_none());
+        assert!(mzdata.mz().is_none());
+        assert!(mzdata.msfile().is_err());
+        assert!(mzdata.plot_data().is_none());
+        assert!(mzdata.mass_spectrum().is_none());
     }
 
     #[test]
@@ -532,7 +636,7 @@ mod tests {
         let mut mzdata = MzData::new();
         let result = mzdata.open_msfile(&normalized_d);
         assert!(result.is_ok());
-        assert!(mzdata.msfile.is_ok());
+        assert!(mzdata.msfile().is_ok());
     }
 
     #[test]
@@ -549,8 +653,8 @@ mod tests {
 
         let result = mzdata.get_xic(722.43, ScanPolarity::Positive, 1000.0);
         assert!(result.is_ok());
-        assert!(!mzdata.retention_time.is_none());
-        assert!(!mzdata.intensity.is_none());
+        assert!(!mzdata.retention_time().is_none());
+        assert!(!mzdata.intensity().is_none());
     }
     #[test]
     fn test_get_tic() {
@@ -566,9 +670,9 @@ mod tests {
 
         let result = mzdata.get_tic(ScanPolarity::Positive);
         assert!(result.is_ok());
-        assert!(!mzdata.retention_time.is_none());
-        assert!(!mzdata.intensity.is_none());
-        assert!(mzdata.mz.is_some());
+        assert!(!mzdata.retention_time().is_none());
+        assert!(!mzdata.intensity().is_none());
+        assert!(mzdata.mz().is_some());
     }
 
     #[test]
@@ -579,7 +683,7 @@ mod tests {
         let result = mzdata.smooth_data(Ok(data), 1);
         assert!(result.is_ok());
 
-        let smoothed = mzdata.plot_data.unwrap();
+        let smoothed = mzdata.plot_data().as_ref().unwrap();
         assert_eq!(smoothed.len(), 5);
         //assert_relative_eq!(smoothed[2][1], 3.0);
     }

@@ -94,14 +94,12 @@ use crate::{
 };
 
 use mzdata::spectrum::ScanPolarity;
-use std::ops::Div;
 use std::path::PathBuf;
 
 use eframe::egui;
 use egui::{Color32, Context, Ui};
 use egui_plot::{Line, PlotPoints};
 use log::{debug, error, info, warn};
-use std::cmp::Ordering;
 
 const FILE_FORMAT: &str = "mzML";
 
@@ -146,12 +144,48 @@ enum StateChange {
     Unchanged,
 }
 
+/// Represents a single opened mzML file with its associated data and display settings
+struct OpenFile {
+    /// The display name of the file (extracted from the path)
+    name: String,
+    /// The full path to the file
+    path: String,
+    /// The parsed mass spectrometry data for this file
+    data: parser::MzData,
+    /// The processed plot data for this file
+    plot_data: Option<Vec<[f64; 2]>>,
+    /// The color assigned to this file's chromatogram line
+    color: LineColor,
+    /// Whether this file's chromatogram is currently visible in the plot
+    visible: bool,
+}
+
+/// Returns the next color in the cycle based on the file index
+fn next_color_for_index(index: usize) -> LineColor {
+    let colors = [
+        LineColor::Red,
+        LineColor::Green,
+        LineColor::Blue,
+        LineColor::Yellow,
+        LineColor::Black,
+        LineColor::White,
+    ];
+    match index % colors.len() {
+        0 => LineColor::Red,
+        1 => LineColor::Green,
+        2 => LineColor::Blue,
+        3 => LineColor::Yellow,
+        4 => LineColor::Black,
+        _ => LineColor::White,
+    }
+}
+
 #[derive(Default)]
 pub struct MzViewerApp {
-    /// The parsed mass spectrometry data
-    parsed_ms_data: parser::MzData,
-    /// The plot data, prepared by the `process_plot_data` method
-    plot_data: Option<Vec<[f64; 2]>>,
+    /// Collection of opened mzML files
+    files: Vec<OpenFile>,
+    /// Index of the currently active/selected file for analysis
+    active_file_index: Option<usize>,
     /// The user input parameters
     user_input: UserInput,
     /// The validity of the input file. Only MzML files can be read in.
@@ -186,84 +220,58 @@ impl MzViewerApp {
     }
     /// Resets the internal state of the instance.
     ///
-    /// This function clears the parsed measurement data and sets the plot data to `None`.
+    /// This function clears all opened files and resets the active file index.
     pub fn reset_state(&mut self) {
-        self.parsed_ms_data = parser::MzData::default();
-        self.plot_data = None;
+        self.files.clear();
+        self.active_file_index = None;
     }
 
-    /// Processes the plot data based on the user's input.
+    /// Plots the chromatogram (TIC, BPC, or XIC) for all visible files.
     ///
-    /// This function is responsible for retrieving the appropriate plot data (TIC, BPC, or XIC) from the `parsed_ms_data` object,
-    /// preparing the data for plotting, and optionally smoothing the data if requested by the user.
-    ///
-    /// # Parameters
-    /// - `&mut self`: A mutable reference to the current instance of the struct that contains the `parsed_ms_data` and `user_input` fields.
-    ///
-    /// # Returns
-    /// - `Option<Vec<[f64; 2]>>`: An optional vector of 2-element arrays of `f64` values, representing the processed plot data. If there was an error during the processing, `None` is returned.
-    fn process_plot_data(&mut self) -> Option<Vec<[f64; 2]>> {
-        info!("Starting to process plot data");
-
-        // Log user inputs
-        debug!(
-        "User input - mass: {:?}, polarity: {:?}, mass tolerance: {:?}, plot type: {:?}, smoothing: {}",
-        self.user_input.mass,
-        self.user_input.polarity,
-        self.user_input.mass_tolerance,
-        self.user_input.plot_type,
-        self.user_input.smoothing
-    );
-
-        let result = match self.user_input.plot_type {
-            PlotType::Tic => self.parsed_ms_data.get_tic(self.user_input.polarity),
-            PlotType::Bpc => self.parsed_ms_data.get_bpic(self.user_input.polarity),
-            PlotType::Xic => self.parsed_ms_data.get_xic(
-                self.user_input.mass,
-                self.user_input.polarity,
-                self.user_input.mass_tolerance,
-            ),
-        };
-
-        if result.is_err() {
-            error!("Failed to get plot data for the specified plot type");
-        }
-
-        let prepared_data = self.parsed_ms_data.prepare_for_plot();
-        if prepared_data.is_err() {
-            error!("Failed to prepare data for plotting");
-        }
-        if self
-            .parsed_ms_data
-            .smooth_data(prepared_data, self.user_input.smoothing)
-            .is_err()
-        {
-            error!("Failed to smooth data");
-            return None;
-        };
-
-        let plot_data = &self.parsed_ms_data.plot_data;
-        info!("Finished processing plot data");
-        plot_data.clone()
-    }
-
-    /// Plots the chromatogram (TIC, BPC, or XIC) based on the user's input.
-    ///
-    /// This function is responsible for updating the plot data if the state has changed, and then rendering the plot using the `egui_plot` library.
-    /// It also handles the user's triple-click event on the plot, which triggers the extraction of the mass spectrum at the clicked retention time.
+    /// This function is responsible for updating the plot data if the state has changed for the active file,
+    /// and then rendering plots for all visible files using the `egui_plot` library.
+    /// It also handles the user's triple-click event on the plot, which triggers the extraction of the mass spectrum
+    /// at the clicked retention time from the active file.
     ///
     /// # Parameters
-    /// - `&mut self`: A mutable reference to the current instance of the struct that contains the `user_input`, `plot_data`, `state_changed`, and `parsed_ms_data` fields.
+    /// - `&mut self`: A mutable reference to the current instance of the struct
     /// - `ui: &mut egui::Ui`: A mutable reference to the current `egui::Ui` instance, which is used to render the plot.
     ///
     /// # Returns
     /// - `egui::Response`: The response from the `egui_plot::Plot` widget, which can be used to handle user interactions with the plot.
     fn plot_chromatogram(&mut self, ui: &mut egui::Ui) -> egui::Response {
-        if let Some(_path) = &self.user_input.file_path {
-            // Only re-process the data if the state has changed
-            if self.state_changed == StateChange::Changed {
-                info!("State has changed, starting to plot chromatogram");
-                self.plot_data = self.process_plot_data();
+        // Only re-process the data for the active file if the state has changed
+        if let Some(active_idx) = self.active_file_index {
+            if self.state_changed == StateChange::Changed && active_idx < self.files.len() {
+                info!("State has changed, reprocessing plot data for active file: {}", self.files[active_idx].name);
+                // Process the data and update plot_data for the active file
+                let user_input_clone = &self.user_input;
+                if let Some(file) = self.files.get_mut(active_idx) {
+                    let result = match user_input_clone.plot_type {
+                        PlotType::Tic => file.data.get_tic(user_input_clone.polarity),
+                        PlotType::Bpc => file.data.get_bpic(user_input_clone.polarity),
+                        PlotType::Xic => file.data.get_xic(
+                            user_input_clone.mass,
+                            user_input_clone.polarity,
+                            user_input_clone.mass_tolerance,
+                        ),
+                    };
+
+                    if result.is_err() {
+                        error!("Failed to get plot data for the specified plot type");
+                    }
+
+                    let prepared_data = file.data.prepare_for_plot();
+                    if prepared_data.is_err() {
+                        error!("Failed to prepare data for plotting");
+                    }
+                    
+                    if file.data.smooth_data(prepared_data, user_input_clone.smoothing).is_ok() {
+                        file.plot_data = file.data.plot_data().clone();
+                    } else {
+                        error!("Failed to smooth data");
+                    }
+                }
                 self.state_changed = StateChange::Unchanged;
             }
         }
@@ -273,33 +281,49 @@ impl MzViewerApp {
         let response = egui_plot::Plot::new("chromatogram")
             .width(ui.available_width() * 0.99)
             .height(ui.available_height() * 0.6)
+            .legend(egui_plot::Legend::default())
             .show(ui, |plot_ui| {
-                if let Some(data) = &self.plot_data {
-                    plot_ui.line(
-                        Line::new(PlotPoints::from(data.clone()))
-                            .width(self.user_input.line_width)
-                            .style(self.user_input.line_type.to_egui())
-                            .color(self.user_input.line_color.to_egui()), //.name(format!("{:?}", self.user_input.plot_type)),
-                    );
-                } else {
-                    warn!("No plot data available");
+                // Plot all visible files
+                for file in &self.files {
+                    if file.visible {
+                        if let Some(data) = &file.plot_data {
+                            plot_ui.line(
+                                Line::new(PlotPoints::from(data.clone()))
+                                    .width(self.user_input.line_width)
+                                    .style(self.user_input.line_type.to_egui())
+                                    .color(file.color.to_egui())
+                                    .name(&file.name),
+                            );
+                        }
+                    }
+                }
+                
+                if self.files.is_empty() {
+                    warn!("No files opened");
                 }
                 plot_bounds = Some(plot_ui.plot_bounds());
             })
             .response;
 
         if response.triple_clicked() {
-            // this was added because when triple clicked on XIC the extracted mz spectrum was not accurate (gave different result compared to BIC and TIC)
-            if self.user_input.plot_type != plotting_parameters::PlotType::Xic {
-                let rt_clicked = self.determine_rt_clicked(&response, plot_bounds);
-                info!("Triple click detected on plot at {:?}", &rt_clicked);
+            // Extract mass spectrum from the active file
+            if let Some(active_idx) = self.active_file_index {
+                if active_idx < self.files.len() {
+                    // this was added because when triple clicked on XIC the extracted mz spectrum was not accurate
+                    if self.user_input.plot_type != plotting_parameters::PlotType::Xic {
+                        let rt_clicked = self.determine_rt_clicked(&response, plot_bounds);
+                        info!("Triple click detected on plot at {:?} for file: {}", &rt_clicked, self.files[active_idx].name);
 
-                if let Some(index) = self.find_closest_spectrum(rt_clicked) {
-                    info!("Found closest spectrum at index: {}", index);
-                    self.parsed_ms_data.get_mass_spectrum_by_index(index);
-                } else {
-                    warn!("No close spectrum found for the clicked retention time");
+                        if let Some(index) = self.files[active_idx].data.get_closest_index_by_time(rt_clicked) {
+                            info!("Found closest spectrum at index: {}", index);
+                            self.files[active_idx].data.get_mass_spectrum_by_index(index);
+                        } else {
+                            warn!("No close spectrum found for the clicked retention time");
+                        }
+                    }
                 }
+            } else {
+                warn!("No active file selected for mass spectrum extraction");
             }
         }
 
@@ -350,124 +374,54 @@ impl MzViewerApp {
         None
     }
 
-    /// Finds the index of the mass spectrum closest to the given retention time.
+    /// Plots the mass spectrum based on the data available in the active file.
     ///
-    /// This function searches the `retention_time` array in the `parsed_ms_data` object to find the mass spectrum with the closest retention time to the given value.
-    /// If an exact match is not found, it returns the index of the mass spectrum with the closest retention time.
-    ///
-    /// # Parameters
-    /// - `&self`: A reference to the current instance of the struct that contains the `parsed_ms_data` field.
-    /// - `clicked_rt: Option<f32>`: The retention time at which the user clicked on the plot, or `None` if no click was detected.
-    ///
-    /// # Returns
-    /// - `Option<usize>`: The index of the mass spectrum with the closest retention time to the given value, or `None` if the retention time or index data is missing.
-    fn find_closest_spectrum(&self, clicked_rt: Option<f32>) -> Option<usize> {
-        if let Some(rt) = clicked_rt {
-            if let (Some(retention_times), Some(indices)) = (
-                &self.parsed_ms_data.retention_time,
-                &self.parsed_ms_data.index,
-            ) {
-                match retention_times.binary_search_by(|spectrum| {
-                    spectrum.partial_cmp(&rt).unwrap_or(Ordering::Equal)
-                }) {
-                    Ok(found_index) => {
-                        info!("Exact Rt match found at index: {:?}", found_index);
-                        Some(indices[found_index])
-                    }
-                    Err(found_index) => {
-                        // If the exact RT is not found, return the closest one
-                        info!(
-                            "Closest Rt match not found, using nearest index: {:?}",
-                            found_index
-                        );
-                        if found_index == 0 {
-                            info!("Returning the first index: {:?}", indices.first());
-                            indices.first().copied()
-                        } else if found_index == indices.len() {
-                            info!("Returning the last index: {:?}", indices.last());
-                            indices.last().copied()
-                        } else {
-                            // Compare the two closest values and return the closer one
-                            let prev = &retention_times[found_index - 1];
-                            let next = &retention_times[found_index];
-                            info!(
-                                "Comparing previous: {:?} and next: {:?} for RT: {:?}",
-                                prev, next, rt
-                            );
-                            if (rt - prev).abs() < (next - rt).abs() {
-                                info!("Returning previous index: {:?}", indices[found_index - 1]);
-                                Some(indices[found_index - 1])
-                            } else {
-                                info!("Returning next index: {:?}", indices[found_index]);
-                                Some(indices[found_index])
-                            }
-                        }
-                    }
-                }
-            } else {
-                warn!("Retention time or index data is missing.");
-                None
-            }
-        } else {
-            warn!("No close RT match found. Mass spectrum can't be extracted/displayed.");
-            None
-        }
-    }
-
-    /// Plots the mass spectrum based on the data available in the `parsed_ms_data` object.
-    ///
-    /// This function creates a bar chart plot of the mass-to-charge (m/z) values and their corresponding intensities.
+    /// This function creates a bar chart plot of the mass-to-charge (m/z) values and their corresponding intensities
+    /// from the currently active file.
     /// The width of the bars is adjusted based on the zoom level of the plot to provide a better visual representation.
     ///
     /// # Parameters
-    /// - `&mut self`: A mutable reference to the current instance of the struct that contains the `parsed_ms_data` and `user_input` fields.
+    /// - `&mut self`: A mutable reference to the current instance of the struct
     /// - `ui: &mut egui::Ui`: A mutable reference to the current `egui::Ui` instance, which is used to render the plot.
     ///
     /// # Returns
     /// - `egui::Response`: The response from the `egui_plot::Plot` widget, which can be used to handle user interactions with the plot.
     fn plot_mass_spectrum(&mut self, ui: &mut egui::Ui) -> egui::Response {
-        if let Some((mz, intensity)) = &self.parsed_ms_data.mass_spectrum {
-            info!("Mass spectrum data available. Plotting the spectrum.");
+        if let Some(active_idx) = self.active_file_index {
+            if active_idx < self.files.len() {
+                if let Some((mz, intensity)) = self.files[active_idx].data.mass_spectrum() {
+                    info!("Mass spectrum data available for {}. Plotting the spectrum.", self.files[active_idx].name);
 
-            // Create bar chart data
-            let _bars: Vec<egui_plot::Bar> = mz
-                .iter()
-                .zip(intensity.iter())
-                .map(|(&m, &i)| {
-                    egui_plot::Bar::new(m, i.into())
-                        .width(self.user_input.line_width.div(2.0).into()) // Adjust width of bars as needed
-                        .fill(self.user_input.line_color.to_egui()) // Adjust color as needed
-                })
-                .collect();
+                    let response = egui_plot::Plot::new("mass_spectrum")
+                        .width(ui.available_width() * 0.99)
+                        .height(ui.available_height())
+                        .show(ui, |plot_ui| {
+                            let bounds = plot_ui.plot_bounds();
+                            let zoom_level = (bounds.max()[0] - bounds.min()[0]).abs(); // Calculate zoom level based on plot bounds
+                            debug!("Zoom level calculated: {}", zoom_level);
 
-            let response = egui_plot::Plot::new("mass_spectrum")
-                .width(ui.available_width() * 0.99)
-                .height(ui.available_height())
-                .show(ui, |plot_ui| {
-                    let bounds = plot_ui.plot_bounds();
-                    let zoom_level = (bounds.max()[0] - bounds.min()[0]).abs(); // Calculate zoom level based on plot bounds
-                    debug!("Zoom level calculated: {}", zoom_level);
+                            let bar_width = zoom_level * 0.001; // Adjust bar width based on zoom level
+                            let adjusted_bars: Vec<egui_plot::Bar> = mz
+                                .iter()
+                                .zip(intensity.iter())
+                                .map(|(&m, &i)| {
+                                    egui_plot::Bar::new(m, i.into())
+                                        .width(bar_width) // Adjust width of bars based on zoom level
+                                        .fill(self.user_input.line_color.to_egui()) // Adjust color as needed
+                                        .name(format!("m/z = {:.4}", m))
+                                })
+                                .collect();
 
-                    let bar_width = zoom_level * 0.001; // Adjust bar width based on zoom level
-                    let adjusted_bars: Vec<egui_plot::Bar> = mz
-                        .iter()
-                        .zip(intensity.iter())
-                        .map(|(&m, &i)| {
-                            egui_plot::Bar::new(m, i.into())
-                                .width(bar_width) // Adjust width of bars based on zoom level
-                                .fill(self.user_input.line_color.to_egui()) // Adjust color as needed
-                                .name(format!("m/z = {:.4}", m))
+                            plot_ui.bar_chart(egui_plot::BarChart::new(adjusted_bars));
                         })
-                        .collect();
-
-                    plot_ui.bar_chart(egui_plot::BarChart::new(adjusted_bars));
-                })
-                .response;
-            response
-        } else {
-            warn!("No mass spectrum data available");
-            ui.label("No mass spectrum data available")
+                        .response;
+                    return response;
+                }
+            }
         }
+        
+        warn!("No mass spectrum data available or no active file selected");
+        ui.label("No mass spectrum data available")
     }
 
     /// Updates the data selection panel in the user interface.
@@ -489,23 +443,27 @@ impl MzViewerApp {
     fn update_data_selection_panel(&mut self, ctx: &Context) {
         egui::TopBottomPanel::top("data_selection_panel").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                if ui
-                    .button("File")
-                    .on_hover_text("Click to Open File")
-                    .clicked()
-                {
-                    debug!("File button clicked.");
-                    self.reset_state();
-                    /*
-                    // todo: we should completely clear and get a brand new self
-                    self.plot_data = None; // clears the plot_data if new file is opened
-                    self.parsed_ms_data = parser::MzData::default(); // clears the parser::MzData struct if new file is opened
-                    self.user_input.file_path = None; // clears the file_path if new file is opened
-                    */
-                    self.handle_file_selection();
-
-                    info!("File selection handled.");
-                }
+                ui.menu_button("File", |ui| {
+                    if ui.button("Open").on_hover_text("Open a file").clicked() {
+                        debug!("File open button clicked.");
+                        self.reset_state();
+                        /*
+                        // todo: we should completely clear and get a brand new self
+                        self.plot_data = None; // clears the plot_data if new file is opened
+                        self.parsed_ms_data = parser::MzData::default(); // clears the parser::MzData struct if new file is opened
+                        self.user_input.file_path = None; // clears the file_path if new file is opened
+                        */
+                        self.handle_file_selection();
+                        info!("File selection handled.");
+                        ui.close_menu();
+                    }
+                    
+                    if ui.button("Export to CSV").on_hover_text("Export plot data to CSV").clicked() {
+                        debug!("Export to CSV button clicked.");
+                        self.handle_csv_export();
+                        ui.close_menu();
+                    }
+                });
 
                 ui.menu_button("Display", |ui| {
                     debug!("Display menu button clicked.");
@@ -616,60 +574,162 @@ impl MzViewerApp {
         info!("Line style changed.")
     }
 
-    /// Handles the selection of a file by the user.
+    /// Handles the selection of files by the user.
     ///
     /// This function is responsible for the following tasks:
     ///
-    /// 1. Prompts the user to select a file.
-    /// 2. If a file is selected, it updates the file path and the validity of the file using the `update_file_path_and_validity()` function.
-    /// 3. If no file is selected, it sets the `invalid_file` field to `FileValidity::Invalid`.
+    /// 1. Prompts the user to select one or more files.
+    /// 2. For each selected file, validates the format and creates an OpenFile struct.
+    /// 3. Appends all valid files to the files vector.
+    /// 4. Sets the active file to the first newly added file.
+    /// 5. Triggers plot data generation for the active file.
     ///
     /// # Errors
     ///
-    /// This function does not return any errors. If an error occurs during the file selection process, it will be handled by the `rfd::FileDialog::new().pick_file()` function.
+    /// This function does not return any errors. If an error occurs during the file selection process,
+    /// it will be handled by the `rfd::FileDialog::new().pick_files()` function.
     fn handle_file_selection(&mut self) {
-        if let Some(path) = rfd::FileDialog::new().pick_file() {
-            info!("File selected: {:?}", path);
-            self.update_file_path_and_validity(&path);
+        if let Some(paths) = rfd::FileDialog::new().pick_files() {
+            info!("Files selected: {} file(s)", paths.len());
+            let start_index = self.files.len();
+            
+            for path in paths {
+                info!("Processing file: {:?}", path);
+                if let Some(open_file) = self.create_open_file(&path, start_index + self.files.len() - start_index) {
+                    self.files.push(open_file);
+                    info!("File added successfully: {:?}", path);
+                }
+            }
+            
+            // Set the active file to the first newly added file
+            if !self.files.is_empty() {
+                self.active_file_index = Some(start_index);
+                self.invalid_file = FileValidity::Valid;
+                self.state_changed = StateChange::Changed;
+                info!("Active file set to index: {}", start_index);
+            }
         } else {
             warn!("No file selected. Setting file validity to Invalid.");
             self.invalid_file = FileValidity::Invalid;
         }
     }
 
-    /// Updates the file path and validity based on the selected file.
+    /// Handles exporting the plot data from the active file to a CSV file.
     ///
-    /// This function checks the file format and updates the corresponding fields in the struct. If the file format is valid, it opens the file and updates the `parsed_ms_data` field. If the file format is invalid, it sets the `invalid_file` field to `FileValidity::Invalid`.
+    /// This function is responsible for the following tasks:
     ///
-    /// # Parameters
-    ///
-    /// - `path`: A reference to the selected file path.
+    /// 1. Checks if an active file is selected and has plot data available.
+    /// 2. Prompts the user to select a save location for the CSV file.
+    /// 3. Writes the plot data to the selected file in CSV format with headers "Retention Time,Intensity".
+    /// 4. Uses the active file's name as the default CSV filename.
     ///
     /// # Errors
     ///
-    /// This function may encounter errors when attempting to open the selected file. These errors will be logged as warning messages.
-    fn update_file_path_and_validity(&mut self, path: &PathBuf) {
-        let file_path_str = path.display().to_string();
-        info!("Updating file path and validity for: {}", file_path_str);
+    /// This function does not return errors. Any I/O errors during file writing will be logged as error messages.
+    fn handle_csv_export(&self) {
+        // Check if an active file is selected
+        if self.active_file_index.is_none() {
+            warn!("No active file selected for CSV export");
+            return;
+        }
+        
+        let active_idx = self.active_file_index.unwrap();
+        if active_idx >= self.files.len() {
+            warn!("Active file index out of bounds");
+            return;
+        }
+        
+        let active_file = &self.files[active_idx];
+        
+        // Check if plot data exists for the active file
+        if active_file.plot_data.is_none() {
+            warn!("No plot data available to export for file: {}", active_file.name);
+            return;
+        }
 
-        if file_path_str.ends_with(FILE_FORMAT) {
-            info!("File format is valid.");
-            self.invalid_file = FileValidity::Valid;
-            self.user_input.file_path = Some(file_path_str.clone());
-            self.parsed_ms_data = parser::MzData::default();
-            match self.parsed_ms_data.open_msfile(path) {
-                Ok(_) => info!("File opened successfully."),
-                Err(e) => warn!("Failed to open file: {}", e),
+        // Create default filename from active file name
+        let default_name = active_file.name.replace(".mzML", "_chromatogram.csv");
+        
+        // Open save dialog
+        let dialog = rfd::FileDialog::new()
+            .add_filter("CSV", &["csv"])
+            .set_file_name(&default_name);
+
+        if let Some(path) = dialog.save_file() {
+            info!("CSV export path selected: {:?} for file: {}", path, active_file.name);
+            
+            // Build CSV content
+            let data = active_file.plot_data.as_ref().unwrap();
+            let mut csv_content = String::from("Retention Time,Intensity\n");
+            
+            for [retention_time, intensity] in data.iter() {
+                csv_content.push_str(&format!("{},{}\n", retention_time, intensity));
+            }
+
+            // Write to file
+            match std::fs::write(&path, csv_content) {
+                Ok(_) => info!("CSV successfully exported to: {:?}", path),
+                Err(e) => error!("Failed to export CSV to {:?}: {}", path, e),
             }
         } else {
-            warn!("Invalid file format.");
-            self.invalid_file = FileValidity::Invalid;
+            warn!("No file path selected for CSV export.");
+        }
+    }
+
+    /// Creates an OpenFile struct from a file path.
+    ///
+    /// This function validates the file format, extracts the file name, loads the MzData,
+    /// and assigns a color based on the file index.
+    ///
+    /// # Parameters
+    ///
+    /// - `path`: A reference to the file path.
+    /// - `index`: The index this file will have in the files vector (used for color assignment).
+    ///
+    /// # Returns
+    ///
+    /// - `Option<OpenFile>`: The created OpenFile struct, or None if the file format is invalid or loading fails.
+    fn create_open_file(&self, path: &PathBuf, index: usize) -> Option<OpenFile> {
+        let file_path_str = path.display().to_string();
+        info!("Creating OpenFile for: {}", file_path_str);
+
+        if !file_path_str.ends_with(FILE_FORMAT) {
+            warn!("Invalid file format for: {}. Expected {} file.", file_path_str, FILE_FORMAT);
+            return None;
+        }
+
+        // Extract file name from path
+        let file_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(&file_path_str)
+            .to_string();
+
+        // Load the MzData
+        let mut data = parser::MzData::default();
+        match data.open_msfile(path) {
+            Ok(_) => {
+                info!("File opened successfully: {}", file_name);
+                Some(OpenFile {
+                    name: file_name,
+                    path: file_path_str,
+                    data,
+                    plot_data: None,
+                    color: next_color_for_index(index),
+                    visible: true,
+                })
+            }
+            Err(e) => {
+                warn!("Failed to open file {}: {}", file_name, e);
+                None
+            }
         }
     }
 
     /// Updates the file information panel in the user interface.
     ///
-    /// This function is responsible for displaying the status of the selected file in the left-side panel of the application. It checks the validity of the selected file and displays the appropriate information to the user.
+    /// This function is responsible for displaying all opened files in the left-side panel of the application.
+    /// It allows users to toggle file visibility, select the active file, and close individual files.
     ///
     /// # Parameters
     ///
@@ -677,50 +737,107 @@ impl MzViewerApp {
     ///
     /// # Functionality
     ///
-    /// 1. If the selected file is invalid, it displays a warning message indicating the expected file format.
-    /// 2. If the selected file is valid, it displays the file path and provides a checkbox that allows the user to close the file.
-    /// 3. If no file is selected, it displays a message indicating that no file has been selected.
-    ///
-    /// # Errors
-    ///
-    /// This function does not return any errors. It handles the file validity and user interactions within the user interface.
+    /// 1. Displays a list of all opened files with checkboxes to toggle visibility.
+    /// 2. Allows clicking on file names to set them as the active file.
+    /// 3. Provides close buttons to remove individual files.
+    /// 4. Highlights the currently active file.
+    /// 5. If no files are opened, displays a message indicating this.
     fn update_file_information_panel(&mut self, ctx: &egui::Context) {
         egui::SidePanel::left("file_information_panel").show(ctx, |ui| {
-            ui.label("Opened file:");
+            ui.label("Opened files:");
             ui.separator();
 
-            match self.invalid_file {
-                FileValidity::Invalid => {
-                    warn!("Invalid file type. Please select an {} file.", FILE_FORMAT);
-                    ui.colored_label(
-                        Color32::LIGHT_RED,
-                        format!("Invalid file type. Please select an {} file.", FILE_FORMAT),
-                    );
+            if self.files.is_empty() {
+                ui.colored_label(Color32::GRAY, "No files opened");
+            } else {
+                let mut file_to_remove: Option<usize> = None;
+                let mut new_active_index: Option<usize> = None;
+                
+                for (idx, file) in self.files.iter_mut().enumerate() {
+                    let is_active = self.active_file_index == Some(idx);
+                    
+                    ui.horizontal(|ui| {
+                        // Highlight the active file
+                        if is_active {
+                            let frame = egui::Frame::default()
+                                .fill(ui.visuals().selection.bg_fill)
+                                .inner_margin(egui::Margin::same(4.0));
+                            frame.show(ui, |ui| {
+                                // Visibility checkbox
+                                if ui.checkbox(&mut file.visible, "").changed() {
+                                    info!("File visibility toggled: {} -> {}", file.name, file.visible);
+                                }
+                                
+                                // File name label (clickable to set as active)
+                                if ui.selectable_label(true, egui::RichText::new(&file.name).small())
+                                    .on_hover_text("Active file")
+                                    .clicked() {
+                                    new_active_index = Some(idx);
+                                }
+                                
+                                // Close button
+                                if ui.small_button("❌").on_hover_text("Close file").clicked() {
+                                    file_to_remove = Some(idx);
+                                    info!("Close button clicked for file: {}", file.name);
+                                }
+                            });
+                        } else {
+                            // Visibility checkbox
+                            if ui.checkbox(&mut file.visible, "").changed() {
+                                info!("File visibility toggled: {} -> {}", file.name, file.visible);
+                            }
+                            
+                            // File name label (clickable to set as active)
+                            if ui.selectable_label(false, egui::RichText::new(&file.name).small())
+                                .on_hover_text("Click to set as active file")
+                                .clicked() {
+                                new_active_index = Some(idx);
+                            }
+                            
+                            // Close button
+                            if ui.small_button("❌").on_hover_text("Close file").clicked() {
+                                file_to_remove = Some(idx);
+                                info!("Close button clicked for file: {}", file.name);
+                            }
+                        }
+                    });
                 }
-                FileValidity::Valid => match self.user_input.file_path {
-                    Some(ref file_path) => {
-                        info!("Valid file selected: {}", file_path);
-                        self.checkbox_bool = true;
-                        if ui
-                            .checkbox(
-                                &mut self.checkbox_bool,
-                                egui::RichText::new(file_path).small(),
-                            )
-                            .on_hover_text("Click to Close File")
-                            .clicked()
-                        {
-                            info!("File closed: {}", file_path);
-                            self.plot_data = None;
-                            self.user_input.file_path = None;
-                            self.checkbox_bool = false;
+                
+                // Update active index if a file was clicked
+                if let Some(new_idx) = new_active_index {
+                    if self.active_file_index != Some(new_idx) {
+                        self.active_file_index = Some(new_idx);
+                        self.state_changed = StateChange::Changed;
+                        info!("Active file changed to index: {}", new_idx);
+                    }
+                }
+                
+                // Remove file if close button was clicked
+                if let Some(idx) = file_to_remove {
+                    let removed_file = self.files.remove(idx);
+                    info!("File removed: {}", removed_file.name);
+                    
+                    // Adjust active_file_index
+                    if let Some(active_idx) = self.active_file_index {
+                        if active_idx == idx {
+                            // Removed the active file
+                            self.active_file_index = if self.files.is_empty() {
+                                None
+                            } else {
+                                Some(idx.min(self.files.len() - 1))
+                            };
+                        } else if active_idx > idx {
+                            // Active file is after the removed file, decrement index
+                            self.active_file_index = Some(active_idx - 1);
                         }
                     }
-                    None => {
-                        warn!("No file selected");
-                        ui.colored_label(Color32::LIGHT_RED, "No file selected".to_string());
+                    
+                    // Update validity state
+                    if self.files.is_empty() {
+                        self.invalid_file = FileValidity::Invalid;
                     }
-                },
-            };
+                }
+            }
         });
     }
 
