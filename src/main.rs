@@ -22,7 +22,7 @@ fn main() {
     env_logger::init();
 
     // include icon in the compiled binary
-    let icon_image = image::load_from_memory(include_bytes!(r"../assets/chromascope_icon.png"))
+    let icon_image = image::load_from_memory(include_bytes!(r"../assets/icon_small.png"))
         .expect("Should be able to open icon PNG file");
 
     let width = icon_image.width();

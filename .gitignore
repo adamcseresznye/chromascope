@@ -13,8 +13,9 @@ target_wasm
 .lycheecache
 
 # data and target folder and their content
-/data/
-/target/
+data/
+target/
+docs/
 # mass spectrometry files
 .mzML
 .raw

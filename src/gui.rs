@@ -1,6 +1,6 @@
 //! # gui logic and components
 
-//! The `mzviewer` module provides a graphical user interface (GUI) for visualizing mass spectrometry data from MzML files.
+//! The module provides a graphical user interface (GUI) for visualizing mass spectrometry data from MzML files.
 //! It allows users to load mass spectrometry data, select various plotting options, and visualize chromatograms and mass spectra.
 //! The module utilizes the `eframe` and `egui` libraries for building the GUI and rendering plots.
 
@@ -153,7 +153,7 @@ struct OpenFile {
     /// The parsed mass spectrometry data for this file
     data: parser::MzData,
     /// The processed plot data for this file
-    plot_data: Option<Vec<[f64; 2]>>,
+    cached_plot_data: Option<Vec<[f64; 2]>>,
     /// The color assigned to this file's chromatogram line
     color: LineColor,
     /// Whether this file's chromatogram is currently visible in the plot
@@ -267,7 +267,7 @@ impl MzViewerApp {
                     }
                     
                     if file.data.smooth_data(prepared_data, user_input_clone.smoothing).is_ok() {
-                        file.plot_data = file.data.plot_data().clone();
+                        file.cached_plot_data = file.data.plot_data().clone();
                     } else {
                         error!("Failed to smooth data");
                     }
@@ -286,7 +286,7 @@ impl MzViewerApp {
                 // Plot all visible files
                 for file in &self.files {
                     if file.visible {
-                        if let Some(data) = &file.plot_data {
+                        if let Some(data) = &file.cached_plot_data {
                             plot_ui.line(
                                 Line::new(PlotPoints::from(data.clone()))
                                     .width(self.user_input.line_width)
@@ -447,12 +447,6 @@ impl MzViewerApp {
                     if ui.button("Open").on_hover_text("Open a file").clicked() {
                         debug!("File open button clicked.");
                         self.reset_state();
-                        /*
-                        // todo: we should completely clear and get a brand new self
-                        self.plot_data = None; // clears the plot_data if new file is opened
-                        self.parsed_ms_data = parser::MzData::default(); // clears the parser::MzData struct if new file is opened
-                        self.user_input.file_path = None; // clears the file_path if new file is opened
-                        */
                         self.handle_file_selection();
                         info!("File selection handled.");
                         ui.close_menu();
@@ -642,7 +636,7 @@ impl MzViewerApp {
         let active_file = &self.files[active_idx];
         
         // Check if plot data exists for the active file
-        if active_file.plot_data.is_none() {
+        if active_file.cached_plot_data.is_none() {
             warn!("No plot data available to export for file: {}", active_file.name);
             return;
         }
@@ -659,7 +653,7 @@ impl MzViewerApp {
             info!("CSV export path selected: {:?} for file: {}", path, active_file.name);
             
             // Build CSV content
-            let data = active_file.plot_data.as_ref().unwrap();
+            let data = active_file.cached_plot_data.as_ref().unwrap();
             let mut csv_content = String::from("Retention Time,Intensity\n");
             
             for [retention_time, intensity] in data.iter() {
@@ -706,7 +700,7 @@ impl MzViewerApp {
             .to_string();
 
         // Load the MzData
-        let mut data = parser::MzData::default();
+        let mut data = parser::MzData::new();
         match data.open_msfile(path) {
             Ok(_) => {
                 info!("File opened successfully: {}", file_name);
@@ -714,7 +708,7 @@ impl MzViewerApp {
                     name: file_name,
                     path: file_path_str,
                     data,
-                    plot_data: None,
+                    cached_plot_data: None,
                     color: next_color_for_index(index),
                     visible: true,
                 })

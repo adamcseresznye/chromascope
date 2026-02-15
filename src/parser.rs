@@ -48,14 +48,6 @@ pub struct MzData {
     mass_spectrum: Option<(Vec<f64>, Vec<f32>)>,
 }
 
-/// Provides a default implementation for `MzData`.
-impl Default for MzData {
-    /// Creates a new instance of `MzData` with default values.
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl core::fmt::Debug for MzData {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("MzData")
@@ -212,27 +204,25 @@ impl MzData {
         info!("Attempting to read TIC of {:?}", &self.file_name);
         match &mut self.msfile {
             Ok(reader) => {
-                let mut retention_time = Vec::new();
-                let mut intensity = Vec::new();
-                let mut index = Vec::new();
-
-                for spectrum in reader
+                let (retention_time, intensity, index) = reader
                     .iter()
                     .filter(|spectrum| spectrum.description.polarity == polarity)
-                {
-                    retention_time.push(spectrum.start_time() as f32);
-                    intensity.push(spectrum.peaks().tic());
-                    index.push(spectrum.index());
-                }
-
-                let mz: Vec<f32> = Vec::new();
+                    .fold(
+                        (Vec::new(), Vec::new(), Vec::new()),
+                        |mut acc, spectrum| {
+                            acc.0.push(spectrum.start_time() as f32);
+                            acc.1.push(spectrum.peaks().tic());
+                            acc.2.push(spectrum.index());
+                            acc
+                        },
+                    );
 
                 self.retention_time = Some(retention_time);
                 self.intensity = Some(intensity);
-                self.mz = Some(mz);
+                self.mz = Some(Vec::new()); // TIC has no specific m/z
                 self.index = Some(index);
                 debug!("Successfully extracted TIC from: {:?}", &self.file_name);
-                trace!("Successfully extracted the BIC of {:?}. Rt is {:?}, Index is {:?}, Mz is {:?}, Intensity is {:?}, ", &self.file_name, &self.retention_time, &self.index, &self.mz, &self.intensity);
+                trace!("Successfully extracted the TIC of {:?}. Rt is {:?}, Index is {:?}, Mz is {:?}, Intensity is {:?}, ", &self.file_name, &self.retention_time, &self.index, &self.mz, &self.intensity);
             }
             Err(e) => error!("Failed to get TIC due to {:?}", e),
         }
@@ -611,8 +601,30 @@ impl MzData {
 mod tests {
     use super::*;
     use std::path::PathBuf;
-    //use approx::assert_relative_eq;
+    use approx::assert_relative_eq;
     const TEST_FILE: &str = r"test_file\data_dependent_02.mzML"; //thermo example file converted to mzML (only Rt 10-12min)
+
+    /// Helper function to create a normalized test file path
+    fn get_test_file_path() -> PathBuf {
+        let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        d.push(TEST_FILE);
+        PathBuf::from(d.to_str().unwrap().replace("\\", "/"))
+    }
+
+    /// Helper function to create and open an MzData parser
+    fn setup_test_parser() -> MzData {
+        let mut mzdata = MzData::new();
+        let path = get_test_file_path();
+        mzdata.open_msfile(&path).unwrap();
+        mzdata
+    }
+
+    /// Helper function to create parser with TIC already extracted
+    fn setup_with_tic() -> MzData {
+        let mut mzdata = setup_test_parser();
+        mzdata.get_tic(ScanPolarity::Positive).unwrap();
+        mzdata
+    }
 
     #[test]
     fn test_new() {
@@ -685,6 +697,500 @@ mod tests {
 
         let smoothed = mzdata.plot_data().as_ref().unwrap();
         assert_eq!(smoothed.len(), 5);
-        //assert_relative_eq!(smoothed[2][1], 3.0);
+        assert_relative_eq!(smoothed[2][1], 3.0);
+    }
+
+    // ========== Tests for get_bpic() ==========
+
+    #[test]
+    fn test_get_bpic() {
+        let mut mzdata = setup_test_parser();
+
+        let result = mzdata.get_bpic(ScanPolarity::Positive);
+        assert!(result.is_ok());
+        assert!(mzdata.retention_time().is_some());
+        assert!(mzdata.intensity().is_some());
+        assert!(mzdata.mz().is_some());
+        assert!(mzdata.index().is_some());
+
+        // Verify data lengths match
+        let rt_len = mzdata.retention_time().as_ref().unwrap().len();
+        let intensity_len = mzdata.intensity().as_ref().unwrap().len();
+        let mz_len = mzdata.mz().as_ref().unwrap().len();
+        let index_len = mzdata.index().as_ref().unwrap().len();
+
+        assert_eq!(rt_len, intensity_len);
+        assert_eq!(rt_len, mz_len);
+        assert_eq!(rt_len, index_len);
+        assert!(rt_len > 0, "Should have extracted some data points");
+    }
+
+    #[test]
+    fn test_get_bpic_negative_polarity() {
+        let mut mzdata = setup_test_parser();
+
+        let result = mzdata.get_bpic(ScanPolarity::Negative);
+        assert!(result.is_ok());
+        // Negative polarity may have no data in this test file
+        // but should still return Ok without panicking
+    }
+
+    #[test]
+    fn test_get_bpic_unknown_polarity() {
+        let mut mzdata = setup_test_parser();
+
+        let result = mzdata.get_bpic(ScanPolarity::Unknown);
+        assert!(result.is_ok());
+        assert!(mzdata.retention_time().is_some());
+        assert!(mzdata.intensity().is_some());
+    }
+
+    // ========== Tests for prepare_for_plot() ==========
+
+    #[test]
+    fn test_prepare_for_plot_after_tic() {
+        let mzdata = setup_with_tic();
+
+        let result = mzdata.prepare_for_plot();
+        assert!(result.is_ok());
+
+        let plot_data = result.unwrap();
+        assert!(plot_data.len() > 0, "Should have plot data");
+
+        // Verify structure: each point is [rt, intensity]
+        for point in plot_data.iter() {
+            assert!(point[0] >= 0.0, "Retention time should be non-negative");
+            assert!(point[1] >= 0.0, "Intensity should be non-negative");
+        }
+    }
+
+    #[test]
+    fn test_prepare_for_plot_empty_data() {
+        let mzdata = MzData::new();
+
+        let result = mzdata.prepare_for_plot();
+        // prepare_for_plot returns Ok with empty vec when no data extracted
+        assert!(result.is_ok());
+        let plot_data = result.unwrap();
+        assert_eq!(plot_data.len(), 0, "Should have no plot data when no extraction done");
+    }
+
+    #[test]
+    fn test_prepare_for_plot_averages_duplicates() {
+        let mut mzdata = setup_test_parser();
+
+        // Extract XIC which might have duplicate RTs
+        mzdata.get_xic(722.43, ScanPolarity::Positive, 1000.0).unwrap();
+
+        let result = mzdata.prepare_for_plot();
+        assert!(result.is_ok());
+
+        let plot_data = result.unwrap();
+        // Verify no duplicate retention times in output
+        for i in 1..plot_data.len() {
+            assert!(
+                plot_data[i][0] > plot_data[i - 1][0],
+                "Retention times should be strictly increasing (no duplicates)"
+            );
+        }
+    }
+
+    #[test]
+    fn test_prepare_for_plot_ordering() {
+        let mzdata = setup_with_tic();
+
+        let result = mzdata.prepare_for_plot();
+        assert!(result.is_ok());
+
+        let plot_data = result.unwrap();
+        // Verify retention times are in ascending order
+        for i in 1..plot_data.len() {
+            assert!(
+                plot_data[i][0] >= plot_data[i - 1][0],
+                "Retention times should be in ascending order"
+            );
+        }
+    }
+
+    // ========== Tests for get_mass_spectrum_by_index() ==========
+
+    #[test]
+    fn test_get_mass_spectrum_by_index_valid() {
+        let mut mzdata = setup_with_tic();
+
+        // Get a valid index
+        let index = mzdata.index().as_ref().unwrap()[0];
+
+        mzdata.get_mass_spectrum_by_index(index);
+
+        let spectrum = mzdata.mass_spectrum();
+        assert!(spectrum.is_some(), "Should have retrieved mass spectrum");
+
+        let (mz_values, intensities) = spectrum.as_ref().unwrap();
+        assert!(mz_values.len() > 0, "Should have m/z values");
+        assert_eq!(mz_values.len(), intensities.len(), "m/z and intensity arrays should match");
+    }
+
+    #[test]
+    fn test_get_mass_spectrum_by_index_different_indices() {
+        let mut mzdata = setup_with_tic();
+
+        let indices = mzdata.index().as_ref().unwrap();
+        if indices.len() >= 2 {
+            let index1 = indices[0];
+            let index2 = indices[indices.len() / 2];
+
+            mzdata.get_mass_spectrum_by_index(index1);
+            let spectrum1 = mzdata.mass_spectrum().clone();
+
+            mzdata.get_mass_spectrum_by_index(index2);
+            let spectrum2 = mzdata.mass_spectrum().clone();
+
+            // Different indices should generally give different spectra
+            // (unless they happen to be identical, which is unlikely)
+            assert!(spectrum1.is_some());
+            assert!(spectrum2.is_some());
+        }
+    }
+
+    #[test]
+    fn test_get_mass_spectrum_by_index_invalid() {
+        let mut mzdata = setup_with_tic();
+
+        // Use an invalid index (very large number)
+        let invalid_index = 999999;
+
+        mzdata.get_mass_spectrum_by_index(invalid_index);
+
+        // Should not panic, but spectrum might be None or remain from previous call
+        // This tests that the method handles invalid indices gracefully
+    }
+
+    #[test]
+    fn test_get_mass_spectrum_by_index_unopened_file() {
+        let mut mzdata = MzData::new();
+
+        // Try to get spectrum without opening file
+        mzdata.get_mass_spectrum_by_index(0);
+
+        // Should not panic, should log error
+        // Nothing to assert except it didn't crash
+    }
+
+    // ========== Tests for get_closest_index_by_time() ==========
+
+    #[test]
+    fn test_get_closest_index_by_time_exact_match() {
+        let mzdata = setup_with_tic();
+
+        let retention_times = mzdata.retention_time().as_ref().unwrap();
+        if retention_times.len() > 0 {
+            let exact_rt = retention_times[0];
+
+            let result = mzdata.get_closest_index_by_time(Some(exact_rt));
+            assert!(result.is_some(), "Should find index for exact RT match");
+
+            let found_index = result.unwrap();
+            let indices = mzdata.index().as_ref().unwrap();
+            assert_eq!(found_index, indices[0], "Should return the exact matching index");
+        }
+    }
+
+    #[test]
+    fn test_get_closest_index_by_time_between_points() {
+        let mzdata = setup_with_tic();
+
+        let retention_times = mzdata.retention_time().as_ref().unwrap();
+        if retention_times.len() >= 2 {
+            let rt1 = retention_times[0];
+            let rt2 = retention_times[1];
+            let between_rt = (rt1 + rt2) / 2.0;
+
+            let result = mzdata.get_closest_index_by_time(Some(between_rt));
+            assert!(result.is_some(), "Should find closest index");
+
+            // Should return one of the two indices
+            let found_index = result.unwrap();
+            let indices = mzdata.index().as_ref().unwrap();
+            assert!(
+                found_index == indices[0] || found_index == indices[1],
+                "Should return one of the two adjacent indices"
+            );
+        }
+    }
+
+    #[test]
+    fn test_get_closest_index_by_time_before_first() {
+        let mzdata = setup_with_tic();
+
+        let retention_times = mzdata.retention_time().as_ref().unwrap();
+        if retention_times.len() > 0 {
+            let before_rt = retention_times[0] - 1.0;
+
+            let result = mzdata.get_closest_index_by_time(Some(before_rt));
+            assert!(result.is_some(), "Should return first index for RT before range");
+
+            let found_index = result.unwrap();
+            let indices = mzdata.index().as_ref().unwrap();
+            assert_eq!(found_index, indices[0], "Should return first index");
+        }
+    }
+
+    #[test]
+    fn test_get_closest_index_by_time_after_last() {
+        let mzdata = setup_with_tic();
+
+        let retention_times = mzdata.retention_time().as_ref().unwrap();
+        if retention_times.len() > 0 {
+            let after_rt = retention_times[retention_times.len() - 1] + 1.0;
+
+            let result = mzdata.get_closest_index_by_time(Some(after_rt));
+            assert!(result.is_some(), "Should return last index for RT after range");
+
+            let found_index = result.unwrap();
+            let indices = mzdata.index().as_ref().unwrap();
+            assert_eq!(
+                found_index,
+                indices[indices.len() - 1],
+                "Should return last index"
+            );
+        }
+    }
+
+    #[test]
+    fn test_get_closest_index_by_time_none_input() {
+        let mzdata = setup_with_tic();
+
+        let result = mzdata.get_closest_index_by_time(None);
+        assert!(result.is_none(), "Should return None for None input");
+    }
+
+    #[test]
+    fn test_get_closest_index_by_time_empty_data() {
+        let mzdata = MzData::new();
+
+        let result = mzdata.get_closest_index_by_time(Some(10.0));
+        assert!(result.is_none(), "Should return None when no data extracted");
+    }
+
+    #[test]
+    fn test_get_closest_index_by_time_single_point() {
+        let mut mzdata = setup_test_parser();
+
+        // Extract XIC with narrow tolerance to potentially get single point
+        mzdata.get_xic(722.43, ScanPolarity::Positive, 0.001).unwrap();
+
+        if let Some(rt) = mzdata.retention_time().as_ref() {
+            if rt.len() > 0 {
+                let test_rt = rt[0] + 0.5;
+                let result = mzdata.get_closest_index_by_time(Some(test_rt));
+                assert!(result.is_some(), "Should handle single or few data points");
+            }
+        }
+    }
+
+    // ========== Error Handling Tests ==========
+
+    #[test]
+    fn test_open_msfile_nonexistent() {
+        let mut mzdata = MzData::new();
+        let nonexistent = PathBuf::from("/nonexistent/file.mzML");
+
+        let result = mzdata.open_msfile(&nonexistent);
+        assert!(result.is_err(), "Should fail for nonexistent file");
+    }
+
+    #[test]
+    fn test_get_xic_zero_tolerance() {
+        let mut mzdata = setup_test_parser();
+
+        let _result = mzdata.get_xic(722.43, ScanPolarity::Positive, 0.0);
+        // Should either handle gracefully or return an error, not panic
+        // Implementation may vary, so we just check it doesn't crash
+    }
+
+    #[test]
+    fn test_get_xic_negative_tolerance() {
+        let mut mzdata = setup_test_parser();
+
+        let _result = mzdata.get_xic(722.43, ScanPolarity::Positive, -1.0);
+        // Should handle gracefully, not panic
+    }
+
+    #[test]
+    fn test_get_xic_no_matching_peaks() {
+        let mut mzdata = setup_test_parser();
+
+        // Use a very narrow tolerance and unlikely m/z value
+        let result = mzdata.get_xic(50000.0, ScanPolarity::Positive, 0.0001);
+        assert!(result.is_ok());
+
+        // May have empty or minimal data
+        if let Some(_rt) = mzdata.retention_time() {
+            // This is acceptable - either empty or has data
+        }
+    }
+
+    // ========== Polarity Tests ==========
+
+    #[test]
+    fn test_get_tic_all_polarities() {
+        // Test all polarity types
+        let polarities = vec![
+            ScanPolarity::Positive,
+            ScanPolarity::Negative,
+            ScanPolarity::Unknown,
+        ];
+
+        for polarity in polarities {
+            let mut test_data = setup_test_parser();
+            let result = test_data.get_tic(polarity);
+            assert!(result.is_ok(), "TIC should handle all polarity types");
+        }
+    }
+
+    #[test]
+    fn test_get_xic_all_polarities() {
+        let polarities = vec![
+            ScanPolarity::Positive,
+            ScanPolarity::Negative,
+            ScanPolarity::Unknown,
+        ];
+
+        for polarity in polarities {
+            let mut test_data = setup_test_parser();
+            let result = test_data.get_xic(722.43, polarity, 1000.0);
+            assert!(result.is_ok(), "XIC should handle all polarity types");
+        }
+    }
+
+    // ========== Smoothing Edge Cases ==========
+
+    #[test]
+    fn test_smooth_data_window_zero() {
+        let mut mzdata = MzData::new();
+        let data = vec![[1.0, 1.0], [2.0, 2.0], [3.0, 3.0]];
+
+        let _result = mzdata.smooth_data(Ok(data.clone()), 0);
+        // Should handle gracefully - either return error or use window size 1
+        // Don't assert specific behavior, just check it doesn't panic
+    }
+
+    #[test]
+    fn test_smooth_data_window_larger_than_data() {
+        let mut mzdata = MzData::new();
+        let data = vec![[1.0, 1.0], [2.0, 2.0], [3.0, 3.0]];
+
+        let result = mzdata.smooth_data(Ok(data), 10);
+        assert!(result.is_ok());
+        // Should handle gracefully, possibly by clamping window size
+    }
+
+    #[test]
+    fn test_smooth_data_single_point() {
+        let mut mzdata = MzData::new();
+        let data = vec![[1.0, 1.0]];
+
+        let result = mzdata.smooth_data(Ok(data), 3);
+        assert!(result.is_ok());
+
+        let smoothed = mzdata.plot_data().as_ref().unwrap();
+        assert_eq!(smoothed.len(), 1);
+        assert_relative_eq!(smoothed[0][0], 1.0);
+        assert_relative_eq!(smoothed[0][1], 1.0);
+    }
+
+    #[test]
+    fn test_smooth_data_empty() {
+        let mut mzdata = MzData::new();
+        let data: Vec<[f64; 2]> = vec![];
+
+        let result = mzdata.smooth_data(Ok(data), 3);
+        // Should handle gracefully
+        if result.is_ok() {
+            let smoothed = mzdata.plot_data().as_ref().unwrap();
+            assert_eq!(smoothed.len(), 0);
+        }
+    }
+
+    // ========== Integration Tests ==========
+
+    #[test]
+    fn test_full_pipeline_tic() {
+        let mut mzdata = setup_test_parser();
+
+        // Full pipeline: extract TIC -> prepare for plot -> smooth
+        mzdata.get_tic(ScanPolarity::Positive).unwrap();
+
+        let plot_data = mzdata.prepare_for_plot().unwrap();
+        assert!(plot_data.len() > 0);
+
+        let _smoothed = mzdata.smooth_data(Ok(plot_data), 3).unwrap();
+
+        let final_data = mzdata.plot_data().as_ref().unwrap();
+        assert!(final_data.len() > 0);
+    }
+
+    #[test]
+    fn test_full_pipeline_xic() {
+        let mut mzdata = setup_test_parser();
+
+        // Full pipeline: extract XIC -> prepare for plot
+        mzdata.get_xic(722.43, ScanPolarity::Positive, 1000.0).unwrap();
+
+        let plot_data = mzdata.prepare_for_plot().unwrap();
+        assert!(plot_data.len() > 0);
+    }
+
+    #[test]
+    fn test_switching_extraction_methods() {
+        let mut mzdata = setup_test_parser();
+
+        // Extract TIC
+        mzdata.get_tic(ScanPolarity::Positive).unwrap();
+        let tic_rt_count = mzdata.retention_time().as_ref().unwrap().len();
+
+        // Switch to XIC
+        mzdata.get_xic(722.43, ScanPolarity::Positive, 1000.0).unwrap();
+        let _xic_rt_count = mzdata.retention_time().as_ref().unwrap().len();
+
+        // Switch to BIC
+        mzdata.get_bpic(ScanPolarity::Positive).unwrap();
+        let _bic_rt_count = mzdata.retention_time().as_ref().unwrap().len();
+
+        // All should work without crashing
+        assert!(tic_rt_count > 0);
+        // XIC and BIC may have different counts than TIC
+    }
+
+    #[test]
+    fn test_multiple_xic_extractions() {
+        let mut mzdata = setup_test_parser();
+
+        // Extract multiple XICs sequentially
+        let masses = vec![722.43, 500.0, 1000.0];
+
+        for mass in masses {
+            let result = mzdata.get_xic(mass, ScanPolarity::Positive, 1000.0);
+            assert!(result.is_ok());
+        }
+    }
+
+    #[test]
+    fn test_get_mass_spectrum_after_extraction() {
+        let mut mzdata = setup_with_tic();
+
+        // Get closest index and then mass spectrum
+        let retention_times = mzdata.retention_time().as_ref().unwrap();
+        if retention_times.len() > 0 {
+            let mid_rt = retention_times[retention_times.len() / 2];
+
+            if let Some(idx) = mzdata.get_closest_index_by_time(Some(mid_rt)) {
+                mzdata.get_mass_spectrum_by_index(idx);
+
+                let spectrum = mzdata.mass_spectrum();
+                assert!(spectrum.is_some(), "Should retrieve spectrum for found index");
+            }
+        }
     }
 }

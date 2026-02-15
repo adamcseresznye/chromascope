@@ -1,5 +1,5 @@
 <p align="center">
-<img src="assets/original_icons/logo1.png" alt="Chromascope logo" width="200" />
+<img src="assets/icon_large.png" alt="Chromascope logo" width="200" />
 </p>
 
 <p align="center">
@@ -76,9 +76,9 @@ To build Chromascope from source, follow these steps:
 We welcome contributions to Chromascope! If you have suggestions for new features, bug reports, or would like to contribute code, please open an issue or submit a pull request. For the contribution guidelines see [here](https://github.com/adamcseresznye/chromascope/blob/main/.github/CONTRIBUTING.md).
 
 ## Planned improvements
-- 🚧 Enable display of SIM and MS2 chromatograms and spectra.
-- 🚧 Introduce functionality for simple peak integration.
-- 🚧 Provide support for handling and processing multiple files simultaneously.
+- [x] Provide support for handling and processing multiple files simultaneously.
+- [ ] Enable display of SIM and MS2 chromatograms and spectra.
+- [ ] Introduce functionality for simple peak integration.
 
 ## License
 

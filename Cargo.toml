@@ -1,7 +1,7 @@
 [package]
 name = "chromascope"
 version = "0.1.0"
-authors = ["Adam Cseresznye <csenye.chem@gmail.com>"]
+authors = ["Adam Cseresznye <>"]
 edition = "2021"
 include = ["LICENSE-APACHE", "LICENSE-MIT", "**/*.rs", "Cargo.toml"]
 rust-version = "1.76"
@@ -45,6 +45,8 @@ codegen-units = 1   # Reduce number of codegen units to increase optimizations
 panic = 'abort'     # Abort on panic
 strip = true        # Strip symbols from binary*
 
+[dev-dependencies]
+approx = "0.5"
 
 # Optimize all dependencies even in debug builds:
 [profile.dev.package."*"]
