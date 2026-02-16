@@ -49,6 +49,9 @@ impl DataBounds {
     /// * `Ok(())` - If mass is within bounds
     /// * `Err(ChromascopeError::MassOutOfRange)` - If mass is outside the file's range
     pub fn validate_mass(&self, mass: f64) -> Result<()> {
+        if mass <= 0.0 {
+            return Err(ChromascopeError::InvalidMass(mass));
+        }
         if mass < self.min_mz || mass > self.max_mz {
             return Err(ChromascopeError::MassOutOfRange {
                 mass,
@@ -113,7 +116,7 @@ impl DataBounds {
 /// };
 ///
 /// // Valid parameters
-/// let params = XicParams::new(524.3, ScanPolarity::Positive, 10.0, &bounds)?;
+/// let params = XicParams::new(524.3, ScanPolarity::Positive, 10.0, &bounds).unwrap();
 ///
 /// // Invalid mass returns error
 /// let invalid = XicParams::new(2000.0, ScanPolarity::Positive, 10.0, &bounds);
@@ -142,8 +145,11 @@ impl XicParams {
     ///
     /// # Example
     /// ```
-    /// let bounds = DataBounds { /* ... */ };
-    /// let params = XicParams::new(524.3, ScanPolarity::Positive, 10.0, &bounds)?;
+    /// use chromascope::validation::{XicParams, DataBounds};
+    /// use mzdata::spectrum::ScanPolarity;
+    ///
+    /// let bounds = DataBounds::unrestricted();
+    /// let params = XicParams::new(524.3, ScanPolarity::Positive, 10.0, &bounds).unwrap();
     /// ```
     pub fn new(
         mass: f64,
@@ -215,8 +221,8 @@ mod tests {
         let result = XicParams::new(0.0, ScanPolarity::Positive, 10.0, &bounds);
         assert!(result.is_err(), "Zero mass should fail");
         assert!(
-            matches!(result.unwrap_err(), ChromascopeError::MassOutOfRange { .. }),
-            "Should return MassOutOfRange error"
+            matches!(result.unwrap_err(), ChromascopeError::InvalidMass(_)),
+            "Should return InvalidMass error"
         );
     }
 
@@ -226,8 +232,8 @@ mod tests {
         let result = XicParams::new(-100.0, ScanPolarity::Negative, 5.0, &bounds);
         assert!(result.is_err(), "Negative mass should fail");
         assert!(
-            matches!(result.unwrap_err(), ChromascopeError::MassOutOfRange { .. }),
-            "Should return MassOutOfRange error"
+            matches!(result.unwrap_err(), ChromascopeError::InvalidMass(_)),
+            "Should return InvalidMass error"
         );
     }
 

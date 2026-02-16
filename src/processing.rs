@@ -83,9 +83,10 @@ pub struct ProcessingParams {
 /// use chromascope::parser::MzData;
 /// use chromascope::plotting_parameters::PlotType;
 /// use mzdata::spectrum::ScanPolarity;
+/// use std::path::PathBuf;
 ///
 /// let mut data = MzData::new();
-/// data.open_msfile("data.mzML")?;
+/// data.open_msfile(&PathBuf::from("data.mzML"))?;
 ///
 /// let params = ProcessingParams {
 ///     plot_type: PlotType::Tic,
@@ -98,10 +99,7 @@ pub struct ProcessingParams {
 /// println!("Extracted {} data points", result.len());
 /// # Ok::<(), chromascope::error::ChromascopeError>(())
 /// ```
-pub fn process_chromatogram(
-    data: &mut MzData,
-    params: &ProcessingParams,
-) -> Result<Vec<[f64; 2]>> {
+pub fn process_chromatogram(data: &mut MzData, params: &ProcessingParams) -> Result<Vec<[f64; 2]>> {
     // Step 1: Extract raw chromatogram based on type
     // Each method mutates data's internal fields and returns &mut Self for chaining
     match params.plot_type {
@@ -117,7 +115,7 @@ pub fn process_chromatogram(
                 .xic_params
                 .as_ref()
                 .ok_or(ChromascopeError::MissingXicParams)?;
-            
+
             data.get_xic(
                 xic_params.mass(),
                 xic_params.polarity(),
@@ -151,8 +149,7 @@ mod tests {
     fn load_test_file() -> MzData {
         let mut data = MzData::new();
         let path = PathBuf::from("test_file/data_dependent_02.mzML");
-        data.open_msfile(&path)
-            .expect("Failed to load test file");
+        data.open_msfile(&path).expect("Failed to load test file");
         data
     }
 
@@ -235,7 +232,7 @@ mod tests {
         };
         let xic_params = XicParams::new(524.3, ScanPolarity::Positive, 10.0, &bounds)
             .expect("Valid XIC params should construct");
-        
+
         let params = ProcessingParams {
             plot_type: PlotType::Xic,
             polarity: ScanPolarity::Positive,
@@ -270,7 +267,10 @@ mod tests {
         // Assert
         assert!(result.is_ok(), "BPC with smoothing should succeed");
         let chromatogram = result.unwrap();
-        assert!(!chromatogram.is_empty(), "Smoothed chromatogram should have data");
+        assert!(
+            !chromatogram.is_empty(),
+            "Smoothed chromatogram should have data"
+        );
     }
 
     #[test]
@@ -313,7 +313,10 @@ mod tests {
         // Assert
         assert!(result.is_err(), "Excessive smoothing should fail");
         assert!(
-            matches!(result.unwrap_err(), ChromascopeError::InvalidSmoothingWindow(_)),
+            matches!(
+                result.unwrap_err(),
+                ChromascopeError::InvalidSmoothingWindow(_)
+            ),
             "Should return InvalidSmoothingWindow error"
         );
     }

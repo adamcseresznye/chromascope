@@ -100,10 +100,11 @@ impl MzData {
     /// * `anyhow::Error` - If the MzML file could not be opened for any reason.
     ///
     /// # Examples
-    /// ```
+    /// ```no_run
+    /// use chromascope::parser::MzData;
     /// use std::path::PathBuf;
     ///
-    /// let mut example_struct = Mzdata::default();
+    /// let mut example_struct = MzData::new();
     /// let file_path = PathBuf::from("path/to/your/mzml/file.mzml");
     /// example_struct.open_msfile(&file_path).unwrap();
     /// ```
@@ -115,10 +116,10 @@ impl MzData {
                 self.msfile = Ok(reader);
                 self.file_name = Some(path.display().to_string());
                 debug!("Successfully opened MzML file at path: {:?}", &path);
-                
+
                 // Extract data bounds for validation
                 self.extract_bounds()?;
-                
+
                 Ok(self)
             }
             Err(e) => {
@@ -133,7 +134,7 @@ impl MzData {
             }
         }
     }
-    
+
     /// Extracts min/max m/z, RT, and scan count from the opened file.
     ///
     /// Called automatically during open_msfile. Iterates through all spectra
@@ -149,8 +150,10 @@ impl MzData {
     /// - No valid peaks found in any spectrum
     fn extract_bounds(&mut self) -> Result<()> {
         info!("Extracting data bounds from {:?}", &self.file_name);
-        
-        let reader = self.msfile.as_mut()
+
+        let reader = self
+            .msfile
+            .as_mut()
             .map_err(|e| ChromascopeError::FileNotOpened(format!("{}", e)))?;
 
         let mut min_mz = f64::MAX;
@@ -162,12 +165,12 @@ impl MzData {
         // Iterate through all spectra to find bounds
         for spectrum in reader.iter() {
             scan_count += 1;
-            
+
             // Update RT bounds
             let rt = spectrum.start_time() as f32;
             min_rt = min_rt.min(rt);
             max_rt = max_rt.max(rt);
-            
+
             // Update m/z bounds from base peak (fast approximation)
             let base_peak = spectrum.peaks().base_peak();
             let mz = base_peak.mz;
@@ -178,7 +181,7 @@ impl MzData {
         // Handle edge case: no peaks found
         if min_mz == f64::MAX || max_mz == f64::MIN {
             return Err(ChromascopeError::FileNotOpened(
-                "No valid peaks found in file".into()
+                "No valid peaks found in file".into(),
             ));
         }
 

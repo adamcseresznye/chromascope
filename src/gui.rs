@@ -97,6 +97,7 @@ use crate::{
 };
 
 use mzdata::spectrum::ScanPolarity;
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use eframe::egui;
@@ -147,8 +148,21 @@ enum StateChange {
     Unchanged,
 }
 
+/// Stable identifier for opened files.
+///
+/// FileId is assigned when a file is opened and never changes, even if other files
+/// are removed. This prevents index-related bugs where removing file A causes file B's
+/// "position" to change.
+///
+/// # Design Pattern: Identity Map
+/// Each file gets a unique ID on creation. Unlike Vec indices, FileIds don't shift
+/// when elements are removed.
+type FileId = usize;
+
 /// Represents a single opened mzML file with its associated data and display settings
 struct OpenFile {
+    /// Stable identifier that never changes, even if other files are removed
+    id: FileId,
     /// The display name of the file (extracted from the path)
     name: String,
     /// The full path to the file
@@ -183,12 +197,13 @@ fn next_color_for_index(index: usize) -> LineColor {
     }
 }
 
-#[derive(Default)]
 pub struct MzViewerApp {
-    /// Collection of opened mzML files
-    files: Vec<OpenFile>,
-    /// Index of the currently active/selected file for analysis
-    active_file_index: Option<usize>,
+    /// Collection of opened mzML files, keyed by stable FileId
+    files: HashMap<FileId, OpenFile>,
+    /// FileId of the currently active/selected file for analysis
+    active_file_id: Option<FileId>,
+    /// Next FileId to assign. Starts at 0, increments with each file opened.
+    next_file_id: FileId,
     /// The user input parameters
     user_input: UserInput,
     /// The validity of the input file. Only MzML files can be read in.
@@ -201,6 +216,22 @@ pub struct MzViewerApp {
     checkbox_bool: bool,
     /// Error message to display to the user
     error_message: Option<String>,
+}
+
+impl Default for MzViewerApp {
+    fn default() -> Self {
+        Self {
+            files: HashMap::new(),
+            active_file_id: None,
+            next_file_id: 0,
+            user_input: UserInput::default(),
+            invalid_file: FileValidity::default(),
+            state_changed: StateChange::default(),
+            options_window_open: false,
+            checkbox_bool: false,
+            error_message: None,
+        }
+    }
 }
 
 impl MzViewerApp {
@@ -216,19 +247,26 @@ impl MzViewerApp {
     /// - All other fields in the `MzViewerApp` struct are set to their default values.
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         Self {
+            files: HashMap::new(),
+            active_file_id: None,
+            next_file_id: 0,
             user_input: UserInput {
                 line_width: 1.0,
                 ..Default::default()
             },
-            ..Default::default()
+            invalid_file: FileValidity::Invalid,
+            state_changed: StateChange::Unchanged,
+            options_window_open: false,
+            checkbox_bool: false,
+            error_message: None,
         }
     }
     /// Resets the internal state of the instance.
     ///
-    /// This function clears all opened files and resets the active file index.
+    /// This function clears all opened files and resets the active file ID.
     pub fn reset_state(&mut self) {
         self.files.clear();
-        self.active_file_index = None;
+        self.active_file_id = None;
     }
 
     /// Displays an error message to the user via a modal dialog.
@@ -277,7 +315,7 @@ impl MzViewerApp {
     /// - `InvalidMass` / `InvalidMassTolerance` - XIC parameter validation failed
     /// - Other errors from data extraction or smoothing
     fn update_chromatogram_data(&mut self) -> Result<()> {
-        let active_idx = self.active_file_index.ok_or_else(|| {
+        let active_id = self.active_file_id.ok_or_else(|| {
             crate::error::ChromascopeError::FileNotOpened("No active file selected".to_string())
         })?;
 
@@ -285,10 +323,11 @@ impl MzViewerApp {
         let params = self.build_processing_params()?;
 
         // Then get mutable reference to file
-        let file = self.files.get_mut(active_idx).ok_or_else(|| {
-            crate::error::ChromascopeError::FileNotOpened(
-                "Active file index out of bounds".to_string(),
-            )
+        let file = self.files.get_mut(&active_id).ok_or_else(|| {
+            crate::error::ChromascopeError::FileNotOpened(format!(
+                "Active file ID {} not found in files",
+                active_id
+            ))
         })?;
 
         // Process chromatogram using business logic layer
@@ -314,13 +353,13 @@ impl MzViewerApp {
     /// - `InvalidMassTolerance` - Tolerance outside 0-1000 ppm range
     fn build_processing_params(&self) -> Result<ProcessingParams> {
         // Get active file or fail fast
-        let active_file = self
-            .files
-            .get(
-                self.active_file_index
-                    .ok_or_else(|| ChromascopeError::FileNotOpened("No file opened".into()))?,
-            )
-            .ok_or_else(|| ChromascopeError::FileNotOpened("Active file not found".into()))?;
+        let active_id = self
+            .active_file_id
+            .ok_or_else(|| ChromascopeError::FileNotOpened("No file opened".into()))?;
+
+        let active_file = self.files.get(&active_id).ok_or_else(|| {
+            ChromascopeError::FileNotOpened(format!("Active file ID {} not found", active_id))
+        })?;
 
         // Validate smoothing against file size
         active_file
@@ -371,8 +410,8 @@ impl MzViewerApp {
             .height(ui.available_height() * 0.6)
             .legend(egui_plot::Legend::default())
             .show(ui, |plot_ui| {
-                // Plot all visible files
-                for file in &self.files {
+                // Plot all visible files (HashMap iteration is unordered, but overlay order doesn't matter)
+                for file in self.files.values() {
                     if file.visible {
                         if let Some(data) = &file.cached_plot_data {
                             let line = self.create_line_for_file(file, data);
@@ -432,32 +471,30 @@ impl MzViewerApp {
             return;
         }
 
-        // Get active file
-        let Some(active_idx) = self.active_file_index else {
+        // Get active file ID
+        let Some(active_id) = self.active_file_id else {
             warn!("No active file selected for mass spectrum extraction");
             return;
         };
 
-        if active_idx >= self.files.len() {
-            return;
-        }
-
-        // Calculate clicked retention time
+        // Calculate clicked retention time before getting file reference
         let rt_clicked = self.calculate_clicked_rt(&response, plot_bounds);
+
+        // Get file by ID (no need to check bounds - HashMap lookup handles it)
+        let Some(file) = self.files.get_mut(&active_id) else {
+            warn!("Active file ID {} not found", active_id);
+            return;
+        };
+
         info!(
             "Triple click detected on plot at {:?} for file: {}",
-            &rt_clicked, self.files[active_idx].name
+            &rt_clicked, file.name
         );
 
         // Find and extract closest spectrum
-        if let Some(index) = self.files[active_idx]
-            .data
-            .get_closest_index_by_time(rt_clicked)
-        {
+        if let Some(index) = file.data.get_closest_index_by_time(rt_clicked) {
             info!("Found closest spectrum at index: {}", index);
-            self.files[active_idx]
-                .data
-                .get_mass_spectrum_by_index(index);
+            file.data.get_mass_spectrum_by_index(index);
         } else {
             warn!("No close spectrum found for the clicked retention time");
         }
@@ -477,12 +514,14 @@ impl MzViewerApp {
     /// - `egui::Response`: The response from the plot widget
     fn plot_chromatogram(&mut self, ui: &mut egui::Ui) -> egui::Response {
         // Phase 1: Update data if state has changed
-        if let Some(active_idx) = self.active_file_index {
-            if self.state_changed == StateChange::Changed && active_idx < self.files.len() {
-                info!(
-                    "State has changed, reprocessing plot data for active file: {}",
-                    self.files[active_idx].name
-                );
+        if let Some(active_id) = self.active_file_id {
+            if self.state_changed == StateChange::Changed {
+                if let Some(file) = self.files.get(&active_id) {
+                    info!(
+                        "State has changed, reprocessing plot data for active file: {} (ID: {})",
+                        file.name, active_id
+                    );
+                }
                 // Process the data using the business logic layer
                 if let Err(e) = self.update_chromatogram_data() {
                     error!("Failed to process chromatogram: {}", e);
@@ -548,12 +587,12 @@ impl MzViewerApp {
     /// # Returns
     /// - `egui::Response`: The response from the `egui_plot::Plot` widget, which can be used to handle user interactions with the plot.
     fn plot_mass_spectrum(&mut self, ui: &mut egui::Ui) -> egui::Response {
-        if let Some(active_idx) = self.active_file_index {
-            if active_idx < self.files.len() {
-                if let Some((mz, intensity)) = self.files[active_idx].data.mass_spectrum() {
+        if let Some(active_id) = self.active_file_id {
+            if let Some(file) = self.files.get_mut(&active_id) {
+                if let Some((mz, intensity)) = file.data.mass_spectrum() {
                     info!(
-                        "Mass spectrum data available for {}. Plotting the spectrum.",
-                        self.files[active_idx].name
+                        "Mass spectrum data available for {} (ID: {}). Plotting the spectrum.",
+                        file.name, active_id
                     );
 
                     let response = egui_plot::Plot::new("mass_spectrum")
@@ -669,21 +708,21 @@ impl MzViewerApp {
                 info!("Smoothing level changed to {}", self.user_input.smoothing);
             }
             response.on_hover_text("Adjust the level of moving average smoothing");
-            
+
             // Show warning if smoothing is too large for file
-            if let Some(active_idx) = self.active_file_index {
-                if let Some(file) = self.files.get(active_idx) {
+            if let Some(active_id) = self.active_file_id {
+                if let Some(file) = self.files.get(&active_id) {
                     let bounds = &file.data.bounds;
                     let max_reasonable = (bounds.scan_count / 10).max(3) as u8;
-                    
+
                     if self.user_input.smoothing > max_reasonable && bounds.scan_count > 0 {
                         ui.add_space(5.0);
                         ui.colored_label(
                             egui::Color32::from_rgb(255, 100, 100),
-                            format!("⚠ Window ({}) is large for {} scans. Max recommended: {}", 
-                                    self.user_input.smoothing, 
-                                    bounds.scan_count,
-                                    max_reasonable)
+                            format!(
+                                "⚠ Window ({}) is large for {} scans. Max recommended: {}",
+                                self.user_input.smoothing, bounds.scan_count, max_reasonable
+                            ),
                         );
                     }
                 }
@@ -772,14 +811,25 @@ impl MzViewerApp {
     fn handle_file_selection(&mut self) {
         if let Some(paths) = rfd::FileDialog::new().pick_files() {
             info!("Files selected: {} file(s)", paths.len());
-            let start_index = self.files.len();
 
-            for path in paths {
+            let mut first_new_file_id: Option<FileId> = None;
+
+            for (color_index, path) in paths.iter().enumerate() {
                 info!("Processing file: {:?}", path);
-                match self.create_open_file(&path, start_index + self.files.len() - start_index) {
+
+                // Assign FileId and increment counter
+                let file_id = self.next_file_id;
+                self.next_file_id += 1;
+
+                // Track the first file ID for setting as active
+                if first_new_file_id.is_none() {
+                    first_new_file_id = Some(file_id);
+                }
+
+                match self.create_open_file(path, color_index, file_id) {
                     Ok(open_file) => {
-                        self.files.push(open_file);
-                        info!("File added successfully: {:?}", path);
+                        info!("File added successfully: {:?} with ID {}", path, file_id);
+                        self.files.insert(file_id, open_file);
                     }
                     Err(e) => {
                         error!("Failed to open file {:?}: {}", path, e);
@@ -789,11 +839,11 @@ impl MzViewerApp {
             }
 
             // Set the active file to the first newly added file
-            if !self.files.is_empty() {
-                self.active_file_index = Some(start_index);
+            if let Some(first_id) = first_new_file_id {
+                self.active_file_id = Some(first_id);
                 self.invalid_file = FileValidity::Valid;
                 self.state_changed = StateChange::Changed;
-                info!("Active file set to index: {}", start_index);
+                info!("Active file set to ID: {}", first_id);
             }
         } else {
             warn!("No file selected. Setting file validity to Invalid.");
@@ -815,20 +865,21 @@ impl MzViewerApp {
     /// This function does not return errors. Any I/O errors during file writing will be logged as error messages.
     fn handle_csv_export(&self) {
         // Check if an active file is selected
-        let active_idx = match self.active_file_index {
-            Some(idx) => idx,
+        let active_id = match self.active_file_id {
+            Some(id) => id,
             None => {
                 warn!("No active file selected for CSV export");
                 return;
             }
         };
 
-        if active_idx >= self.files.len() {
-            warn!("Active file index out of bounds");
-            return;
-        }
-
-        let active_file = &self.files[active_idx];
+        let active_file = match self.files.get(&active_id) {
+            Some(file) => file,
+            None => {
+                warn!("Active file ID {} not found", active_id);
+                return;
+            }
+        };
 
         // Check if plot data exists for the active file
         let data = match &active_file.cached_plot_data {
@@ -882,11 +933,12 @@ impl MzViewerApp {
     ///
     /// - `path`: A reference to the file path.
     /// - `index`: The index this file will have in the files vector (used for color assignment).
+    /// - `file_id`: The stable FileId to assign to this file.
     ///
     /// # Returns
     ///
     /// - `Option<OpenFile>`: The created OpenFile struct, or None if the file format is invalid or loading fails.
-    fn create_open_file(&self, path: &PathBuf, index: usize) -> Result<OpenFile> {
+    fn create_open_file(&self, path: &PathBuf, index: usize, file_id: FileId) -> Result<OpenFile> {
         let file_path_str = path.display().to_string();
         info!("Creating OpenFile for: {}", file_path_str);
 
@@ -919,8 +971,12 @@ impl MzViewerApp {
         let mut data = parser::MzData::new();
         data.open_msfile(path)?;
 
-        info!("File opened successfully: {}", file_name);
+        info!(
+            "File opened successfully: {} with ID {}",
+            file_name, file_id
+        );
         Ok(OpenFile {
+            id: file_id,
             name: file_name,
             path: file_path_str,
             data,
@@ -954,11 +1010,15 @@ impl MzViewerApp {
             if self.files.is_empty() {
                 ui.colored_label(Color32::GRAY, "No files opened");
             } else {
-                let mut file_to_remove: Option<usize> = None;
-                let mut new_active_index: Option<usize> = None;
+                let mut file_to_remove: Option<FileId> = None;
+                let mut new_active_id: Option<FileId> = None;
 
-                for (idx, file) in self.files.iter_mut().enumerate() {
-                    let is_active = self.active_file_index == Some(idx);
+                // Collect (id, file) pairs and sort by ID for consistent display order
+                let mut files_sorted: Vec<_> = self.files.iter_mut().collect();
+                files_sorted.sort_by_key(|(id, _)| **id);
+
+                for (file_id, file) in files_sorted {
+                    let is_active = self.active_file_id == Some(*file_id);
 
                     ui.horizontal(|ui| {
                         // Highlight the active file
@@ -970,82 +1030,95 @@ impl MzViewerApp {
                                 // Visibility checkbox
                                 if ui.checkbox(&mut file.visible, "").changed() {
                                     info!(
-                                        "File visibility toggled: {} -> {}",
-                                        file.name, file.visible
+                                        "File visibility toggled: {} (ID: {}) -> {}",
+                                        file.name, file_id, file.visible
                                     );
                                 }
 
                                 // File name label (clickable to set as active)
                                 if ui
                                     .selectable_label(true, egui::RichText::new(&file.name).small())
-                                    .on_hover_text("Active file")
+                                    .on_hover_text(format!("Active file (ID: {})", file_id))
                                     .clicked()
                                 {
-                                    new_active_index = Some(idx);
+                                    new_active_id = Some(*file_id);
                                 }
 
                                 // Close button
                                 if ui.small_button("❌").on_hover_text("Close file").clicked() {
-                                    file_to_remove = Some(idx);
-                                    info!("Close button clicked for file: {}", file.name);
+                                    file_to_remove = Some(*file_id);
+                                    info!(
+                                        "Close button clicked for file: {} (ID: {})",
+                                        file.name, file_id
+                                    );
                                 }
                             });
                         } else {
                             // Visibility checkbox
                             if ui.checkbox(&mut file.visible, "").changed() {
-                                info!("File visibility toggled: {} -> {}", file.name, file.visible);
+                                info!(
+                                    "File visibility toggled: {} (ID: {}) -> {}",
+                                    file.name, file_id, file.visible
+                                );
                             }
 
                             // File name label (clickable to set as active)
                             if ui
                                 .selectable_label(false, egui::RichText::new(&file.name).small())
-                                .on_hover_text("Click to set as active file")
+                                .on_hover_text(format!(
+                                    "Click to set as active file (ID: {})",
+                                    file_id
+                                ))
                                 .clicked()
                             {
-                                new_active_index = Some(idx);
+                                new_active_id = Some(*file_id);
                             }
 
                             // Close button
                             if ui.small_button("❌").on_hover_text("Close file").clicked() {
-                                file_to_remove = Some(idx);
-                                info!("Close button clicked for file: {}", file.name);
+                                file_to_remove = Some(*file_id);
+                                info!(
+                                    "Close button clicked for file: {} (ID: {})",
+                                    file.name, file_id
+                                );
                             }
                         }
                     });
                 }
 
-                // Update active index if a file was clicked
-                if let Some(new_idx) = new_active_index {
-                    if self.active_file_index != Some(new_idx) {
-                        self.active_file_index = Some(new_idx);
+                // Update active ID if a file was clicked
+                if let Some(new_id) = new_active_id {
+                    if self.active_file_id != Some(new_id) {
+                        self.active_file_id = Some(new_id);
                         self.state_changed = StateChange::Changed;
-                        info!("Active file changed to index: {}", new_idx);
+                        info!("Active file changed to ID: {}", new_id);
                     }
                 }
 
                 // Remove file if close button was clicked
-                if let Some(idx) = file_to_remove {
-                    let removed_file = self.files.remove(idx);
-                    info!("File removed: {}", removed_file.name);
+                if let Some(id) = file_to_remove {
+                    if let Some(removed_file) = self.files.remove(&id) {
+                        info!(
+                            "File removed: {} (ID: {}). FileIds of remaining files are unaffected.",
+                            removed_file.name, id
+                        );
 
-                    // Adjust active_file_index
-                    if let Some(active_idx) = self.active_file_index {
-                        if active_idx == idx {
-                            // Removed the active file
-                            self.active_file_index = if self.files.is_empty() {
-                                None
+                        // If we removed the active file, set a new active file or None
+                        if self.active_file_id == Some(id) {
+                            // Set active to the first remaining file (by lowest ID), or None if empty
+                            self.active_file_id = self.files.keys().min().copied();
+
+                            if let Some(new_active) = self.active_file_id {
+                                info!("Active file changed to ID: {} after removal", new_active);
                             } else {
-                                Some(idx.min(self.files.len() - 1))
-                            };
-                        } else if active_idx > idx {
-                            // Active file is after the removed file, decrement index
-                            self.active_file_index = Some(active_idx - 1);
+                                info!("No files remain after removal");
+                            }
                         }
-                    }
 
-                    // Update validity state
-                    if self.files.is_empty() {
-                        self.invalid_file = FileValidity::Invalid;
+                        // Update validity state
+                        if self.files.is_empty() {
+                            self.invalid_file = FileValidity::Invalid;
+                        }
                     }
                 }
             }
@@ -1231,42 +1304,48 @@ impl MzViewerApp {
                 .open(&mut self.options_window_open)
                 .show(ctx, |ui| {
                     ui.label("Enter m/z and mass tolerance values in ppm:");
-                    
+
                     // Show valid ranges if file is opened
-                    if let Some(active_idx) = self.active_file_index {
-                        if let Some(file) = self.files.get(active_idx) {
+                    if let Some(active_id) = self.active_file_id {
+                        if let Some(file) = self.files.get(&active_id) {
                             let bounds = &file.data.bounds;
-                            
+
                             ui.add_space(5.0);
                             ui.separator();
-                            
+
                             // Show m/z range
                             ui.horizontal(|ui| {
                                 ui.label("📊 Valid m/z range:");
                                 ui.label(
-                                    egui::RichText::new(format!("{:.2} - {:.2}", bounds.min_mz, bounds.max_mz))
-                                        .color(egui::Color32::from_rgb(100, 149, 237))
+                                    egui::RichText::new(format!(
+                                        "{:.2} - {:.2}",
+                                        bounds.min_mz, bounds.max_mz
+                                    ))
+                                    .color(egui::Color32::from_rgb(100, 149, 237)),
                                 );
                             });
-                            
+
                             // Show RT range (informational)
                             ui.horizontal(|ui| {
                                 ui.label("⏱  File RT range:");
                                 ui.label(
-                                    egui::RichText::new(format!("{:.2} - {:.2} min", bounds.min_rt, bounds.max_rt))
-                                        .color(egui::Color32::from_rgb(100, 149, 237))
+                                    egui::RichText::new(format!(
+                                        "{:.2} - {:.2} min",
+                                        bounds.min_rt, bounds.max_rt
+                                    ))
+                                    .color(egui::Color32::from_rgb(100, 149, 237)),
                                 );
                             });
-                            
+
                             // Show scan count
                             ui.horizontal(|ui| {
                                 ui.label("📈 Total scans:");
                                 ui.label(
                                     egui::RichText::new(format!("{}", bounds.scan_count))
-                                        .color(egui::Color32::from_rgb(100, 149, 237))
+                                        .color(egui::Color32::from_rgb(100, 149, 237)),
                                 );
                             });
-                            
+
                             ui.separator();
                             ui.add_space(5.0);
                         }
@@ -1274,7 +1353,7 @@ impl MzViewerApp {
                         ui.add_space(5.0);
                         ui.colored_label(
                             egui::Color32::from_rgb(255, 140, 0),
-                            "⚠ Open a file to see valid parameter ranges"
+                            "⚠ Open a file to see valid parameter ranges",
                         );
                         ui.add_space(5.0);
                     }
@@ -1463,7 +1542,7 @@ mod tests {
 
         // Check default state
         assert!(app.files.is_empty());
-        assert!(app.active_file_index.is_none());
+        assert!(app.active_file_id.is_none());
         assert!(app.error_message.is_none());
         assert_eq!(app.invalid_file, FileValidity::Invalid);
         assert_eq!(app.state_changed, StateChange::Unchanged);
@@ -1476,14 +1555,14 @@ mod tests {
 
         // Simulate having files (we can't create real OpenFile instances easily in tests,
         // but we can test that the fields are reset)
-        app.active_file_index = Some(0);
+        app.active_file_id = Some(0);
 
         // Reset state
         app.reset_state();
 
         // Check state is reset
         assert!(app.files.is_empty());
-        assert!(app.active_file_index.is_none());
+        assert!(app.active_file_id.is_none());
     }
 
     #[test]
@@ -1499,16 +1578,21 @@ mod tests {
             max_rt: 60.0,
             scan_count: 1000,
         };
-        
-        app.files.push(OpenFile {
-            name: "test.mzML".to_string(),
-            path: "test.mzML".to_string(),
-            data: mock_data,
-            cached_plot_data: None,
-            color: LineColor::Red,
-            visible: true,
-        });
-        app.active_file_index = Some(0);
+
+        let file_id = 0;
+        app.files.insert(
+            file_id,
+            OpenFile {
+                id: file_id,
+                name: "test.mzML".to_string(),
+                path: "test.mzML".to_string(),
+                data: mock_data,
+                cached_plot_data: None,
+                color: LineColor::Red,
+                visible: true,
+            },
+        );
+        app.active_file_id = Some(file_id);
 
         // Set up for TIC plot
         app.user_input.plot_type = PlotType::Tic;
@@ -1538,16 +1622,21 @@ mod tests {
             max_rt: 60.0,
             scan_count: 1000,
         };
-        
-        app.files.push(OpenFile {
-            name: "test.mzML".to_string(),
-            path: "test.mzML".to_string(),
-            data: mock_data,
-            cached_plot_data: None,
-            color: LineColor::Red,
-            visible: true,
-        });
-        app.active_file_index = Some(0);
+
+        let file_id = 0;
+        app.files.insert(
+            file_id,
+            OpenFile {
+                id: file_id,
+                name: "test.mzML".to_string(),
+                path: "test.mzML".to_string(),
+                data: mock_data,
+                cached_plot_data: None,
+                color: LineColor::Red,
+                visible: true,
+            },
+        );
+        app.active_file_id = Some(file_id);
 
         // Set up for BPC plot
         app.user_input.plot_type = PlotType::Bpc;
@@ -1577,16 +1666,21 @@ mod tests {
             max_rt: 60.0,
             scan_count: 1000,
         };
-        
-        app.files.push(OpenFile {
-            name: "test.mzML".to_string(),
-            path: "test.mzML".to_string(),
-            data: mock_data,
-            cached_plot_data: None,
-            color: LineColor::Red,
-            visible: true,
-        });
-        app.active_file_index = Some(0);
+
+        let file_id = 0;
+        app.files.insert(
+            file_id,
+            OpenFile {
+                id: file_id,
+                name: "test.mzML".to_string(),
+                path: "test.mzML".to_string(),
+                data: mock_data,
+                cached_plot_data: None,
+                color: LineColor::Red,
+                visible: true,
+            },
+        );
+        app.active_file_id = Some(file_id);
 
         // Set up for XIC plot with valid parameters
         app.user_input.plot_type = PlotType::Xic;
@@ -1637,6 +1731,7 @@ mod tests {
         let app = MzViewerApp::default();
 
         let file = OpenFile {
+            id: 0,
             name: "test_file.mzML".to_string(),
             path: "/path/to/test_file.mzML".to_string(),
             data: parser::MzData::new(),
@@ -1653,5 +1748,113 @@ mod tests {
         // without rendering, but we verify the method doesn't panic
         // The fact that we reach this point means line creation succeeded
         assert_eq!(file.name, "test_file.mzML");
+    }
+
+    #[test]
+    fn test_file_id_stability() {
+        let mut app = MzViewerApp::default();
+
+        // Assign IDs as the app would
+        let file1 = OpenFile {
+            id: app.next_file_id,
+            name: "file1.mzML".to_string(),
+            path: "file1.mzML".to_string(),
+            data: parser::MzData::new(),
+            cached_plot_data: None,
+            color: LineColor::Red,
+            visible: true,
+        };
+        let file1_id = app.next_file_id;
+        app.next_file_id += 1;
+
+        let file2 = OpenFile {
+            id: app.next_file_id,
+            name: "file2.mzML".to_string(),
+            path: "file2.mzML".to_string(),
+            data: parser::MzData::new(),
+            cached_plot_data: None,
+            color: LineColor::Green,
+            visible: true,
+        };
+        let file2_id = app.next_file_id;
+        app.next_file_id += 1;
+
+        let file3 = OpenFile {
+            id: app.next_file_id,
+            name: "file3.mzML".to_string(),
+            path: "file3.mzML".to_string(),
+            data: parser::MzData::new(),
+            cached_plot_data: None,
+            color: LineColor::Blue,
+            visible: true,
+        };
+        let file3_id = app.next_file_id;
+        app.next_file_id += 1;
+
+        app.files.insert(file1_id, file1);
+        app.files.insert(file2_id, file2);
+        app.files.insert(file3_id, file3);
+
+        // Verify IDs are assigned correctly
+        assert_eq!(app.files.get(&0).unwrap().id, 0);
+        assert_eq!(app.files.get(&1).unwrap().id, 1);
+        assert_eq!(app.files.get(&2).unwrap().id, 2);
+        assert_eq!(app.next_file_id, 3);
+
+        // Remove middle file (file2 with ID 1)
+        let removed = app.files.remove(&1);
+        assert!(removed.is_some());
+        assert_eq!(removed.unwrap().id, 1);
+
+        // Remaining files keep their original IDs and are still accessible by their IDs
+        assert_eq!(app.files.get(&0).unwrap().id, 0); // file1 still has ID 0
+        assert_eq!(app.files.get(&2).unwrap().id, 2); // file3 still has ID 2
+        assert!(app.files.get(&1).is_none()); // ID 1 is gone
+
+        // Next ID continues from where it left off
+        assert_eq!(app.next_file_id, 3);
+    }
+
+    #[test]
+    fn test_hashmap_file_removal_stability() {
+        let mut app = MzViewerApp::default();
+
+        // Add three files with IDs 0, 1, 2
+        for i in 0..3 {
+            let file = OpenFile {
+                id: i,
+                name: format!("file{}.mzML", i),
+                path: format!("file{}.mzML", i),
+                data: parser::MzData::new(),
+                cached_plot_data: None,
+                color: next_color_for_index(i),
+                visible: true,
+            };
+            app.files.insert(i, file);
+        }
+        app.next_file_id = 3;
+        app.active_file_id = Some(1); // Select file with ID 1
+
+        // Verify all files present
+        assert_eq!(app.files.len(), 3);
+        assert!(app.files.contains_key(&0));
+        assert!(app.files.contains_key(&1));
+        assert!(app.files.contains_key(&2));
+
+        // Remove file with ID 0
+        app.files.remove(&0);
+
+        // Files with ID 1 and 2 remain unchanged
+        assert_eq!(app.files.len(), 2);
+        assert!(!app.files.contains_key(&0));
+        assert!(app.files.contains_key(&1)); // Still has ID 1
+        assert!(app.files.contains_key(&2)); // Still has ID 2
+
+        // Active file still points to ID 1 (unchanged!)
+        assert_eq!(app.active_file_id, Some(1));
+
+        // Can still access file with ID 1
+        assert!(app.files.get(&1).is_some());
+        assert_eq!(app.files.get(&1).unwrap().name, "file1.mzML");
     }
 }
