@@ -8,17 +8,8 @@
 
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
-mod error;
-mod gui;
-mod parser;
-mod plotting_parameters;
-mod processing;
-mod validation;
-
-pub use error::{ChromascopeError, Result};
-
+use chromascope::gui::MzViewerApp;
 use egui::IconData;
-use gui::*;
 use log::{error, info};
 use std::process;
 
