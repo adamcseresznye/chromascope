@@ -226,7 +226,14 @@ mod tests {
     fn test_process_xic_with_valid_params() {
         // Arrange
         let mut data = load_test_file();
-        let xic_params = XicParams::new(524.3, ScanPolarity::Positive, 10.0)
+        let bounds = crate::validation::DataBounds {
+            min_mz: 100.0,
+            max_mz: 1000.0,
+            min_rt: 0.0,
+            max_rt: 60.0,
+            scan_count: 1000,
+        };
+        let xic_params = XicParams::new(524.3, ScanPolarity::Positive, 10.0, &bounds)
             .expect("Valid XIC params should construct");
         
         let params = ProcessingParams {
