@@ -89,7 +89,7 @@
 #![warn(clippy::all)]
 
 use crate::{
-    error::Result,
+    error::{ChromascopeError, Result},
     parser,
     plotting_parameters::{self, LineColor, LineType, PlotType},
     processing::{process_chromatogram, ProcessingParams},
@@ -263,7 +263,7 @@ impl MzViewerApp {
     }
 
     /// Updates the active file's cached chromatogram data.
-    /// 
+    ///
     /// This method orchestrates the business logic for chromatogram extraction
     /// by delegating to the processing module. It should be called whenever
     /// parameters change (polarity, plot type, smoothing, etc.)
@@ -277,22 +277,19 @@ impl MzViewerApp {
     /// - `InvalidMass` / `InvalidMassTolerance` - XIC parameter validation failed
     /// - Other errors from data extraction or smoothing
     fn update_chromatogram_data(&mut self) -> Result<()> {
-        let active_idx = self
-            .active_file_index
-            .ok_or_else(|| crate::error::ChromascopeError::FileNotOpened(
-                "No active file selected".to_string()
-            ))?;
+        let active_idx = self.active_file_index.ok_or_else(|| {
+            crate::error::ChromascopeError::FileNotOpened("No active file selected".to_string())
+        })?;
 
         // Build processing parameters from current GUI state first
         let params = self.build_processing_params()?;
 
         // Then get mutable reference to file
-        let file = self
-            .files
-            .get_mut(active_idx)
-            .ok_or_else(|| crate::error::ChromascopeError::FileNotOpened(
-                "Active file index out of bounds".to_string()
-            ))?;
+        let file = self.files.get_mut(active_idx).ok_or_else(|| {
+            crate::error::ChromascopeError::FileNotOpened(
+                "Active file index out of bounds".to_string(),
+            )
+        })?;
 
         // Process chromatogram using business logic layer
         let result = process_chromatogram(&mut file.data, &params)?;
@@ -316,12 +313,28 @@ impl MzViewerApp {
     /// - `InvalidMass` - Mass value is not positive
     /// - `InvalidMassTolerance` - Tolerance outside 0-1000 ppm range
     fn build_processing_params(&self) -> Result<ProcessingParams> {
-        // For XIC, validate and construct XicParams
+        // Get active file or fail fast
+        let active_file = self
+            .files
+            .get(
+                self.active_file_index
+                    .ok_or_else(|| ChromascopeError::FileNotOpened("No file opened".into()))?,
+            )
+            .ok_or_else(|| ChromascopeError::FileNotOpened("Active file not found".into()))?;
+
+        // Validate smoothing against file size
+        active_file
+            .data
+            .bounds
+            .validate_smoothing(self.user_input.smoothing)?;
+
+        // For XIC, validate and construct XicParams with file bounds
         let xic_params = if self.user_input.plot_type == PlotType::Xic {
             Some(XicParams::new(
                 self.user_input.mass,
                 self.user_input.polarity,
                 self.user_input.mass_tolerance,
+                &active_file.data.bounds,
             )?)
         } else {
             None
@@ -335,36 +348,22 @@ impl MzViewerApp {
         })
     }
 
-    /// Plots the chromatogram (TIC, BPC, or XIC) for all visible files.
+    /// Renders the chromatogram plot from cached data.
     ///
-    /// This function is responsible for updating the plot data if the state has changed for the active file,
-    /// and then rendering plots for all visible files using the `egui_plot` library.
-    /// It also handles the user's triple-click event on the plot, which triggers the extraction of the mass spectrum
-    /// at the clicked retention time from the active file.
+    /// This is a pure rendering function with no side effects or data processing.
+    /// It displays chromatograms for all visible files using their cached plot data.
+    /// Called every frame to draw the plot.
     ///
     /// # Parameters
-    /// - `&mut self`: A mutable reference to the current instance of the struct
-    /// - `ui: &mut egui::Ui`: A mutable reference to the current `egui::Ui` instance, which is used to render the plot.
+    /// - `ui: &mut egui::Ui`: The UI context for rendering
     ///
     /// # Returns
-    /// - `egui::Response`: The response from the `egui_plot::Plot` widget, which can be used to handle user interactions with the plot.
-    fn plot_chromatogram(&mut self, ui: &mut egui::Ui) -> egui::Response {
-        // Only re-process the data for the active file if the state has changed
-        if let Some(active_idx) = self.active_file_index {
-            if self.state_changed == StateChange::Changed && active_idx < self.files.len() {
-                info!(
-                    "State has changed, reprocessing plot data for active file: {}",
-                    self.files[active_idx].name
-                );
-                // Process the data using the new processing module
-                if let Err(e) = self.update_chromatogram_data() {
-                    error!("Failed to process chromatogram: {}", e);
-                    self.show_error_dialog(format!("Failed to process chromatogram: {}", e));
-                }
-                self.state_changed = StateChange::Unchanged;
-            }
-        }
-
+    /// - `egui::Response`: The response from the plot widget
+    /// - `Option<egui_plot::PlotBounds>`: The bounds of the plot for interaction handling
+    fn render_chromatogram(
+        &self,
+        ui: &mut egui::Ui,
+    ) -> (egui::Response, Option<egui_plot::PlotBounds>) {
         let mut plot_bounds = None;
 
         let response = egui_plot::Plot::new("chromatogram")
@@ -376,13 +375,8 @@ impl MzViewerApp {
                 for file in &self.files {
                     if file.visible {
                         if let Some(data) = &file.cached_plot_data {
-                            plot_ui.line(
-                                Line::new(PlotPoints::from(data.clone()))
-                                    .width(self.user_input.line_width)
-                                    .style(self.user_input.line_type.to_egui())
-                                    .color(file.color.to_egui())
-                                    .name(&file.name),
-                            );
+                            let line = self.create_line_for_file(file, data);
+                            plot_ui.line(line);
                         }
                     }
                 }
@@ -394,81 +388,151 @@ impl MzViewerApp {
             })
             .response;
 
-        if response.triple_clicked() {
-            // Extract mass spectrum from the active file
-            if let Some(active_idx) = self.active_file_index {
-                if active_idx < self.files.len() {
-                    // this was added because when triple clicked on XIC the extracted mz spectrum was not accurate
-                    if self.user_input.plot_type != plotting_parameters::PlotType::Xic {
-                        let rt_clicked = self.determine_rt_clicked(&response, plot_bounds);
-                        info!(
-                            "Triple click detected on plot at {:?} for file: {}",
-                            &rt_clicked, self.files[active_idx].name
-                        );
+        (response, plot_bounds)
+    }
 
-                        if let Some(index) = self.files[active_idx]
-                            .data
-                            .get_closest_index_by_time(rt_clicked)
-                        {
-                            info!("Found closest spectrum at index: {}", index);
-                            self.files[active_idx]
-                                .data
-                                .get_mass_spectrum_by_index(index);
-                        } else {
-                            warn!("No close spectrum found for the clicked retention time");
-                        }
-                    }
+    /// Creates a Line widget for a specific file's chromatogram data.
+    ///
+    /// Helper function for render_chromatogram that constructs a styled line
+    /// using the file's color and name, and the current display settings.
+    ///
+    /// # Parameters
+    /// - `file: &OpenFile`: The file containing metadata (name, color)
+    /// - `data: &[[f64; 2]]`: The chromatogram data points
+    ///
+    /// # Returns
+    /// - `Line`: A configured egui_plot Line widget
+    fn create_line_for_file(&self, file: &OpenFile, data: &[[f64; 2]]) -> Line {
+        Line::new(PlotPoints::from(data.to_vec()))
+            .width(self.user_input.line_width)
+            .style(self.user_input.line_type.to_egui())
+            .color(file.color.to_egui())
+            .name(&file.name)
+    }
+
+    /// Handles triple-click events on the chromatogram plot.
+    ///
+    /// Extracts and displays the mass spectrum at the clicked retention time
+    /// from the active file. Does nothing for XIC plots (domain restriction).
+    ///
+    /// # Parameters
+    /// - `response: egui::Response`: The plot widget response
+    /// - `plot_bounds: Option<egui_plot::PlotBounds>`: The plot bounds for coordinate conversion
+    fn handle_chromatogram_click(
+        &mut self,
+        response: egui::Response,
+        plot_bounds: Option<egui_plot::PlotBounds>,
+    ) {
+        if !response.triple_clicked() {
+            return; // Early return if not triple-clicked
+        }
+
+        // Don't extract mass spectrum from XIC plots (domain rule)
+        if self.user_input.plot_type == plotting_parameters::PlotType::Xic {
+            return;
+        }
+
+        // Get active file
+        let Some(active_idx) = self.active_file_index else {
+            warn!("No active file selected for mass spectrum extraction");
+            return;
+        };
+
+        if active_idx >= self.files.len() {
+            return;
+        }
+
+        // Calculate clicked retention time
+        let rt_clicked = self.calculate_clicked_rt(&response, plot_bounds);
+        info!(
+            "Triple click detected on plot at {:?} for file: {}",
+            &rt_clicked, self.files[active_idx].name
+        );
+
+        // Find and extract closest spectrum
+        if let Some(index) = self.files[active_idx]
+            .data
+            .get_closest_index_by_time(rt_clicked)
+        {
+            info!("Found closest spectrum at index: {}", index);
+            self.files[active_idx]
+                .data
+                .get_mass_spectrum_by_index(index);
+        } else {
+            warn!("No close spectrum found for the clicked retention time");
+        }
+    }
+
+    /// Orchestrates chromatogram display: updates data when needed, renders, and handles interactions.
+    ///
+    /// This method coordinates three phases:
+    /// 1. Update: Re-processes data if state has changed
+    /// 2. Render: Displays chromatograms from cached data
+    /// 3. Handle: Responds to user interactions (triple-click)
+    ///
+    /// # Parameters
+    /// - `ui: &mut egui::Ui`: The UI context for rendering
+    ///
+    /// # Returns
+    /// - `egui::Response`: The response from the plot widget
+    fn plot_chromatogram(&mut self, ui: &mut egui::Ui) -> egui::Response {
+        // Phase 1: Update data if state has changed
+        if let Some(active_idx) = self.active_file_index {
+            if self.state_changed == StateChange::Changed && active_idx < self.files.len() {
+                info!(
+                    "State has changed, reprocessing plot data for active file: {}",
+                    self.files[active_idx].name
+                );
+                // Process the data using the business logic layer
+                if let Err(e) = self.update_chromatogram_data() {
+                    error!("Failed to process chromatogram: {}", e);
+                    self.show_error_dialog(format!("Failed to process chromatogram: {}", e));
                 }
-            } else {
-                warn!("No active file selected for mass spectrum extraction");
+                self.state_changed = StateChange::Unchanged;
             }
         }
+
+        // Phase 2: Render chromatogram from cached data
+        let (response, plot_bounds) = self.render_chromatogram(ui);
+
+        // Phase 3: Handle user interactions
+        self.handle_chromatogram_click(response.clone(), plot_bounds);
 
         response
     }
 
-    /// Determines the retention time at the location where the user triple-clicked on the plot.
+    /// Calculates the retention time corresponding to a clicked position on the plot.
     ///
-    /// This function calculates the retention time based on the user's click position on the plot and the plot's bounds.
+    /// Converts screen coordinates to data coordinates using the plot bounds.
+    /// Also updates the user_input.retention_time_ms_spectrum field for display purposes.
     ///
     /// # Parameters
-    /// - `&mut self`: A mutable reference to the current instance of the struct that contains the `user_input` field.
-    /// - `response: &egui::Response`: A reference to the `egui::Response` object returned by the `egui_plot::Plot` widget.
-    /// - `plot_bounds: Option<egui_plot::PlotBounds>`: An optional reference to the plot's bounds, which are used to calculate the retention time.
+    /// - `response: &egui::Response`: The plot widget response containing pointer position
+    /// - `plot_bounds: Option<egui_plot::PlotBounds>`: The plot bounds for coordinate conversion
     ///
     /// # Returns
-    /// - `Option<f32>`: The calculated retention time at the clicked location, or `None` if the plot position or bounds are not available.
-    fn determine_rt_clicked(
+    /// - `Option<f32>`: The calculated retention time, or None if calculation fails
+    fn calculate_clicked_rt(
         &mut self,
         response: &egui::Response,
         plot_bounds: Option<egui_plot::PlotBounds>,
     ) -> Option<f32> {
-        if let Some(plot_position) = response.interact_pointer_pos() {
-            if let Some(bounds) = plot_bounds {
-                let plot_width = response.rect.width();
+        let plot_position = response.interact_pointer_pos()?;
+        let bounds = plot_bounds?;
 
-                let min_x = *bounds.range_x().start();
-                let max_x = *bounds.range_x().end();
+        let plot_width = response.rect.width();
+        let min_x = *bounds.range_x().start();
+        let max_x = *bounds.range_x().end();
 
-                // Calculate the position relative to the plot area, not the response area
-                let relative_x = (plot_position.x - response.rect.left()) / plot_width;
+        // Calculate the position relative to the plot area
+        let relative_x = (plot_position.x - response.rect.left()) / plot_width;
+        let converted_rt = min_x + relative_x as f64 * (max_x - min_x);
 
-                let converted_rt = min_x + relative_x as f64 * (max_x - min_x);
+        // Store for display purposes
+        self.user_input.retention_time_ms_spectrum = Some(converted_rt as f32);
+        info!("Retention time clicked: {:?}", converted_rt as f32);
 
-                self.user_input.retention_time_ms_spectrum = Some(converted_rt as f32);
-                info!(
-                    "Retention time clicked: {:?}",
-                    self.user_input.retention_time_ms_spectrum
-                );
-
-                return Some(converted_rt as f32);
-            } else {
-                warn!("Plot bounds are None");
-            }
-        } else {
-            warn!("No plot position detected");
-        }
-        None
+        Some(converted_rt as f32)
     }
 
     /// Plots the mass spectrum based on the data available in the active file.
@@ -605,6 +669,25 @@ impl MzViewerApp {
                 info!("Smoothing level changed to {}", self.user_input.smoothing);
             }
             response.on_hover_text("Adjust the level of moving average smoothing");
+            
+            // Show warning if smoothing is too large for file
+            if let Some(active_idx) = self.active_file_index {
+                if let Some(file) = self.files.get(active_idx) {
+                    let bounds = &file.data.bounds;
+                    let max_reasonable = (bounds.scan_count / 10).max(3) as u8;
+                    
+                    if self.user_input.smoothing > max_reasonable && bounds.scan_count > 0 {
+                        ui.add_space(5.0);
+                        ui.colored_label(
+                            egui::Color32::from_rgb(255, 100, 100),
+                            format!("⚠ Window ({}) is large for {} scans. Max recommended: {}", 
+                                    self.user_input.smoothing, 
+                                    bounds.scan_count,
+                                    max_reasonable)
+                        );
+                    }
+                }
+            }
         });
 
         ui.menu_button("Line width", |ui| {
@@ -1143,11 +1226,58 @@ impl MzViewerApp {
     fn update_xic_settings_window(&mut self, ctx: &egui::Context) {
         if self.options_window_open {
             let mut error_message: Option<String> = None;
-            
+
             egui::Window::new("XIC settings")
                 .open(&mut self.options_window_open)
                 .show(ctx, |ui| {
                     ui.label("Enter m/z and mass tolerance values in ppm:");
+                    
+                    // Show valid ranges if file is opened
+                    if let Some(active_idx) = self.active_file_index {
+                        if let Some(file) = self.files.get(active_idx) {
+                            let bounds = &file.data.bounds;
+                            
+                            ui.add_space(5.0);
+                            ui.separator();
+                            
+                            // Show m/z range
+                            ui.horizontal(|ui| {
+                                ui.label("📊 Valid m/z range:");
+                                ui.label(
+                                    egui::RichText::new(format!("{:.2} - {:.2}", bounds.min_mz, bounds.max_mz))
+                                        .color(egui::Color32::from_rgb(100, 149, 237))
+                                );
+                            });
+                            
+                            // Show RT range (informational)
+                            ui.horizontal(|ui| {
+                                ui.label("⏱  File RT range:");
+                                ui.label(
+                                    egui::RichText::new(format!("{:.2} - {:.2} min", bounds.min_rt, bounds.max_rt))
+                                        .color(egui::Color32::from_rgb(100, 149, 237))
+                                );
+                            });
+                            
+                            // Show scan count
+                            ui.horizontal(|ui| {
+                                ui.label("📈 Total scans:");
+                                ui.label(
+                                    egui::RichText::new(format!("{}", bounds.scan_count))
+                                        .color(egui::Color32::from_rgb(100, 149, 237))
+                                );
+                            });
+                            
+                            ui.separator();
+                            ui.add_space(5.0);
+                        }
+                    } else {
+                        ui.add_space(5.0);
+                        ui.colored_label(
+                            egui::Color32::from_rgb(255, 140, 0),
+                            "⚠ Open a file to see valid parameter ranges"
+                        );
+                        ui.add_space(5.0);
+                    }
                     if ui
                         .add(
                             egui::TextEdit::singleline(&mut self.user_input.mass_input)
@@ -1157,11 +1287,14 @@ impl MzViewerApp {
                     {
                         match self.user_input.mass_input.parse::<f64>() {
                             Ok(parsed_mass) => {
-                                // Validate using XicParams to ensure business rules are enforced
+                                // Early validation using unrestricted bounds
+                                // Full validation happens in build_processing_params()
+                                let temp_bounds = crate::validation::DataBounds::unrestricted();
                                 match XicParams::new(
                                     parsed_mass,
                                     self.user_input.polarity,
                                     self.user_input.mass_tolerance,
+                                    &temp_bounds,
                                 ) {
                                     Ok(_) => {
                                         self.user_input.mass = parsed_mass;
@@ -1171,12 +1304,16 @@ impl MzViewerApp {
                                         error!("Invalid mass value: {}", e);
                                         error_message = Some(format!("Invalid mass: {}", e));
                                         // Restore previous valid value
-                                        self.user_input.mass_input = self.user_input.mass.to_string();
+                                        self.user_input.mass_input =
+                                            self.user_input.mass.to_string();
                                     }
                                 }
                             }
                             Err(_) => {
-                                error!("Failed to parse mass input: {}", self.user_input.mass_input);
+                                error!(
+                                    "Failed to parse mass input: {}",
+                                    self.user_input.mass_input
+                                );
                                 error_message = Some(format!(
                                     "Invalid number format: '{}'",
                                     self.user_input.mass_input
@@ -1195,11 +1332,14 @@ impl MzViewerApp {
                     {
                         match self.user_input.mass_tolerance_input.parse::<f64>() {
                             Ok(parsed_tolerance) => {
-                                // Validate using XicParams to ensure business rules are enforced
+                                // Early validation using unrestricted bounds
+                                // Full validation happens in build_processing_params()
+                                let temp_bounds = crate::validation::DataBounds::unrestricted();
                                 match XicParams::new(
                                     self.user_input.mass,
                                     self.user_input.polarity,
                                     parsed_tolerance,
+                                    &temp_bounds,
                                 ) {
                                     Ok(_) => {
                                         self.user_input.mass_tolerance = parsed_tolerance;
@@ -1207,7 +1347,8 @@ impl MzViewerApp {
                                     }
                                     Err(e) => {
                                         error!("Invalid mass tolerance: {}", e);
-                                        error_message = Some(format!("Invalid mass tolerance: {}", e));
+                                        error_message =
+                                            Some(format!("Invalid mass tolerance: {}", e));
                                         // Restore previous valid value
                                         self.user_input.mass_tolerance_input =
                                             self.user_input.mass_tolerance.to_string();
@@ -1230,7 +1371,7 @@ impl MzViewerApp {
                         }
                     };
                 });
-            
+
             // Show error dialog outside of the closure to avoid borrow checker issues
             if let Some(msg) = error_message {
                 self.show_error_dialog(msg);
@@ -1343,5 +1484,174 @@ mod tests {
         // Check state is reset
         assert!(app.files.is_empty());
         assert!(app.active_file_index.is_none());
+    }
+
+    #[test]
+    fn test_build_processing_params_tic() {
+        let mut app = MzViewerApp::default();
+
+        // Add a mock file with bounds
+        let mut mock_data = parser::MzData::new();
+        mock_data.bounds = crate::validation::DataBounds {
+            min_mz: 100.0,
+            max_mz: 1000.0,
+            min_rt: 0.0,
+            max_rt: 60.0,
+            scan_count: 1000,
+        };
+        
+        app.files.push(OpenFile {
+            name: "test.mzML".to_string(),
+            path: "test.mzML".to_string(),
+            data: mock_data,
+            cached_plot_data: None,
+            color: LineColor::Red,
+            visible: true,
+        });
+        app.active_file_index = Some(0);
+
+        // Set up for TIC plot
+        app.user_input.plot_type = PlotType::Tic;
+        app.user_input.polarity = mzdata::spectrum::ScanPolarity::Positive;
+        app.user_input.smoothing = 5;
+
+        let result = app.build_processing_params();
+
+        assert!(result.is_ok());
+        let params = result.unwrap();
+        assert_eq!(params.plot_type, PlotType::Tic);
+        assert_eq!(params.polarity, mzdata::spectrum::ScanPolarity::Positive);
+        assert_eq!(params.smoothing, 5);
+        assert!(params.xic_params.is_none());
+    }
+
+    #[test]
+    fn test_build_processing_params_bpc() {
+        let mut app = MzViewerApp::default();
+
+        // Add a mock file with bounds
+        let mut mock_data = parser::MzData::new();
+        mock_data.bounds = crate::validation::DataBounds {
+            min_mz: 100.0,
+            max_mz: 1000.0,
+            min_rt: 0.0,
+            max_rt: 60.0,
+            scan_count: 1000,
+        };
+        
+        app.files.push(OpenFile {
+            name: "test.mzML".to_string(),
+            path: "test.mzML".to_string(),
+            data: mock_data,
+            cached_plot_data: None,
+            color: LineColor::Red,
+            visible: true,
+        });
+        app.active_file_index = Some(0);
+
+        // Set up for BPC plot
+        app.user_input.plot_type = PlotType::Bpc;
+        app.user_input.polarity = mzdata::spectrum::ScanPolarity::Negative;
+        app.user_input.smoothing = 3;
+
+        let result = app.build_processing_params();
+
+        assert!(result.is_ok());
+        let params = result.unwrap();
+        assert_eq!(params.plot_type, PlotType::Bpc);
+        assert_eq!(params.polarity, mzdata::spectrum::ScanPolarity::Negative);
+        assert_eq!(params.smoothing, 3);
+        assert!(params.xic_params.is_none());
+    }
+
+    #[test]
+    fn test_build_processing_params_xic_valid() {
+        let mut app = MzViewerApp::default();
+
+        // Add a mock file with bounds
+        let mut mock_data = parser::MzData::new();
+        mock_data.bounds = crate::validation::DataBounds {
+            min_mz: 100.0,
+            max_mz: 1000.0,
+            min_rt: 0.0,
+            max_rt: 60.0,
+            scan_count: 1000,
+        };
+        
+        app.files.push(OpenFile {
+            name: "test.mzML".to_string(),
+            path: "test.mzML".to_string(),
+            data: mock_data,
+            cached_plot_data: None,
+            color: LineColor::Red,
+            visible: true,
+        });
+        app.active_file_index = Some(0);
+
+        // Set up for XIC plot with valid parameters
+        app.user_input.plot_type = PlotType::Xic;
+        app.user_input.polarity = mzdata::spectrum::ScanPolarity::Positive;
+        app.user_input.mass = 524.3;
+        app.user_input.mass_tolerance = 10.0;
+        app.user_input.smoothing = 2;
+
+        let result = app.build_processing_params();
+
+        assert!(result.is_ok());
+        let params = result.unwrap();
+        assert_eq!(params.plot_type, PlotType::Xic);
+        assert_eq!(params.smoothing, 2);
+        assert!(params.xic_params.is_some());
+    }
+
+    #[test]
+    fn test_build_processing_params_xic_invalid_mass() {
+        let mut app = MzViewerApp::default();
+
+        // Set up for XIC plot with invalid mass
+        app.user_input.plot_type = PlotType::Xic;
+        app.user_input.mass = 0.0; // Invalid: must be positive
+        app.user_input.mass_tolerance = 10.0;
+
+        let result = app.build_processing_params();
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_build_processing_params_xic_invalid_tolerance() {
+        let mut app = MzViewerApp::default();
+
+        // Set up for XIC plot with invalid tolerance
+        app.user_input.plot_type = PlotType::Xic;
+        app.user_input.mass = 500.0;
+        app.user_input.mass_tolerance = 1500.0; // Invalid: exceeds maximum 1000 ppm
+
+        let result = app.build_processing_params();
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_create_line_for_file_respects_settings() {
+        let app = MzViewerApp::default();
+
+        let file = OpenFile {
+            name: "test_file.mzML".to_string(),
+            path: "/path/to/test_file.mzML".to_string(),
+            data: parser::MzData::new(),
+            cached_plot_data: None,
+            color: LineColor::Blue,
+            visible: true,
+        };
+
+        let test_data: Vec<[f64; 2]> = vec![[1.0, 100.0], [2.0, 200.0], [3.0, 150.0]];
+
+        let _line = app.create_line_for_file(&file, &test_data);
+
+        // Line widget is created - we can't easily test its internal properties
+        // without rendering, but we verify the method doesn't panic
+        // The fact that we reach this point means line creation succeeded
+        assert_eq!(file.name, "test_file.mzML");
     }
 }

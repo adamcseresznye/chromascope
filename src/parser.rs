@@ -16,6 +16,7 @@
 #![warn(clippy::all)]
 
 use crate::error::{ChromascopeError, Result};
+use crate::validation::DataBounds;
 use log::{debug, error, info, trace, warn};
 use mzdata::io::mzml::MzMLReaderType;
 use mzdata::spectrum::ScanPolarity;
@@ -45,6 +46,8 @@ pub struct MzData {
     plot_data: Option<Vec<[f64; 2]>>,
     /// An optional tuple containing two vectors: one for mass values (`Vec<f64>`) and one for corresponding intensity values (`Vec<f32>`).
     mass_spectrum: Option<(Vec<f64>, Vec<f32>)>,
+    /// Valid parameter ranges for this file (extracted during opening)
+    pub bounds: DataBounds,
 }
 
 impl core::fmt::Debug for MzData {
@@ -81,6 +84,7 @@ impl MzData {
             )),
             plot_data: None,
             mass_spectrum: None,
+            bounds: DataBounds::unrestricted(),
         }
     }
     /// Opens an MzML file at the specified path and sets it as the current file for the `self` object.
@@ -111,6 +115,10 @@ impl MzData {
                 self.msfile = Ok(reader);
                 self.file_name = Some(path.display().to_string());
                 debug!("Successfully opened MzML file at path: {:?}", &path);
+                
+                // Extract data bounds for validation
+                self.extract_bounds()?;
+                
                 Ok(self)
             }
             Err(e) => {
@@ -124,6 +132,70 @@ impl MzData {
                 )))
             }
         }
+    }
+    
+    /// Extracts min/max m/z, RT, and scan count from the opened file.
+    ///
+    /// Called automatically during open_msfile. Iterates through all spectra
+    /// to determine the valid parameter ranges for this file.
+    ///
+    /// # Returns
+    /// * `Ok(())` - If bounds were successfully extracted
+    /// * `Err(ChromascopeError::FileNotOpened)` - If no peaks found in file
+    ///
+    /// # Errors
+    /// Returns error if:
+    /// - File is not opened
+    /// - No valid peaks found in any spectrum
+    fn extract_bounds(&mut self) -> Result<()> {
+        info!("Extracting data bounds from {:?}", &self.file_name);
+        
+        let reader = self.msfile.as_mut()
+            .map_err(|e| ChromascopeError::FileNotOpened(format!("{}", e)))?;
+
+        let mut min_mz = f64::MAX;
+        let mut max_mz = f64::MIN;
+        let mut min_rt = f32::MAX;
+        let mut max_rt = f32::MIN;
+        let mut scan_count = 0;
+
+        // Iterate through all spectra to find bounds
+        for spectrum in reader.iter() {
+            scan_count += 1;
+            
+            // Update RT bounds
+            let rt = spectrum.start_time() as f32;
+            min_rt = min_rt.min(rt);
+            max_rt = max_rt.max(rt);
+            
+            // Update m/z bounds from base peak (fast approximation)
+            let base_peak = spectrum.peaks().base_peak();
+            let mz = base_peak.mz;
+            min_mz = min_mz.min(mz);
+            max_mz = max_mz.max(mz);
+        }
+
+        // Handle edge case: no peaks found
+        if min_mz == f64::MAX || max_mz == f64::MIN {
+            return Err(ChromascopeError::FileNotOpened(
+                "No valid peaks found in file".into()
+            ));
+        }
+
+        self.bounds = DataBounds {
+            min_mz,
+            max_mz,
+            min_rt,
+            max_rt,
+            scan_count,
+        };
+
+        info!(
+            "Extracted bounds: m/z [{:.2}-{:.2}], RT [{:.2}-{:.2}] min, {} scans",
+            min_mz, max_mz, min_rt, max_rt, scan_count
+        );
+
+        Ok(())
     }
     /// Method to read the Base Peak Intensity Chromatogram (BPIC) from the associated mass spectrometry file.
     ///
