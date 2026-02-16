@@ -89,8 +89,11 @@
 #![warn(clippy::all)]
 
 use crate::{
+    error::Result,
     parser,
     plotting_parameters::{self, LineColor, LineType, PlotType},
+    processing::{process_chromatogram, ProcessingParams},
+    validation::XicParams,
 };
 
 use mzdata::spectrum::ScanPolarity;
@@ -131,13 +134,13 @@ pub struct UserInput {
     pub retention_time_ms_spectrum: Option<f32>,
 }
 
-#[derive(Default)]
+#[derive(Default, Debug, PartialEq)]
 enum FileValidity {
     Valid,
     #[default]
     Invalid,
 }
-#[derive(Default, PartialEq)]
+#[derive(Default, Debug, PartialEq)]
 enum StateChange {
     Changed,
     #[default]
@@ -196,6 +199,8 @@ pub struct MzViewerApp {
     options_window_open: bool,
     /// A boolean value for a checkbox/file selector
     checkbox_bool: bool,
+    /// Error message to display to the user
+    error_message: Option<String>,
 }
 
 impl MzViewerApp {
@@ -226,6 +231,110 @@ impl MzViewerApp {
         self.active_file_index = None;
     }
 
+    /// Displays an error message to the user via a modal dialog.
+    ///
+    /// # Parameters
+    /// - `message`: The error message to display
+    fn show_error_dialog(&mut self, message: String) {
+        self.error_message = Some(message);
+    }
+
+    /// Renders the error dialog if an error message is present.
+    ///
+    /// This creates a centered modal window with the error message and an OK button.
+    /// The dialog blocks interaction until dismissed by clicking OK.
+    ///
+    /// # Parameters
+    /// - `ctx`: The egui context for rendering the dialog
+    fn render_error_dialog(&mut self, ctx: &egui::Context) {
+        if let Some(error) = self.error_message.clone() {
+            egui::Window::new("⚠ Error")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.colored_label(egui::Color32::RED, &error);
+                    ui.add_space(10.0);
+                    if ui.button("OK").clicked() {
+                        self.error_message = None;
+                    }
+                });
+        }
+    }
+
+    /// Updates the active file's cached chromatogram data.
+    /// 
+    /// This method orchestrates the business logic for chromatogram extraction
+    /// by delegating to the processing module. It should be called whenever
+    /// parameters change (polarity, plot type, smoothing, etc.)
+    ///
+    /// # Returns
+    /// - `Ok(())` if processing succeeded and cache was updated
+    /// - `Err(ChromascopeError)` if validation, extraction, or processing failed
+    ///
+    /// # Errors
+    /// - `MissingXicParams` - XIC selected but parameters invalid/missing
+    /// - `InvalidMass` / `InvalidMassTolerance` - XIC parameter validation failed
+    /// - Other errors from data extraction or smoothing
+    fn update_chromatogram_data(&mut self) -> Result<()> {
+        let active_idx = self
+            .active_file_index
+            .ok_or_else(|| crate::error::ChromascopeError::FileNotOpened(
+                "No active file selected".to_string()
+            ))?;
+
+        // Build processing parameters from current GUI state first
+        let params = self.build_processing_params()?;
+
+        // Then get mutable reference to file
+        let file = self
+            .files
+            .get_mut(active_idx)
+            .ok_or_else(|| crate::error::ChromascopeError::FileNotOpened(
+                "Active file index out of bounds".to_string()
+            ))?;
+
+        // Process chromatogram using business logic layer
+        let result = process_chromatogram(&mut file.data, &params)?;
+
+        // Cache the result in GUI layer
+        file.cached_plot_data = Some(result);
+
+        Ok(())
+    }
+
+    /// Builds ProcessingParams from current GUI state with validation.
+    ///
+    /// This method extracts values from `self.user_input` and constructs
+    /// validated parameters for the processing pipeline.
+    ///
+    /// # Returns
+    /// - `Ok(ProcessingParams)` if all parameters are valid
+    /// - `Err(ChromascopeError)` if XIC parameters fail validation
+    ///
+    /// # Errors
+    /// - `InvalidMass` - Mass value is not positive
+    /// - `InvalidMassTolerance` - Tolerance outside 0-1000 ppm range
+    fn build_processing_params(&self) -> Result<ProcessingParams> {
+        // For XIC, validate and construct XicParams
+        let xic_params = if self.user_input.plot_type == PlotType::Xic {
+            Some(XicParams::new(
+                self.user_input.mass,
+                self.user_input.polarity,
+                self.user_input.mass_tolerance,
+            )?)
+        } else {
+            None
+        };
+
+        Ok(ProcessingParams {
+            plot_type: self.user_input.plot_type,
+            polarity: self.user_input.polarity,
+            smoothing: self.user_input.smoothing,
+            xic_params,
+        })
+    }
+
     /// Plots the chromatogram (TIC, BPC, or XIC) for all visible files.
     ///
     /// This function is responsible for updating the plot data if the state has changed for the active file,
@@ -243,34 +352,14 @@ impl MzViewerApp {
         // Only re-process the data for the active file if the state has changed
         if let Some(active_idx) = self.active_file_index {
             if self.state_changed == StateChange::Changed && active_idx < self.files.len() {
-                info!("State has changed, reprocessing plot data for active file: {}", self.files[active_idx].name);
-                // Process the data and update plot_data for the active file
-                let user_input_clone = &self.user_input;
-                if let Some(file) = self.files.get_mut(active_idx) {
-                    let result = match user_input_clone.plot_type {
-                        PlotType::Tic => file.data.get_tic(user_input_clone.polarity),
-                        PlotType::Bpc => file.data.get_bpic(user_input_clone.polarity),
-                        PlotType::Xic => file.data.get_xic(
-                            user_input_clone.mass,
-                            user_input_clone.polarity,
-                            user_input_clone.mass_tolerance,
-                        ),
-                    };
-
-                    if result.is_err() {
-                        error!("Failed to get plot data for the specified plot type");
-                    }
-
-                    let prepared_data = file.data.prepare_for_plot();
-                    if prepared_data.is_err() {
-                        error!("Failed to prepare data for plotting");
-                    }
-                    
-                    if file.data.smooth_data(prepared_data, user_input_clone.smoothing).is_ok() {
-                        file.cached_plot_data = file.data.plot_data().clone();
-                    } else {
-                        error!("Failed to smooth data");
-                    }
+                info!(
+                    "State has changed, reprocessing plot data for active file: {}",
+                    self.files[active_idx].name
+                );
+                // Process the data using the new processing module
+                if let Err(e) = self.update_chromatogram_data() {
+                    error!("Failed to process chromatogram: {}", e);
+                    self.show_error_dialog(format!("Failed to process chromatogram: {}", e));
                 }
                 self.state_changed = StateChange::Unchanged;
             }
@@ -297,7 +386,7 @@ impl MzViewerApp {
                         }
                     }
                 }
-                
+
                 if self.files.is_empty() {
                     warn!("No files opened");
                 }
@@ -312,11 +401,19 @@ impl MzViewerApp {
                     // this was added because when triple clicked on XIC the extracted mz spectrum was not accurate
                     if self.user_input.plot_type != plotting_parameters::PlotType::Xic {
                         let rt_clicked = self.determine_rt_clicked(&response, plot_bounds);
-                        info!("Triple click detected on plot at {:?} for file: {}", &rt_clicked, self.files[active_idx].name);
+                        info!(
+                            "Triple click detected on plot at {:?} for file: {}",
+                            &rt_clicked, self.files[active_idx].name
+                        );
 
-                        if let Some(index) = self.files[active_idx].data.get_closest_index_by_time(rt_clicked) {
+                        if let Some(index) = self.files[active_idx]
+                            .data
+                            .get_closest_index_by_time(rt_clicked)
+                        {
                             info!("Found closest spectrum at index: {}", index);
-                            self.files[active_idx].data.get_mass_spectrum_by_index(index);
+                            self.files[active_idx]
+                                .data
+                                .get_mass_spectrum_by_index(index);
                         } else {
                             warn!("No close spectrum found for the clicked retention time");
                         }
@@ -390,7 +487,10 @@ impl MzViewerApp {
         if let Some(active_idx) = self.active_file_index {
             if active_idx < self.files.len() {
                 if let Some((mz, intensity)) = self.files[active_idx].data.mass_spectrum() {
-                    info!("Mass spectrum data available for {}. Plotting the spectrum.", self.files[active_idx].name);
+                    info!(
+                        "Mass spectrum data available for {}. Plotting the spectrum.",
+                        self.files[active_idx].name
+                    );
 
                     let response = egui_plot::Plot::new("mass_spectrum")
                         .width(ui.available_width() * 0.99)
@@ -419,7 +519,7 @@ impl MzViewerApp {
                 }
             }
         }
-        
+
         warn!("No mass spectrum data available or no active file selected");
         ui.label("No mass spectrum data available")
     }
@@ -451,8 +551,12 @@ impl MzViewerApp {
                         info!("File selection handled.");
                         ui.close_menu();
                     }
-                    
-                    if ui.button("Export to CSV").on_hover_text("Export plot data to CSV").clicked() {
+
+                    if ui
+                        .button("Export to CSV")
+                        .on_hover_text("Export plot data to CSV")
+                        .clicked()
+                    {
                         debug!("Export to CSV button clicked.");
                         self.handle_csv_export();
                         ui.close_menu();
@@ -586,15 +690,21 @@ impl MzViewerApp {
         if let Some(paths) = rfd::FileDialog::new().pick_files() {
             info!("Files selected: {} file(s)", paths.len());
             let start_index = self.files.len();
-            
+
             for path in paths {
                 info!("Processing file: {:?}", path);
-                if let Some(open_file) = self.create_open_file(&path, start_index + self.files.len() - start_index) {
-                    self.files.push(open_file);
-                    info!("File added successfully: {:?}", path);
+                match self.create_open_file(&path, start_index + self.files.len() - start_index) {
+                    Ok(open_file) => {
+                        self.files.push(open_file);
+                        info!("File added successfully: {:?}", path);
+                    }
+                    Err(e) => {
+                        error!("Failed to open file {:?}: {}", path, e);
+                        self.show_error_dialog(format!("Failed to open file: {}", e));
+                    }
                 }
             }
-            
+
             // Set the active file to the first newly added file
             if !self.files.is_empty() {
                 self.active_file_index = Some(start_index);
@@ -622,40 +732,50 @@ impl MzViewerApp {
     /// This function does not return errors. Any I/O errors during file writing will be logged as error messages.
     fn handle_csv_export(&self) {
         // Check if an active file is selected
-        if self.active_file_index.is_none() {
-            warn!("No active file selected for CSV export");
-            return;
-        }
-        
-        let active_idx = self.active_file_index.unwrap();
+        let active_idx = match self.active_file_index {
+            Some(idx) => idx,
+            None => {
+                warn!("No active file selected for CSV export");
+                return;
+            }
+        };
+
         if active_idx >= self.files.len() {
             warn!("Active file index out of bounds");
             return;
         }
-        
+
         let active_file = &self.files[active_idx];
-        
+
         // Check if plot data exists for the active file
-        if active_file.cached_plot_data.is_none() {
-            warn!("No plot data available to export for file: {}", active_file.name);
-            return;
-        }
+        let data = match &active_file.cached_plot_data {
+            Some(d) => d,
+            None => {
+                warn!(
+                    "No plot data available to export for file: {}",
+                    active_file.name
+                );
+                return;
+            }
+        };
 
         // Create default filename from active file name
         let default_name = active_file.name.replace(".mzML", "_chromatogram.csv");
-        
+
         // Open save dialog
         let dialog = rfd::FileDialog::new()
             .add_filter("CSV", &["csv"])
             .set_file_name(&default_name);
 
         if let Some(path) = dialog.save_file() {
-            info!("CSV export path selected: {:?} for file: {}", path, active_file.name);
-            
+            info!(
+                "CSV export path selected: {:?} for file: {}",
+                path, active_file.name
+            );
+
             // Build CSV content
-            let data = active_file.cached_plot_data.as_ref().unwrap();
             let mut csv_content = String::from("Retention Time,Intensity\n");
-            
+
             for [retention_time, intensity] in data.iter() {
                 csv_content.push_str(&format!("{},{}\n", retention_time, intensity));
             }
@@ -683,41 +803,48 @@ impl MzViewerApp {
     /// # Returns
     ///
     /// - `Option<OpenFile>`: The created OpenFile struct, or None if the file format is invalid or loading fails.
-    fn create_open_file(&self, path: &PathBuf, index: usize) -> Option<OpenFile> {
+    fn create_open_file(&self, path: &PathBuf, index: usize) -> Result<OpenFile> {
         let file_path_str = path.display().to_string();
         info!("Creating OpenFile for: {}", file_path_str);
 
         if !file_path_str.ends_with(FILE_FORMAT) {
-            warn!("Invalid file format for: {}. Expected {} file.", file_path_str, FILE_FORMAT);
-            return None;
+            warn!(
+                "Invalid file format for: {}. Expected {} file.",
+                file_path_str, FILE_FORMAT
+            );
+            return Err(crate::error::ChromascopeError::IoError(
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("Invalid file format. Expected {} file.", FILE_FORMAT),
+                ),
+            ));
         }
 
         // Extract file name from path
         let file_name = path
             .file_name()
             .and_then(|n| n.to_str())
-            .unwrap_or(&file_path_str)
+            .ok_or_else(|| {
+                crate::error::ChromascopeError::IoError(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "Invalid file path",
+                ))
+            })?
             .to_string();
 
         // Load the MzData
         let mut data = parser::MzData::new();
-        match data.open_msfile(path) {
-            Ok(_) => {
-                info!("File opened successfully: {}", file_name);
-                Some(OpenFile {
-                    name: file_name,
-                    path: file_path_str,
-                    data,
-                    cached_plot_data: None,
-                    color: next_color_for_index(index),
-                    visible: true,
-                })
-            }
-            Err(e) => {
-                warn!("Failed to open file {}: {}", file_name, e);
-                None
-            }
-        }
+        data.open_msfile(path)?;
+
+        info!("File opened successfully: {}", file_name);
+        Ok(OpenFile {
+            name: file_name,
+            path: file_path_str,
+            data,
+            cached_plot_data: None,
+            color: next_color_for_index(index),
+            visible: true,
+        })
     }
 
     /// Updates the file information panel in the user interface.
@@ -746,10 +873,10 @@ impl MzViewerApp {
             } else {
                 let mut file_to_remove: Option<usize> = None;
                 let mut new_active_index: Option<usize> = None;
-                
+
                 for (idx, file) in self.files.iter_mut().enumerate() {
                     let is_active = self.active_file_index == Some(idx);
-                    
+
                     ui.horizontal(|ui| {
                         // Highlight the active file
                         if is_active {
@@ -759,16 +886,21 @@ impl MzViewerApp {
                             frame.show(ui, |ui| {
                                 // Visibility checkbox
                                 if ui.checkbox(&mut file.visible, "").changed() {
-                                    info!("File visibility toggled: {} -> {}", file.name, file.visible);
+                                    info!(
+                                        "File visibility toggled: {} -> {}",
+                                        file.name, file.visible
+                                    );
                                 }
-                                
+
                                 // File name label (clickable to set as active)
-                                if ui.selectable_label(true, egui::RichText::new(&file.name).small())
+                                if ui
+                                    .selectable_label(true, egui::RichText::new(&file.name).small())
                                     .on_hover_text("Active file")
-                                    .clicked() {
+                                    .clicked()
+                                {
                                     new_active_index = Some(idx);
                                 }
-                                
+
                                 // Close button
                                 if ui.small_button("❌").on_hover_text("Close file").clicked() {
                                     file_to_remove = Some(idx);
@@ -780,14 +912,16 @@ impl MzViewerApp {
                             if ui.checkbox(&mut file.visible, "").changed() {
                                 info!("File visibility toggled: {} -> {}", file.name, file.visible);
                             }
-                            
+
                             // File name label (clickable to set as active)
-                            if ui.selectable_label(false, egui::RichText::new(&file.name).small())
+                            if ui
+                                .selectable_label(false, egui::RichText::new(&file.name).small())
                                 .on_hover_text("Click to set as active file")
-                                .clicked() {
+                                .clicked()
+                            {
                                 new_active_index = Some(idx);
                             }
-                            
+
                             // Close button
                             if ui.small_button("❌").on_hover_text("Close file").clicked() {
                                 file_to_remove = Some(idx);
@@ -796,7 +930,7 @@ impl MzViewerApp {
                         }
                     });
                 }
-                
+
                 // Update active index if a file was clicked
                 if let Some(new_idx) = new_active_index {
                     if self.active_file_index != Some(new_idx) {
@@ -805,12 +939,12 @@ impl MzViewerApp {
                         info!("Active file changed to index: {}", new_idx);
                     }
                 }
-                
+
                 // Remove file if close button was clicked
                 if let Some(idx) = file_to_remove {
                     let removed_file = self.files.remove(idx);
                     info!("File removed: {}", removed_file.name);
-                    
+
                     // Adjust active_file_index
                     if let Some(active_idx) = self.active_file_index {
                         if active_idx == idx {
@@ -825,7 +959,7 @@ impl MzViewerApp {
                             self.active_file_index = Some(active_idx - 1);
                         }
                     }
-                    
+
                     // Update validity state
                     if self.files.is_empty() {
                         self.invalid_file = FileValidity::Invalid;
@@ -1008,6 +1142,8 @@ impl MzViewerApp {
     /// This function does not return any errors. It handles the rendering of the XIC settings window and the updating of the corresponding fields in the struct.
     fn update_xic_settings_window(&mut self, ctx: &egui::Context) {
         if self.options_window_open {
+            let mut error_message: Option<String> = None;
+            
             egui::Window::new("XIC settings")
                 .open(&mut self.options_window_open)
                 .show(ctx, |ui| {
@@ -1019,12 +1155,36 @@ impl MzViewerApp {
                         )
                         .lost_focus()
                     {
-                        self.user_input.mass = self
-                            .user_input
-                            .mass_input
-                            .parse()
-                            .unwrap_or(self.user_input.mass);
-                        self.state_changed = StateChange::Changed;
+                        match self.user_input.mass_input.parse::<f64>() {
+                            Ok(parsed_mass) => {
+                                // Validate using XicParams to ensure business rules are enforced
+                                match XicParams::new(
+                                    parsed_mass,
+                                    self.user_input.polarity,
+                                    self.user_input.mass_tolerance,
+                                ) {
+                                    Ok(_) => {
+                                        self.user_input.mass = parsed_mass;
+                                        self.state_changed = StateChange::Changed;
+                                    }
+                                    Err(e) => {
+                                        error!("Invalid mass value: {}", e);
+                                        error_message = Some(format!("Invalid mass: {}", e));
+                                        // Restore previous valid value
+                                        self.user_input.mass_input = self.user_input.mass.to_string();
+                                    }
+                                }
+                            }
+                            Err(_) => {
+                                error!("Failed to parse mass input: {}", self.user_input.mass_input);
+                                error_message = Some(format!(
+                                    "Invalid number format: '{}'",
+                                    self.user_input.mass_input
+                                ));
+                                // Restore previous valid value
+                                self.user_input.mass_input = self.user_input.mass.to_string();
+                            }
+                        }
                     };
                     if ui
                         .add(
@@ -1033,14 +1193,48 @@ impl MzViewerApp {
                         )
                         .lost_focus()
                     {
-                        self.user_input.mass_tolerance = self
-                            .user_input
-                            .mass_tolerance_input
-                            .parse()
-                            .unwrap_or(self.user_input.mass_tolerance);
-                        self.state_changed = StateChange::Changed
+                        match self.user_input.mass_tolerance_input.parse::<f64>() {
+                            Ok(parsed_tolerance) => {
+                                // Validate using XicParams to ensure business rules are enforced
+                                match XicParams::new(
+                                    self.user_input.mass,
+                                    self.user_input.polarity,
+                                    parsed_tolerance,
+                                ) {
+                                    Ok(_) => {
+                                        self.user_input.mass_tolerance = parsed_tolerance;
+                                        self.state_changed = StateChange::Changed;
+                                    }
+                                    Err(e) => {
+                                        error!("Invalid mass tolerance: {}", e);
+                                        error_message = Some(format!("Invalid mass tolerance: {}", e));
+                                        // Restore previous valid value
+                                        self.user_input.mass_tolerance_input =
+                                            self.user_input.mass_tolerance.to_string();
+                                    }
+                                }
+                            }
+                            Err(_) => {
+                                error!(
+                                    "Failed to parse mass tolerance input: {}",
+                                    self.user_input.mass_tolerance_input
+                                );
+                                error_message = Some(format!(
+                                    "Invalid number format: '{}'",
+                                    self.user_input.mass_tolerance_input
+                                ));
+                                // Restore previous valid value
+                                self.user_input.mass_tolerance_input =
+                                    self.user_input.mass_tolerance.to_string();
+                            }
+                        }
                     };
                 });
+            
+            // Show error dialog outside of the closure to avoid borrow checker issues
+            if let Some(msg) = error_message {
+                self.show_error_dialog(msg);
+            }
         }
     }
 }
@@ -1069,5 +1263,85 @@ impl eframe::App for MzViewerApp {
         self.update_file_information_panel(ctx);
         self.update_central_panel(ctx);
         self.update_xic_settings_window(ctx);
+
+        // Render error dialog last so it appears on top
+        self.render_error_dialog(ctx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_error_dialog_shown() {
+        let mut app = MzViewerApp::default();
+
+        // Initially no error
+        assert!(app.error_message.is_none());
+
+        // Show error
+        app.show_error_dialog("Test error message".to_string());
+
+        // Error should be set
+        assert!(app.error_message.is_some());
+        assert_eq!(app.error_message.as_ref().unwrap(), "Test error message");
+    }
+
+    #[test]
+    fn test_error_cleared_after_dismissal() {
+        let mut app = MzViewerApp::default();
+
+        // Set an error
+        app.show_error_dialog("Test error".to_string());
+        assert!(app.error_message.is_some());
+
+        // Simulate dismissal (clicking OK sets error_message to None)
+        app.error_message = None;
+
+        // Error should be cleared
+        assert!(app.error_message.is_none());
+    }
+
+    #[test]
+    fn test_multiple_errors_overwrite() {
+        let mut app = MzViewerApp::default();
+
+        // Show first error
+        app.show_error_dialog("First error".to_string());
+        assert_eq!(app.error_message.as_ref().unwrap(), "First error");
+
+        // Show second error (should overwrite)
+        app.show_error_dialog("Second error".to_string());
+        assert_eq!(app.error_message.as_ref().unwrap(), "Second error");
+    }
+
+    #[test]
+    fn test_app_default_initialization() {
+        let app = MzViewerApp::default();
+
+        // Check default state
+        assert!(app.files.is_empty());
+        assert!(app.active_file_index.is_none());
+        assert!(app.error_message.is_none());
+        assert_eq!(app.invalid_file, FileValidity::Invalid);
+        assert_eq!(app.state_changed, StateChange::Unchanged);
+        assert!(!app.options_window_open);
+    }
+
+    #[test]
+    fn test_reset_state_clears_files() {
+        let mut app = MzViewerApp::default();
+
+        // Simulate having files (we can't create real OpenFile instances easily in tests,
+        // but we can test that the fields are reset)
+        app.active_file_index = Some(0);
+
+        // Reset state
+        app.reset_state();
+
+        // Check state is reset
+        assert!(app.files.is_empty());
+        assert!(app.active_file_index.is_none());
     }
 }

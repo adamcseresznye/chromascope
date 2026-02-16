@@ -97,7 +97,7 @@ impl LineType {
     }
 }
 
-#[derive(PartialEq, Debug, Default)]
+#[derive(PartialEq, Debug, Default, Clone, Copy)]
 pub enum PlotType {
     Xic,
     Bpc,

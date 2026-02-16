@@ -100,12 +100,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "anyhow"
-version = "1.0.83"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "25bdb32cbbdce2b519a9cd7df3a678443100e265d5e25ca763b7572a5104f5f3"
-
-[[package]]
 name = "approx"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -531,7 +525,6 @@ dependencies = [
 name = "chromascope"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "approx",
  "eframe",
  "egui",
@@ -543,6 +536,7 @@ dependencies = [
  "mzdata",
  "rfd",
  "serde",
+ "thiserror",
  "wasm-bindgen-futures",
 ]
 

@@ -20,7 +20,7 @@ eframe = { version = "0.27.0", default-features = false, features = [
 log = "0.4"
 mzdata = "0.15.0"
 libz-sys = "1.1.3"
-anyhow = "1.0"
+thiserror = "1.0"
 rfd = "0.14.1"
 egui_plot = "0.27.2"
 image = { version = "0.25.2", default-features = false, features = ["png"] }
