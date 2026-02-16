@@ -15,8 +15,7 @@
 
 #![warn(clippy::all)]
 
-use anyhow::anyhow;
-use anyhow::Result;
+use crate::error::{ChromascopeError, Result};
 use log::{debug, error, info, trace, warn};
 use mzdata::io::mzml::MzMLReaderType;
 use mzdata::spectrum::ScanPolarity;
@@ -77,7 +76,9 @@ impl MzData {
             retention_time: None,
             intensity: None,
             mz: None,
-            msfile: Err(anyhow!("File not opened")),
+            msfile: Err(ChromascopeError::FileNotOpened(
+                "No file opened yet".to_string(),
+            )),
             plot_data: None,
             mass_spectrum: None,
         }
@@ -117,7 +118,10 @@ impl MzData {
                     "Failed to open MzML file at path: {:?} with error: {:?}",
                     &path, e
                 );
-                Err(anyhow!("Failed to open MzML file: {:?}", e))
+                Err(ChromascopeError::MzDataError(format!(
+                    "Failed to open MzML file: {:?}",
+                    e
+                )))
             }
         }
     }
@@ -143,38 +147,44 @@ impl MzData {
     /// If there is an error while accessing the `msfile` field, an error message is logged, and the function returns an error.
     pub fn get_bpic(&mut self, polarity: ScanPolarity) -> Result<&mut Self> {
         info!("Attempting to read BIC of {:?}", &self.file_name);
-        match &mut self.msfile {
-            Ok(reader) => {
-                let (retention_time, intensity, mz, index) = reader
-                    .iter()
-                    .filter(|spectrum| spectrum.description.polarity == polarity)
-                    .map(|spectrum| {
-                        let retention_time = spectrum.start_time() as f32;
-                        let intensity = spectrum.peaks().base_peak().intensity;
-                        let mz = spectrum.peaks().base_peak().mz as f32;
-                        let index = spectrum.index();
-                        (retention_time, intensity, mz, index)
-                    })
-                    .fold(
-                        (Vec::new(), Vec::new(), Vec::new(), Vec::new()),
-                        |mut acc, (rt, int, mz, index)| {
-                            acc.0.push(rt);
-                            acc.1.push(int);
-                            acc.2.push(mz);
-                            acc.3.push(index);
-                            acc
-                        },
-                    );
 
-                self.retention_time = Some(retention_time);
-                self.intensity = Some(intensity);
-                self.mz = Some(mz);
-                self.index = Some(index);
-                debug!("Successfully extracted BIC from: {:?}", &self.file_name);
-                trace!("Successfully extracted the BIC of {:?}. Rt is {:?}, Index is {:?}, Mz is {:?}, Intensity is {:?}, ", &self.file_name, &self.retention_time, &self.index, &self.mz, &self.intensity);
-            }
-            Err(e) => error!("Failed to get BIC due to {:?}", e),
+        // Check if file is opened before proceeding
+        if self.msfile.is_err() {
+            return Err(ChromascopeError::FileNotOpened(
+                "File must be opened before extracting chromatogram".to_string(),
+            ));
         }
+        let reader = self.msfile.as_mut().unwrap();
+
+        let (retention_time, intensity, mz, index) = reader
+            .iter()
+            .filter(|spectrum| spectrum.description.polarity == polarity)
+            .map(|spectrum| {
+                let retention_time = spectrum.start_time() as f32;
+                let intensity = spectrum.peaks().base_peak().intensity;
+                let mz = spectrum.peaks().base_peak().mz as f32;
+                let index = spectrum.index();
+                (retention_time, intensity, mz, index)
+            })
+            .fold(
+                (Vec::new(), Vec::new(), Vec::new(), Vec::new()),
+                |mut acc, (rt, int, mz, index)| {
+                    acc.0.push(rt);
+                    acc.1.push(int);
+                    acc.2.push(mz);
+                    acc.3.push(index);
+                    acc
+                },
+            );
+
+        self.retention_time = Some(retention_time);
+        self.intensity = Some(intensity);
+        self.mz = Some(mz);
+        self.index = Some(index);
+
+        debug!("Successfully extracted BIC from: {:?}", &self.file_name);
+        trace!("Successfully extracted the BIC of {:?}. Rt is {:?}, Index is {:?}, Mz is {:?}, Intensity is {:?}, ", &self.file_name, &self.retention_time, &self.index, &self.mz, &self.intensity);
+
         Ok(self)
     }
     /// Method to read the Total Ion Chromatogram (TIC) from the associated mass spectrometry file.
@@ -202,30 +212,33 @@ impl MzData {
 
     pub fn get_tic(&mut self, polarity: ScanPolarity) -> Result<&mut Self> {
         info!("Attempting to read TIC of {:?}", &self.file_name);
-        match &mut self.msfile {
-            Ok(reader) => {
-                let (retention_time, intensity, index) = reader
-                    .iter()
-                    .filter(|spectrum| spectrum.description.polarity == polarity)
-                    .fold(
-                        (Vec::new(), Vec::new(), Vec::new()),
-                        |mut acc, spectrum| {
-                            acc.0.push(spectrum.start_time() as f32);
-                            acc.1.push(spectrum.peaks().tic());
-                            acc.2.push(spectrum.index());
-                            acc
-                        },
-                    );
 
-                self.retention_time = Some(retention_time);
-                self.intensity = Some(intensity);
-                self.mz = Some(Vec::new()); // TIC has no specific m/z
-                self.index = Some(index);
-                debug!("Successfully extracted TIC from: {:?}", &self.file_name);
-                trace!("Successfully extracted the TIC of {:?}. Rt is {:?}, Index is {:?}, Mz is {:?}, Intensity is {:?}, ", &self.file_name, &self.retention_time, &self.index, &self.mz, &self.intensity);
-            }
-            Err(e) => error!("Failed to get TIC due to {:?}", e),
+        // Check if file is opened before proceeding
+        if self.msfile.is_err() {
+            return Err(ChromascopeError::FileNotOpened(
+                "File must be opened before extracting chromatogram".to_string(),
+            ));
         }
+        let reader = self.msfile.as_mut().unwrap();
+
+        let (retention_time, intensity, index) = reader
+            .iter()
+            .filter(|spectrum| spectrum.description.polarity == polarity)
+            .fold((Vec::new(), Vec::new(), Vec::new()), |mut acc, spectrum| {
+                acc.0.push(spectrum.start_time() as f32);
+                acc.1.push(spectrum.peaks().tic());
+                acc.2.push(spectrum.index());
+                acc
+            });
+
+        self.retention_time = Some(retention_time);
+        self.intensity = Some(intensity);
+        self.mz = Some(Vec::new()); // TIC has no specific m/z
+        self.index = Some(index);
+
+        debug!("Successfully extracted TIC from: {:?}", &self.file_name);
+        trace!("Successfully extracted the TIC of {:?}. Rt is {:?}, Index is {:?}, Mz is {:?}, Intensity is {:?}, ", &self.file_name, &self.retention_time, &self.index, &self.mz, &self.intensity);
+
         Ok(self)
     }
     /// Method to read the Extracted Ion Chromatogram (XIC) for the specified mass and polarity from the associated mass spectrometry file.
@@ -264,50 +277,63 @@ impl MzData {
     ) -> Result<&mut Self> {
         info!("Attempting to read XIC of {:?}", &self.file_name);
 
+        // Validate input parameters
+        if mass <= 0.0 {
+            return Err(ChromascopeError::InvalidMass(mass));
+        }
+        if mass_tolerance < 0.0 || mass_tolerance > 1000.0 {
+            return Err(ChromascopeError::InvalidMassTolerance(mass_tolerance));
+        }
+
+        // Check if file is opened before proceeding
+        if self.msfile.is_err() {
+            return Err(ChromascopeError::FileNotOpened(
+                "File must be opened before extracting chromatogram".to_string(),
+            ));
+        }
+        let reader = self.msfile.as_mut().unwrap();
+
+        // Initialize fields only after confirming file is valid
         self.retention_time = Some(Vec::new());
         self.intensity = Some(Vec::new());
         self.index = Some(Vec::new()); // if the self.index is cleared, when triple clicked one cannot extract the mass spectrum
         self.mz = Some(Vec::new());
 
-        match &mut self.msfile {
-            Ok(reader) => {
-                for spectrum in reader.iter() {
-                    if spectrum.description.ms_level == MS_LEVEL
-                        && spectrum.description.polarity == polarity
-                    {
-                        let centroided = spectrum.clone().into_centroid()?;
-                        let extracted_centroided = centroided
-                            .peaks
-                            .all_peaks_for(mass, Tolerance::PPM(mass_tolerance));
+        for spectrum in reader.iter() {
+            if spectrum.description.ms_level == MS_LEVEL
+                && spectrum.description.polarity == polarity
+            {
+                let centroided = spectrum.clone().into_centroid().map_err(|e| {
+                    ChromascopeError::MzDataError(format!("Failed to centroid spectrum: {:?}", e))
+                })?;
+                let extracted_centroided = centroided
+                    .peaks
+                    .all_peaks_for(mass, Tolerance::PPM(mass_tolerance));
 
-                        for peak in extracted_centroided {
-                            if let Some(rt) = &mut self.retention_time {
-                                rt.push(
-                                    spectrum.description.acquisition.scans[0].start_time as f32,
-                                );
-                            };
-                            if let Some(intensity) = &mut self.intensity {
-                                intensity.push(peak.intensity);
-                            };
-                            if let Some(index) = &mut self.index {
-                                index.push(peak.index as usize);
-                            };
-                        }
-                    }
-                }
-                if let Some(index) = &mut self.index {
-                    index.sort()
-                }; // self.index was unordered in case of XIC
-
-                debug!("Successfully extracted XIC from: {:?}", &self.file_name);
-                trace!("Successfully extracted the XIC of {:?}. Rt is {:?}, Index is {:?}, Mz is {:?}, Intensity is {:?}, ", &self.file_name, &self.retention_time, &self.index, &self.mz, &self.intensity);
-
-                if self.retention_time.is_none() {
-                    warn!("No matching peaks found");
+                for peak in extracted_centroided {
+                    if let Some(rt) = &mut self.retention_time {
+                        rt.push(spectrum.description.acquisition.scans[0].start_time as f32);
+                    };
+                    if let Some(intensity) = &mut self.intensity {
+                        intensity.push(peak.intensity);
+                    };
+                    if let Some(index) = &mut self.index {
+                        index.push(peak.index as usize);
+                    };
                 }
             }
-            Err(e) => error!("Failed to get XIC due to {:?}", e),
         }
+        if let Some(index) = &mut self.index {
+            index.sort()
+        }; // self.index was unordered in case of XIC
+
+        debug!("Successfully extracted XIC from: {:?}", &self.file_name);
+        trace!("Successfully extracted the XIC of {:?}. Rt is {:?}, Index is {:?}, Mz is {:?}, Intensity is {:?}, ", &self.file_name, &self.retention_time, &self.index, &self.mz, &self.intensity);
+
+        if self.retention_time.is_none() {
+            warn!("No matching peaks found");
+        }
+
         Ok(self)
     }
 
@@ -415,6 +441,11 @@ impl MzData {
         window_size: u8,
     ) -> Result<&mut Self> {
         info!("Starting data smoothing with window size: {}", window_size);
+
+        // Validate smoothing window
+        if window_size > 10 {
+            return Err(ChromascopeError::InvalidSmoothingWindow(window_size));
+        }
 
         let data = data?;
         debug!("Received {} data points for smoothing", data.len());
@@ -600,8 +631,8 @@ impl MzData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
     use approx::assert_relative_eq;
+    use std::path::PathBuf;
     const TEST_FILE: &str = r"test_file\data_dependent_02.mzML"; //thermo example file converted to mzML (only Rt 10-12min)
 
     /// Helper function to create a normalized test file path
@@ -772,7 +803,11 @@ mod tests {
         // prepare_for_plot returns Ok with empty vec when no data extracted
         assert!(result.is_ok());
         let plot_data = result.unwrap();
-        assert_eq!(plot_data.len(), 0, "Should have no plot data when no extraction done");
+        assert_eq!(
+            plot_data.len(),
+            0,
+            "Should have no plot data when no extraction done"
+        );
     }
 
     #[test]
@@ -780,7 +815,9 @@ mod tests {
         let mut mzdata = setup_test_parser();
 
         // Extract XIC which might have duplicate RTs
-        mzdata.get_xic(722.43, ScanPolarity::Positive, 1000.0).unwrap();
+        mzdata
+            .get_xic(722.43, ScanPolarity::Positive, 1000.0)
+            .unwrap();
 
         let result = mzdata.prepare_for_plot();
         assert!(result.is_ok());
@@ -828,7 +865,11 @@ mod tests {
 
         let (mz_values, intensities) = spectrum.as_ref().unwrap();
         assert!(mz_values.len() > 0, "Should have m/z values");
-        assert_eq!(mz_values.len(), intensities.len(), "m/z and intensity arrays should match");
+        assert_eq!(
+            mz_values.len(),
+            intensities.len(),
+            "m/z and intensity arrays should match"
+        );
     }
 
     #[test]
@@ -892,7 +933,10 @@ mod tests {
 
             let found_index = result.unwrap();
             let indices = mzdata.index().as_ref().unwrap();
-            assert_eq!(found_index, indices[0], "Should return the exact matching index");
+            assert_eq!(
+                found_index, indices[0],
+                "Should return the exact matching index"
+            );
         }
     }
 
@@ -928,7 +972,10 @@ mod tests {
             let before_rt = retention_times[0] - 1.0;
 
             let result = mzdata.get_closest_index_by_time(Some(before_rt));
-            assert!(result.is_some(), "Should return first index for RT before range");
+            assert!(
+                result.is_some(),
+                "Should return first index for RT before range"
+            );
 
             let found_index = result.unwrap();
             let indices = mzdata.index().as_ref().unwrap();
@@ -945,7 +992,10 @@ mod tests {
             let after_rt = retention_times[retention_times.len() - 1] + 1.0;
 
             let result = mzdata.get_closest_index_by_time(Some(after_rt));
-            assert!(result.is_some(), "Should return last index for RT after range");
+            assert!(
+                result.is_some(),
+                "Should return last index for RT after range"
+            );
 
             let found_index = result.unwrap();
             let indices = mzdata.index().as_ref().unwrap();
@@ -970,7 +1020,10 @@ mod tests {
         let mzdata = MzData::new();
 
         let result = mzdata.get_closest_index_by_time(Some(10.0));
-        assert!(result.is_none(), "Should return None when no data extracted");
+        assert!(
+            result.is_none(),
+            "Should return None when no data extracted"
+        );
     }
 
     #[test]
@@ -978,7 +1031,9 @@ mod tests {
         let mut mzdata = setup_test_parser();
 
         // Extract XIC with narrow tolerance to potentially get single point
-        mzdata.get_xic(722.43, ScanPolarity::Positive, 0.001).unwrap();
+        mzdata
+            .get_xic(722.43, ScanPolarity::Positive, 0.001)
+            .unwrap();
 
         if let Some(rt) = mzdata.retention_time().as_ref() {
             if rt.len() > 0 {
@@ -1136,7 +1191,9 @@ mod tests {
         let mut mzdata = setup_test_parser();
 
         // Full pipeline: extract XIC -> prepare for plot
-        mzdata.get_xic(722.43, ScanPolarity::Positive, 1000.0).unwrap();
+        mzdata
+            .get_xic(722.43, ScanPolarity::Positive, 1000.0)
+            .unwrap();
 
         let plot_data = mzdata.prepare_for_plot().unwrap();
         assert!(plot_data.len() > 0);
@@ -1151,7 +1208,9 @@ mod tests {
         let tic_rt_count = mzdata.retention_time().as_ref().unwrap().len();
 
         // Switch to XIC
-        mzdata.get_xic(722.43, ScanPolarity::Positive, 1000.0).unwrap();
+        mzdata
+            .get_xic(722.43, ScanPolarity::Positive, 1000.0)
+            .unwrap();
         let _xic_rt_count = mzdata.retention_time().as_ref().unwrap().len();
 
         // Switch to BIC
@@ -1189,8 +1248,191 @@ mod tests {
                 mzdata.get_mass_spectrum_by_index(idx);
 
                 let spectrum = mzdata.mass_spectrum();
-                assert!(spectrum.is_some(), "Should retrieve spectrum for found index");
+                assert!(
+                    spectrum.is_some(),
+                    "Should retrieve spectrum for found index"
+                );
             }
+        }
+    }
+
+    // ========== Phase 1 Step 2: Error Propagation Tests ==========
+
+    #[test]
+    fn test_get_bpic_file_not_opened() {
+        let mut mzdata = MzData::new();
+
+        let result = mzdata.get_bpic(ScanPolarity::Positive);
+        assert!(
+            result.is_err(),
+            "get_bpic should return Err when file not opened"
+        );
+
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, crate::error::ChromascopeError::FileNotOpened(_)),
+            "Error should be FileNotOpened variant"
+        );
+    }
+
+    #[test]
+    fn test_get_tic_file_not_opened() {
+        let mut mzdata = MzData::new();
+
+        let result = mzdata.get_tic(ScanPolarity::Positive);
+        assert!(
+            result.is_err(),
+            "get_tic should return Err when file not opened"
+        );
+
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, crate::error::ChromascopeError::FileNotOpened(_)),
+            "Error should be FileNotOpened variant"
+        );
+    }
+
+    #[test]
+    fn test_get_xic_file_not_opened() {
+        let mut mzdata = MzData::new();
+
+        let result = mzdata.get_xic(722.43, ScanPolarity::Positive, 1000.0);
+        assert!(
+            result.is_err(),
+            "get_xic should return Err when file not opened"
+        );
+
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, crate::error::ChromascopeError::FileNotOpened(_)),
+            "Error should be FileNotOpened variant"
+        );
+    }
+
+    #[test]
+    fn test_error_propagation_prevents_partial_state() {
+        let mut mzdata = MzData::new();
+
+        // Try to extract without opening file
+        let _ = mzdata.get_bpic(ScanPolarity::Positive);
+
+        // Data fields should remain None (not partially filled)
+        assert!(
+            mzdata.retention_time().is_none(),
+            "retention_time should be None after failed extraction"
+        );
+        assert!(
+            mzdata.intensity().is_none(),
+            "intensity should be None after failed extraction"
+        );
+    }
+
+    // ========== Phase 1 Step 3: Input Validation Tests ==========
+
+    #[test]
+    fn test_invalid_mass_returns_error() {
+        let mut mzdata = MzData::new();
+
+        // Test negative mass
+        let result = mzdata.get_xic(-100.0, ScanPolarity::Positive, 10.0);
+        assert!(result.is_err(), "get_xic should reject negative mass");
+        assert!(
+            matches!(
+                result.unwrap_err(),
+                crate::error::ChromascopeError::InvalidMass(_)
+            ),
+            "Error should be InvalidMass variant"
+        );
+
+        // Test zero mass
+        let result = mzdata.get_xic(0.0, ScanPolarity::Positive, 10.0);
+        assert!(result.is_err(), "get_xic should reject zero mass");
+        assert!(
+            matches!(
+                result.unwrap_err(),
+                crate::error::ChromascopeError::InvalidMass(_)
+            ),
+            "Error should be InvalidMass variant"
+        );
+    }
+
+    #[test]
+    fn test_invalid_tolerance_returns_error() {
+        let mut mzdata = MzData::new();
+
+        // Test negative tolerance
+        let result = mzdata.get_xic(100.0, ScanPolarity::Positive, -5.0);
+        assert!(result.is_err(), "get_xic should reject negative tolerance");
+        assert!(
+            matches!(
+                result.unwrap_err(),
+                crate::error::ChromascopeError::InvalidMassTolerance(_)
+            ),
+            "Error should be InvalidMassTolerance variant"
+        );
+
+        // Test tolerance above 1000 ppm
+        let result = mzdata.get_xic(100.0, ScanPolarity::Positive, 5000.0);
+        assert!(result.is_err(), "get_xic should reject tolerance > 1000");
+        assert!(
+            matches!(
+                result.unwrap_err(),
+                crate::error::ChromascopeError::InvalidMassTolerance(_)
+            ),
+            "Error should be InvalidMassTolerance variant"
+        );
+    }
+
+    #[test]
+    fn test_invalid_smoothing_window() {
+        let mut mzdata = MzData::new();
+        let dummy_data = Ok(vec![[1.0, 2.0], [3.0, 4.0]]);
+
+        // Test window size > 10
+        let result = mzdata.smooth_data(dummy_data, 20);
+        assert!(result.is_err(), "smooth_data should reject window > 10");
+        assert!(
+            matches!(
+                result.unwrap_err(),
+                crate::error::ChromascopeError::InvalidSmoothingWindow(_)
+            ),
+            "Error should be InvalidSmoothingWindow variant"
+        );
+    }
+
+    #[test]
+    fn test_valid_mass_and_tolerance() {
+        let mut mzdata = MzData::new();
+
+        // These should pass validation but fail because file not opened
+        let result = mzdata.get_xic(100.5, ScanPolarity::Positive, 10.0);
+        assert!(result.is_err());
+
+        // Should be FileNotOpened error, not InvalidMass or InvalidTolerance
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, crate::error::ChromascopeError::FileNotOpened(_)),
+            "Valid mass/tolerance should pass validation, fail on file check"
+        );
+    }
+
+    #[test]
+    fn test_valid_smoothing_window() {
+        let mut mzdata = MzData::new();
+
+        // Test valid window sizes (0-10 are all valid)
+        let test_cases = vec![0, 1, 5, 10];
+
+        for window in test_cases {
+            let dummy_data = Ok(vec![[1.0, 2.0], [3.0, 4.0]]);
+            let result = mzdata.smooth_data(dummy_data, window);
+
+            // Should succeed for valid window sizes
+            assert!(
+                result.is_ok(),
+                "smooth_data should accept window size {}",
+                window
+            );
         }
     }
 }

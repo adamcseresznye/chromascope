@@ -8,9 +8,14 @@
 
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
+mod error;
 mod gui;
 mod parser;
 mod plotting_parameters;
+mod processing;
+mod validation;
+
+pub use error::{ChromascopeError, Result};
 
 use egui::IconData;
 use gui::*;
