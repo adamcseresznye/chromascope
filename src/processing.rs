@@ -30,21 +30,27 @@ use mzdata::spectrum::ScanPolarity;
 ///
 /// let params = ProcessingParams {
 ///     plot_type: PlotType::Tic,
+///     ms_level: 1,
 ///     polarity: ScanPolarity::Positive,
 ///     smoothing: 2,
 ///     xic_params: None,
+///     mz_range: None,
 /// };
 /// ```
 #[derive(Debug, Clone)]
 pub struct ProcessingParams {
     /// Type of chromatogram to extract (TIC, BPC, or XIC)
     pub plot_type: PlotType,
+    /// MS level filter (e.g., 1 for MS1, 2 for MS2)
+    pub ms_level: u8,
     /// Ion polarity filter (Positive, Negative, or Unknown)
     pub polarity: ScanPolarity,
     /// Smoothing window size (0-10, where 0 means no smoothing)
     pub smoothing: u8,
     /// XIC-specific parameters (required only when plot_type is Xic)
     pub xic_params: Option<XicParams>,
+    /// Optional m/z range filter for TIC/BPC (min_mz, max_mz)
+    pub mz_range: Option<(f64, f64)>,
 }
 
 /// High-level orchestration of chromatogram processing.
@@ -90,9 +96,11 @@ pub struct ProcessingParams {
 ///
 /// let params = ProcessingParams {
 ///     plot_type: PlotType::Tic,
+///     ms_level: 1,
 ///     polarity: ScanPolarity::Positive,
 ///     smoothing: 2,
 ///     xic_params: None,
+///     mz_range: None,
 /// };
 ///
 /// let result = process_chromatogram(&mut data, &params)?;
@@ -104,10 +112,10 @@ pub fn process_chromatogram(data: &mut MzData, params: &ProcessingParams) -> Res
     // Each method mutates data's internal fields and returns &mut Self for chaining
     match params.plot_type {
         PlotType::Tic => {
-            data.get_tic(params.polarity)?;
+            data.get_tic(params.ms_level, params.polarity, params.mz_range)?;
         }
         PlotType::Bpc => {
-            data.get_bpic(params.polarity)?;
+            data.get_bpic(params.ms_level, params.polarity, params.mz_range)?;
         }
         PlotType::Xic => {
             // XIC requires validated parameters
@@ -118,6 +126,7 @@ pub fn process_chromatogram(data: &mut MzData, params: &ProcessingParams) -> Res
 
             data.get_xic(
                 xic_params.mass(),
+                params.ms_level,
                 xic_params.polarity(),
                 xic_params.mass_tolerance(),
             )?;
@@ -162,6 +171,8 @@ mod tests {
             polarity: ScanPolarity::Positive,
             smoothing: 0,
             xic_params: None,
+            ms_level: 1,
+            mz_range: None,
         };
 
         // Act
@@ -186,6 +197,8 @@ mod tests {
             polarity: ScanPolarity::Positive,
             smoothing: 0,
             xic_params: None,
+            ms_level: 1,
+            mz_range: None,
         };
 
         // Act
@@ -206,6 +219,8 @@ mod tests {
             polarity: ScanPolarity::Positive,
             smoothing: 0,
             xic_params: None, // Missing required XIC params
+            ms_level: 1,
+            mz_range: None,
         };
 
         // Act
@@ -238,6 +253,8 @@ mod tests {
             polarity: ScanPolarity::Positive,
             smoothing: 0,
             xic_params: Some(xic_params),
+            ms_level: 1,
+            mz_range: None,
         };
 
         // Act
@@ -259,6 +276,8 @@ mod tests {
             polarity: ScanPolarity::Positive,
             smoothing: 3,
             xic_params: None,
+            ms_level: 1,
+            mz_range: None,
         };
 
         // Act
@@ -282,6 +301,8 @@ mod tests {
             polarity: ScanPolarity::Negative,
             smoothing: 0,
             xic_params: None,
+            ms_level: 1,
+            mz_range: None,
         };
 
         // Act
@@ -305,6 +326,8 @@ mod tests {
             polarity: ScanPolarity::Positive,
             smoothing: 11, // Invalid: > 10
             xic_params: None,
+            ms_level: 1,
+            mz_range: None,
         };
 
         // Act

@@ -106,12 +106,14 @@ use log::{debug, error, info, warn};
 
 const FILE_FORMAT: &str = "mzML";
 
-#[derive(PartialEq, Default)]
+#[derive(PartialEq)]
 pub struct UserInput {
     /// Optional file path for the input data
     pub file_path: Option<String>,
     /// The type of plot to be generated. It can be PlotType::Tic, PlotType::Bpc or PlotType::Xic
     pub plot_type: PlotType,
+    /// The MS level to filter (e.g., 1 for MS1, 2 for MS2)
+    pub ms_level: u8,
     /// The polarity of the scan. It can be either ScanPolarity::Positive or ScanPolarity::Negative
     pub polarity: ScanPolarity,
     /// The mass input value provided by the user
@@ -132,6 +134,41 @@ pub struct UserInput {
     pub line_width: f32,
     /// The retention time of a given scan. Needed for mass spectrum extraction when the user triple clicks the chromatogram
     pub retention_time_ms_spectrum: Option<f32>,
+    /// Whether to use range filtering for TIC/BPC plots
+    pub range_enabled: bool,
+    /// User input for minimum m/z range
+    pub range_min_input: String,
+    /// User input for maximum m/z range
+    pub range_max_input: String,
+    /// Parsed minimum m/z value
+    pub range_min: f64,
+    /// Parsed maximum m/z value
+    pub range_max: f64,
+}
+
+impl Default for UserInput {
+    fn default() -> Self {
+        Self {
+            file_path: None,
+            plot_type: PlotType::default(),
+            ms_level: 1, // Default to MS1
+            polarity: ScanPolarity::default(),
+            mass_input: String::default(),
+            mass_tolerance_input: String::default(),
+            mass: f64::default(),
+            mass_tolerance: f64::default(),
+            line_type: LineType::default(),
+            line_color: LineColor::default(),
+            smoothing: u8::default(),
+            line_width: f32::default(),
+            retention_time_ms_spectrum: None,
+            range_enabled: bool::default(),
+            range_min_input: String::default(),
+            range_max_input: String::default(),
+            range_min: f64::default(),
+            range_max: f64::default(),
+        }
+    }
 }
 
 #[derive(Default, Debug, PartialEq)]
@@ -236,6 +273,11 @@ impl MzViewerApp {
             next_file_id: 0,
             user_input: UserInput {
                 line_width: 1.0,
+                range_enabled: false,
+                range_min_input: String::new(),
+                range_max_input: String::new(),
+                range_min: 0.0,
+                range_max: 0.0,
                 ..Default::default()
             },
             invalid_file: FileValidity::Invalid,
@@ -362,11 +404,23 @@ impl MzViewerApp {
             None
         };
 
+        // Build m/z range filter for TIC/BPC if enabled
+        let mz_range = if self.user_input.range_enabled
+            && self.user_input.plot_type != PlotType::Xic
+            && self.user_input.range_min < self.user_input.range_max
+        {
+            Some((self.user_input.range_min, self.user_input.range_max))
+        } else {
+            None
+        };
+
         Ok(ProcessingParams {
             plot_type: self.user_input.plot_type,
+            ms_level: self.user_input.ms_level,
             polarity: self.user_input.polarity,
             smoothing: self.user_input.smoothing,
             xic_params,
+            mz_range,
         })
     }
 
@@ -807,6 +861,36 @@ impl MzViewerApp {
                 match self.create_open_file(path, color_index, file_id) {
                     Ok(open_file) => {
                         info!("File added successfully: {:?} with ID {}", path, file_id);
+
+                        // Set default scan filter from the first file if this is the first file being opened
+                        if first_new_file_id == Some(file_id) && self.files.is_empty() {
+                            // Prefer MS1 Positive, fallback to first available
+                            if open_file
+                                .data
+                                .available_scan_filters
+                                .iter()
+                                .any(|(ms, pol)| *ms == 1 && *pol == ScanPolarity::Positive)
+                            {
+                                self.user_input.ms_level = 1;
+                                self.user_input.polarity = ScanPolarity::Positive;
+                                info!("Set default scan filter to MS1 Positive");
+                            } else if !open_file.data.available_scan_filters.is_empty() {
+                                // Get first available scan filter (sorted)
+                                let mut filters = open_file.data.available_scan_filters.to_vec();
+                                filters.sort_by_key(|(ms_level, polarity)| {
+                                    (*ms_level, format!("{:?}", polarity))
+                                });
+                                if let Some((ms_level, polarity)) = filters.first() {
+                                    self.user_input.ms_level = *ms_level;
+                                    self.user_input.polarity = *polarity;
+                                    info!(
+                                        "Set default scan filter to MS{} {:?}",
+                                        ms_level, polarity
+                                    );
+                                }
+                            }
+                        }
+
                         self.files.insert(file_id, open_file);
                     }
                     Err(e) => {
@@ -820,6 +904,14 @@ impl MzViewerApp {
             if let Some(first_id) = first_new_file_id {
                 self.active_file_id = Some(first_id);
                 self.invalid_file = FileValidity::Valid;
+
+                // Ensure we're in a safe state for initial processing
+                // If plot type is XIC but mass is invalid, switch to TIC
+                if self.user_input.plot_type == PlotType::Xic && self.user_input.mass <= 0.0 {
+                    info!("Switching to TIC plot type for initial file opening (XIC requires valid mass)");
+                    self.user_input.plot_type = PlotType::Tic;
+                }
+
                 self.state_changed = StateChange::Changed;
                 info!("Active file set to ID: {}", first_id);
             }
@@ -1168,50 +1260,89 @@ impl MzViewerApp {
     ///
     /// This function does not return any errors. It handles the rendering of the plot properties UI elements within the provided `Ui`.
     fn add_plot_properties(&mut self, ui: &mut Ui) {
-        egui::Grid::new("TextLayoutDemo")
+        egui::Grid::new("PlotPropertiesGrid")
             .num_columns(2)
             .striped(true)
             .show(ui, |ui| {
-                self.add_polarity_options(ui);
+                // Row 1: Scan Filter (dropdown selector)
+                self.add_scan_filter_dropdown(ui);
                 ui.end_row();
+
+                // Row 2: Plot Type
                 self.add_plot_type_options(ui);
                 ui.end_row();
+
+                // Row 3: Range (only for TIC/BPC)
+                if self.user_input.plot_type != PlotType::Xic {
+                    self.add_range_options(ui);
+                    ui.end_row();
+                }
             });
     }
 
-    /// Adds the polarity options UI elements to the provided `Ui`.
+    /// Displays scan filter information from the active file.
     ///
-    /// This function renders the UI elements that allow the user to select the polarity of the mass spectrometry data. It updates the `user_input.polarity` and `state_changed` fields based on the user's selection.
-    ///
-    /// # Parameters
-    ///
-    /// - `ui`: A mutable reference to the `egui::Ui` object, which is used to render the UI elements.
-    fn add_polarity_options(&mut self, ui: &mut Ui) {
-        ui.label("Polarity");
-        ui.horizontal(|ui| {
-            if ui
-                .radio_value(
-                    &mut self.user_input.polarity,
-                    ScanPolarity::Positive,
-                    "Positive",
-                )
-                .clicked()
-            {
-                self.user_input.polarity = ScanPolarity::Positive;
-                self.state_changed = StateChange::Changed;
+    /// Shows polarity, scan type, and m/z range in a format similar to
+    /// Thermo's Qual Browser scan filter display.
+    fn add_scan_filter_dropdown(&mut self, ui: &mut Ui) {
+        ui.label("Scan Filter:");
+
+        // Get available scan filters and bounds from active file
+        let (available_filters, bounds) = if let Some(active_id) = self.active_file_id {
+            if let Some(file) = self.files.get(&active_id) {
+                let mut filters = file.data.available_scan_filters.to_vec();
+                filters.sort_by_key(|(ms_level, polarity)| (*ms_level, format!("{:?}", polarity)));
+                (filters, Some(&file.data.bounds))
+            } else {
+                (vec![], None)
             }
-            if ui
-                .radio_value(
-                    &mut self.user_input.polarity,
-                    ScanPolarity::Negative,
-                    "Negative",
-                )
-                .clicked()
-            {
-                self.user_input.polarity = ScanPolarity::Negative;
-                self.state_changed = StateChange::Changed;
-            }
-        });
+        } else {
+            (vec![], None)
+        };
+
+        if available_filters.is_empty() {
+            ui.colored_label(egui::Color32::GRAY, "No file opened");
+            return;
+        }
+
+        // Format current selection for display with m/z range
+        let current_selection = if let Some(bounds) = bounds {
+            format!(
+                "MS{} {:?} [m/z {:.2} - {:.2}]",
+                self.user_input.ms_level, self.user_input.polarity, bounds.min_mz, bounds.max_mz
+            )
+        } else {
+            format!(
+                "MS{} {:?}",
+                self.user_input.ms_level, self.user_input.polarity
+            )
+        };
+
+        egui::ComboBox::from_label("")
+            .selected_text(current_selection)
+            .show_ui(ui, |ui| {
+                for (ms_level, polarity) in available_filters {
+                    // Include m/z range in dropdown items
+                    let label = if let Some(bounds) = bounds {
+                        format!(
+                            "MS{} {:?} [m/z {:.2} - {:.2}]",
+                            ms_level, polarity, bounds.min_mz, bounds.max_mz
+                        )
+                    } else {
+                        format!("MS{} {:?}", ms_level, polarity)
+                    };
+
+                    let is_selected = self.user_input.ms_level == ms_level
+                        && self.user_input.polarity == polarity;
+
+                    if ui.selectable_label(is_selected, &label).clicked() {
+                        self.user_input.ms_level = ms_level;
+                        self.user_input.polarity = polarity;
+                        self.state_changed = StateChange::Changed;
+                        info!("Scan filter changed to: {}", label);
+                    }
+                }
+            });
     }
 
     /// Adds the plot type options UI elements to the provided `Ui`.
@@ -1248,6 +1379,96 @@ impl MzViewerApp {
         });
     }
 
+    /// Adds m/z range filtering options for TIC/BPC plots.
+    ///
+    /// Allows users to restrict the mass range used for chromatogram calculation.
+    /// Only available for TIC and Base Peak plots (not XIC).
+    fn add_range_options(&mut self, ui: &mut Ui) {
+        ui.label("Range (m/z):");
+
+        ui.horizontal(|ui| {
+            // Checkbox to enable/disable range filtering
+            if ui
+                .checkbox(&mut self.user_input.range_enabled, "")
+                .changed()
+            {
+                self.state_changed = StateChange::Changed;
+                info!("Range filtering toggled: {}", self.user_input.range_enabled);
+            }
+
+            if self.user_input.range_enabled {
+                // Min m/z input
+                ui.label("Min:");
+                let min_response = ui.add(
+                    egui::TextEdit::singleline(&mut self.user_input.range_min_input)
+                        .desired_width(70.0)
+                        .hint_text("0.0"),
+                );
+
+                if min_response.lost_focus() {
+                    if let Ok(parsed) = self.user_input.range_min_input.parse::<f64>() {
+                        if parsed >= 0.0 {
+                            self.user_input.range_min = parsed;
+                            self.state_changed = StateChange::Changed;
+                            info!("Range min set to: {}", parsed);
+                        } else {
+                            self.show_error_dialog("Min m/z must be non-negative".to_string());
+                            self.user_input.range_min_input = self.user_input.range_min.to_string();
+                        }
+                    } else if !self.user_input.range_min_input.is_empty() {
+                        self.show_error_dialog("Invalid min m/z format".to_string());
+                        self.user_input.range_min_input = self.user_input.range_min.to_string();
+                    }
+                }
+
+                ui.label("-");
+
+                // Max m/z input
+                ui.label("Max:");
+                let max_response = ui.add(
+                    egui::TextEdit::singleline(&mut self.user_input.range_max_input)
+                        .desired_width(70.0)
+                        .hint_text("2000.0"),
+                );
+
+                if max_response.lost_focus() {
+                    if let Ok(parsed) = self.user_input.range_max_input.parse::<f64>() {
+                        if parsed > self.user_input.range_min {
+                            self.user_input.range_max = parsed;
+                            self.state_changed = StateChange::Changed;
+                            info!("Range max set to: {}", parsed);
+                        } else {
+                            self.show_error_dialog(
+                                "Max m/z must be greater than min m/z".to_string(),
+                            );
+                            self.user_input.range_max_input = self.user_input.range_max.to_string();
+                        }
+                    } else if !self.user_input.range_max_input.is_empty() {
+                        self.show_error_dialog("Invalid max m/z format".to_string());
+                        self.user_input.range_max_input = self.user_input.range_max.to_string();
+                    }
+                }
+
+                // Show current file's full range for reference
+                if let Some(active_id) = self.active_file_id {
+                    if let Some(file) = self.files.get(&active_id) {
+                        let bounds = &file.data.bounds;
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "(File: {:.0}-{:.0})",
+                                bounds.min_mz, bounds.max_mz
+                            ))
+                            .small()
+                            .color(egui::Color32::GRAY),
+                        );
+                    }
+                }
+            } else {
+                ui.colored_label(egui::Color32::GRAY, "Full range (all m/z values)");
+            }
+        });
+    }
+
     /// Updates the XIC (Extracted Ion Chromatogram) settings window.
     ///
     /// This function is responsible for rendering the UI elements that allow the user to configure the settings for the XIC plot, such as the m/z value and mass tolerance.
@@ -1280,6 +1501,9 @@ impl MzViewerApp {
                 .open(&mut self.options_window_open)
                 .show(ctx, |ui| {
                     ui.label("Enter m/z and mass tolerance values in ppm:");
+
+                    ui.add_space(5.0);
+                    ui.separator();
 
                     // Show valid ranges if file is opened
                     if let Some(active_id) = self.active_file_id {
