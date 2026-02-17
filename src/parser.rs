@@ -26,9 +26,6 @@ use std::fs::File;
 use std::path::PathBuf;
 
 /// Represents a data structure for storing mass spectrometry data.
-const MS_LEVEL: u8 = 1;
-
-/// Represents a data structure for storing mass spectrometry data.
 pub struct MzData {
     /// An optional `String` representing the name of the data file.
     file_name: Option<String>,
@@ -48,6 +45,9 @@ pub struct MzData {
     mass_spectrum: Option<(Vec<f64>, Vec<f32>)>,
     /// Valid parameter ranges for this file (extracted during opening)
     pub bounds: DataBounds,
+    /// Vector of unique (ms_level, polarity) combinations found in this file
+    /// Extracted during file opening for populating UI dropdowns
+    pub available_scan_filters: Vec<(u8, ScanPolarity)>,
 }
 
 impl core::fmt::Debug for MzData {
@@ -92,6 +92,7 @@ impl MzData {
             plot_data: None,
             mass_spectrum: None,
             bounds: DataBounds::unrestricted(),
+            available_scan_filters: Vec::new(),
         }
     }
     /// Opens an MzML file at the specified path and sets it as the current file for the `self` object.
@@ -147,6 +148,9 @@ impl MzData {
     /// Called automatically during open_msfile. Iterates through all spectra
     /// to determine the valid parameter ranges for this file.
     ///
+    /// The m/z range is extracted from all peaks across all spectra, then rounded
+    /// down (floor) and up (ceil) for nice display values.
+    ///
     /// # Returns
     /// * `Ok(())` - If bounds were successfully extracted
     /// * `Err(ChromascopeError::FileNotOpened)` - If no peaks found in file
@@ -168,29 +172,47 @@ impl MzData {
         let mut min_rt = f32::MAX;
         let mut max_rt = f32::MIN;
         let mut scan_count = 0;
+        let mut scan_filters = Vec::new();
 
-        // Iterate through all spectra to find bounds
+        // Iterate through all spectra to find bounds and collect scan filters
         for spectrum in reader.iter() {
             scan_count += 1;
+
+            // Extract m/z range from all spectra's peaks
+            if let Some(arrays) = spectrum.arrays.as_ref() {
+                if let Ok(mzs) = arrays.mzs() {
+                    // Find min and max m/z from all peaks in this spectrum
+                    for &mz in mzs.iter() {
+                        min_mz = min_mz.min(mz);
+                        max_mz = max_mz.max(mz);
+                    }
+                }
+            }
+
+            // Collect unique (ms_level, polarity) combinations
+            let ms_level = spectrum.description.ms_level;
+            let polarity = spectrum.description.polarity;
+            let pair = (ms_level, polarity);
+            if !scan_filters.contains(&pair) {
+                scan_filters.push(pair);
+            }
 
             // Update RT bounds
             let rt = spectrum.start_time() as f32;
             min_rt = min_rt.min(rt);
             max_rt = max_rt.max(rt);
-
-            // Update m/z bounds from base peak (fast approximation)
-            let base_peak = spectrum.peaks().base_peak();
-            let mz = base_peak.mz;
-            min_mz = min_mz.min(mz);
-            max_mz = max_mz.max(mz);
         }
 
-        // Handle edge case: no peaks found
+        // Handle edge case: no valid data found
         if min_mz == f64::MAX || max_mz == f64::MIN {
             return Err(ChromascopeError::FileNotOpened(
                 "No valid peaks found in file".into(),
             ));
         }
+
+        // Round down min and round up max for nice display values
+        min_mz = min_mz.floor();
+        max_mz = max_mz.ceil();
 
         self.bounds = DataBounds {
             min_mz,
@@ -200,9 +222,11 @@ impl MzData {
             scan_count,
         };
 
+        self.available_scan_filters = scan_filters;
+
         info!(
-            "Extracted bounds: m/z [{:.2}-{:.2}], RT [{:.2}-{:.2}] min, {} scans",
-            min_mz, max_mz, min_rt, max_rt, scan_count
+            "Extracted bounds: m/z [{:.2}-{:.2}], RT [{:.2}-{:.2}] min, {} scans, {} unique scan filters",
+            min_mz, max_mz, min_rt, max_rt, scan_count, self.available_scan_filters.len()
         );
 
         Ok(())
@@ -227,8 +251,16 @@ impl MzData {
     ///
     /// # Errors
     /// If there is an error while accessing the `msfile` field, an error message is logged, and the function returns an error.
-    pub fn get_bpic(&mut self, polarity: ScanPolarity) -> Result<&mut Self> {
-        info!("Attempting to read BIC of {:?}", &self.file_name);
+    pub fn get_bpic(
+        &mut self,
+        ms_level: u8,
+        polarity: ScanPolarity,
+        mz_range: Option<(f64, f64)>,
+    ) -> Result<&mut Self> {
+        info!(
+            "Attempting to read BIC of {:?} at MS{} {:?}",
+            &self.file_name, ms_level, polarity
+        );
 
         // Check if file is opened before proceeding
         if self.msfile.is_err() {
@@ -240,12 +272,45 @@ impl MzData {
 
         let (retention_time, intensity, mz, index) = reader
             .iter()
-            .filter(|spectrum| spectrum.description.polarity == polarity)
+            .filter(|spectrum| {
+                spectrum.description.ms_level == ms_level
+                    && spectrum.description.polarity == polarity
+            })
             .map(|spectrum| {
                 let retention_time = spectrum.start_time() as f32;
-                let intensity = spectrum.peaks().base_peak().intensity;
-                let mz = spectrum.peaks().base_peak().mz as f32;
                 let index = spectrum.index();
+
+                // If mz_range is specified, filter peaks by range
+                let (intensity, mz) = if let Some((min_mz, max_mz)) = mz_range {
+                    // Convert to centroid and filter peaks
+                    let centroided = spectrum.clone().into_centroid().unwrap_or_else(|_| {
+                        // If centroiding fails, return empty spectrum
+                        warn!("Failed to centroid spectrum at RT {}", retention_time);
+                        spectrum.clone().into_centroid().unwrap()
+                    });
+
+                    // Find the base peak within the m/z range
+                    let max_peak = centroided
+                        .peaks
+                        .iter()
+                        .filter(|peak| peak.mz >= min_mz && peak.mz <= max_mz)
+                        .max_by(|a, b| {
+                            a.intensity
+                                .partial_cmp(&b.intensity)
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                        });
+
+                    if let Some(peak) = max_peak {
+                        (peak.intensity, peak.mz as f32)
+                    } else {
+                        (0.0, 0.0)
+                    }
+                } else {
+                    // No range filter - use normal base peak
+                    let base_peak = spectrum.peaks().base_peak();
+                    (base_peak.intensity, base_peak.mz as f32)
+                };
+
                 (retention_time, intensity, mz, index)
             })
             .fold(
@@ -291,8 +356,16 @@ impl MzData {
     ///
     /// # Errors
     /// If there is an error while accessing the `msfile` field, an error message is logged, and the function returns an error.
-    pub fn get_tic(&mut self, polarity: ScanPolarity) -> Result<&mut Self> {
-        info!("Attempting to read TIC of {:?}", &self.file_name);
+    pub fn get_tic(
+        &mut self,
+        ms_level: u8,
+        polarity: ScanPolarity,
+        mz_range: Option<(f64, f64)>,
+    ) -> Result<&mut Self> {
+        info!(
+            "Attempting to read TIC of {:?} at MS{} {:?}",
+            &self.file_name, ms_level, polarity
+        );
 
         // Check if file is opened before proceeding
         if self.msfile.is_err() {
@@ -304,13 +377,46 @@ impl MzData {
 
         let (retention_time, intensity, index) = reader
             .iter()
-            .filter(|spectrum| spectrum.description.polarity == polarity)
-            .fold((Vec::new(), Vec::new(), Vec::new()), |mut acc, spectrum| {
-                acc.0.push(spectrum.start_time() as f32);
-                acc.1.push(spectrum.peaks().tic());
-                acc.2.push(spectrum.index());
-                acc
-            });
+            .filter(|spectrum| {
+                spectrum.description.ms_level == ms_level
+                    && spectrum.description.polarity == polarity
+            })
+            .map(|spectrum| {
+                let rt = spectrum.start_time() as f32;
+                let idx = spectrum.index();
+
+                // Calculate TIC with optional m/z range filtering
+                let tic = if let Some((min_mz, max_mz)) = mz_range {
+                    // Convert to centroid and sum filtered peaks
+                    let centroided = spectrum.clone().into_centroid().unwrap_or_else(|_| {
+                        // If centroiding fails, return empty spectrum
+                        warn!("Failed to centroid spectrum at RT {}", rt);
+                        spectrum.clone().into_centroid().unwrap()
+                    });
+
+                    // Sum intensities of peaks within m/z range
+                    centroided
+                        .peaks
+                        .iter()
+                        .filter(|peak| peak.mz >= min_mz && peak.mz <= max_mz)
+                        .map(|peak| peak.intensity)
+                        .sum()
+                } else {
+                    // No range filter - use normal TIC
+                    spectrum.peaks().tic()
+                };
+
+                (rt, tic, idx)
+            })
+            .fold(
+                (Vec::new(), Vec::new(), Vec::new()),
+                |mut acc, (rt, tic, idx)| {
+                    acc.0.push(rt);
+                    acc.1.push(tic);
+                    acc.2.push(idx);
+                    acc
+                },
+            );
 
         self.retention_time = Some(retention_time);
         self.intensity = Some(intensity);
@@ -352,10 +458,14 @@ impl MzData {
     pub fn get_xic(
         &mut self,
         mass: f64,
+        ms_level: u8,
         polarity: ScanPolarity,
         mass_tolerance: f64,
     ) -> Result<&mut Self> {
-        info!("Attempting to read XIC of {:?}", &self.file_name);
+        info!(
+            "Attempting to read XIC of {:?} at MS{} {:?}",
+            &self.file_name, ms_level, polarity
+        );
 
         // Validate input parameters
         if mass <= 0.0 {
@@ -380,7 +490,7 @@ impl MzData {
         self.mz = Some(Vec::new());
 
         for spectrum in reader.iter() {
-            if spectrum.description.ms_level == MS_LEVEL
+            if spectrum.description.ms_level == ms_level
                 && spectrum.description.polarity == polarity
             {
                 // Store spectrum position in file (not peak position)
@@ -737,7 +847,7 @@ mod tests {
     /// Helper function to create parser with TIC already extracted
     fn setup_with_tic() -> MzData {
         let mut mzdata = setup_test_parser();
-        mzdata.get_tic(ScanPolarity::Positive).unwrap();
+        mzdata.get_tic(1, ScanPolarity::Positive, None).unwrap();
         mzdata
     }
 
@@ -767,6 +877,138 @@ mod tests {
     }
 
     #[test]
+    fn test_bounds_accuracy() {
+        let mut mzdata = setup_test_parser();
+
+        // Get the extracted bounds
+        let bounds = &mzdata.bounds;
+
+        // Verify bounds are not infinity values (edge case check)
+        assert!(bounds.min_mz != f64::MAX, "min_mz should be extracted");
+        assert!(bounds.max_mz != f64::MIN, "max_mz should be extracted");
+        assert!(
+            bounds.min_mz < bounds.max_mz,
+            "min_mz should be less than max_mz"
+        );
+
+        // Sample multiple spectra to verify bounds encompass all peaks
+        let reader = mzdata.msfile.as_mut().unwrap();
+
+        let mut spectrum_count = 0;
+        let mut peaks_checked = 0;
+
+        for (idx, spectrum) in reader.iter().enumerate() {
+            // Check first 5, middle 5, and last 5 spectra
+            let total_spectra = bounds.scan_count as usize;
+            let is_first = idx < 5;
+            let is_middle = idx >= total_spectra / 2 && idx < total_spectra / 2 + 5;
+            let is_last = idx >= total_spectra.saturating_sub(5);
+
+            if is_first || is_middle || is_last {
+                spectrum_count += 1;
+
+                if let Some(arrays) = spectrum.arrays.as_ref() {
+                    if let Ok(mzs) = arrays.mzs() {
+                        for &mz in mzs.iter() {
+                            peaks_checked += 1;
+
+                            // Each peak should be within the extracted bounds
+                            assert!(
+                                mz >= bounds.min_mz,
+                                "Peak m/z {} in spectrum {} is below bounds.min_mz {}",
+                                mz,
+                                idx,
+                                bounds.min_mz
+                            );
+                            assert!(
+                                mz <= bounds.max_mz,
+                                "Peak m/z {} in spectrum {} is above bounds.max_mz {}",
+                                mz,
+                                idx,
+                                bounds.max_mz
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        assert!(
+            spectrum_count > 0,
+            "Should have checked at least one spectrum"
+        );
+        assert!(peaks_checked > 0, "Should have checked at least one peak");
+    }
+
+    #[test]
+    fn test_bounds_span_all_spectra() {
+        let mut mzdata = setup_test_parser();
+
+        let bounds = &mzdata.bounds;
+
+        // Manually iterate first and last few spectra to find their individual ranges
+        let reader = mzdata.msfile.as_mut().unwrap();
+
+        let mut first_spectra_min = f64::MAX;
+        let mut first_spectra_max = f64::MIN;
+        let mut last_spectra_min = f64::MAX;
+        let mut last_spectra_max = f64::MIN;
+
+        let total_spectra = bounds.scan_count as usize;
+
+        for (idx, spectrum) in reader.iter().enumerate() {
+            if let Some(arrays) = spectrum.arrays.as_ref() {
+                if let Ok(mzs) = arrays.mzs() {
+                    for &mz in mzs.iter() {
+                        // Track first 5 spectra
+                        if idx < 5 {
+                            first_spectra_min = first_spectra_min.min(mz);
+                            first_spectra_max = first_spectra_max.max(mz);
+                        }
+
+                        // Track last 5 spectra
+                        if idx >= total_spectra.saturating_sub(5) {
+                            last_spectra_min = last_spectra_min.min(mz);
+                            last_spectra_max = last_spectra_max.max(mz);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Bounds should encompass both first and last spectra ranges
+        if first_spectra_min != f64::MAX {
+            assert!(
+                bounds.min_mz <= first_spectra_min,
+                "Bounds min_mz ({}) should be <= first spectra min ({})",
+                bounds.min_mz,
+                first_spectra_min
+            );
+            assert!(
+                bounds.max_mz >= first_spectra_max,
+                "Bounds max_mz ({}) should be >= first spectra max ({})",
+                bounds.max_mz,
+                first_spectra_max
+            );
+        }
+
+        if last_spectra_min != f64::MAX {
+            assert!(
+                bounds.min_mz <= last_spectra_min,
+                "Bounds min_mz ({}) should be <= last spectra min ({})",
+                bounds.min_mz,
+                last_spectra_min
+            );
+            assert!(
+                bounds.max_mz >= last_spectra_max,
+                "Bounds max_mz ({}) should be >= last spectra max ({})",
+                bounds.max_mz,
+                last_spectra_max
+            );
+        }
+    }
+
+    #[test]
     fn test_get_xic() {
         let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         d.push(TEST_FILE);
@@ -778,7 +1020,7 @@ mod tests {
 
         mzdata.open_msfile(&normalized_d).unwrap();
 
-        let result = mzdata.get_xic(722.43, ScanPolarity::Positive, 1000.0);
+        let result = mzdata.get_xic(722.43, 1, ScanPolarity::Positive, 1000.0);
         assert!(result.is_ok());
         assert!(!mzdata.retention_time().is_none());
         assert!(!mzdata.intensity().is_none());
@@ -795,7 +1037,7 @@ mod tests {
 
         mzdata.open_msfile(&normalized_d).unwrap();
 
-        let result = mzdata.get_tic(ScanPolarity::Positive);
+        let result = mzdata.get_tic(1, ScanPolarity::Positive, None);
         assert!(result.is_ok());
         assert!(!mzdata.retention_time().is_none());
         assert!(!mzdata.intensity().is_none());
@@ -821,7 +1063,7 @@ mod tests {
     fn test_get_bpic() {
         let mut mzdata = setup_test_parser();
 
-        let result = mzdata.get_bpic(ScanPolarity::Positive);
+        let result = mzdata.get_bpic(1, ScanPolarity::Positive, None);
         assert!(result.is_ok());
         assert!(mzdata.retention_time().is_some());
         assert!(mzdata.intensity().is_some());
@@ -844,7 +1086,7 @@ mod tests {
     fn test_get_bpic_negative_polarity() {
         let mut mzdata = setup_test_parser();
 
-        let result = mzdata.get_bpic(ScanPolarity::Negative);
+        let result = mzdata.get_bpic(1, ScanPolarity::Negative, None);
         assert!(result.is_ok());
         // Negative polarity may have no data in this test file
         // but should still return Ok without panicking
@@ -854,7 +1096,7 @@ mod tests {
     fn test_get_bpic_unknown_polarity() {
         let mut mzdata = setup_test_parser();
 
-        let result = mzdata.get_bpic(ScanPolarity::Unknown);
+        let result = mzdata.get_bpic(1, ScanPolarity::Unknown, None);
         assert!(result.is_ok());
         assert!(mzdata.retention_time().is_some());
         assert!(mzdata.intensity().is_some());
@@ -900,7 +1142,7 @@ mod tests {
 
         // Extract XIC (now stores one entry per spectrum with summed intensities)
         mzdata
-            .get_xic(722.43, ScanPolarity::Positive, 1000.0)
+            .get_xic(722.43, 1, ScanPolarity::Positive, 1000.0)
             .unwrap();
 
         let result = mzdata.prepare_for_plot();
@@ -1116,7 +1358,7 @@ mod tests {
 
         // Extract XIC with narrow tolerance to potentially get single point
         mzdata
-            .get_xic(722.43, ScanPolarity::Positive, 0.001)
+            .get_xic(722.43, 1, ScanPolarity::Positive, 0.001)
             .unwrap();
 
         if let Some(rt) = mzdata.retention_time().as_ref() {
@@ -1143,7 +1385,7 @@ mod tests {
     fn test_get_xic_zero_tolerance() {
         let mut mzdata = setup_test_parser();
 
-        let _result = mzdata.get_xic(722.43, ScanPolarity::Positive, 0.0);
+        let _result = mzdata.get_xic(722.43, 1, ScanPolarity::Positive, 0.0);
         // Should either handle gracefully or return an error, not panic
         // Implementation may vary, so we just check it doesn't crash
     }
@@ -1152,7 +1394,7 @@ mod tests {
     fn test_get_xic_negative_tolerance() {
         let mut mzdata = setup_test_parser();
 
-        let _result = mzdata.get_xic(722.43, ScanPolarity::Positive, -1.0);
+        let _result = mzdata.get_xic(722.43, 1, ScanPolarity::Positive, -1.0);
         // Should handle gracefully, not panic
     }
 
@@ -1161,7 +1403,7 @@ mod tests {
         let mut mzdata = setup_test_parser();
 
         // Use a very narrow tolerance and unlikely m/z value
-        let result = mzdata.get_xic(50000.0, ScanPolarity::Positive, 0.0001);
+        let result = mzdata.get_xic(50000.0, 1, ScanPolarity::Positive, 0.0001);
         assert!(result.is_ok());
 
         // May have empty or minimal data
@@ -1183,7 +1425,7 @@ mod tests {
 
         for polarity in polarities {
             let mut test_data = setup_test_parser();
-            let result = test_data.get_tic(polarity);
+            let result = test_data.get_tic(1, polarity, None);
             assert!(result.is_ok(), "TIC should handle all polarity types");
         }
     }
@@ -1198,7 +1440,7 @@ mod tests {
 
         for polarity in polarities {
             let mut test_data = setup_test_parser();
-            let result = test_data.get_xic(722.43, polarity, 1000.0);
+            let result = test_data.get_xic(722.43, 1, polarity, 1000.0);
             assert!(result.is_ok(), "XIC should handle all polarity types");
         }
     }
@@ -1259,7 +1501,7 @@ mod tests {
         let mut mzdata = setup_test_parser();
 
         // Full pipeline: extract TIC -> prepare for plot -> smooth
-        mzdata.get_tic(ScanPolarity::Positive).unwrap();
+        mzdata.get_tic(1, ScanPolarity::Positive, None).unwrap();
 
         let plot_data = mzdata.prepare_for_plot().unwrap();
         assert!(plot_data.len() > 0);
@@ -1276,7 +1518,7 @@ mod tests {
 
         // Full pipeline: extract XIC -> prepare for plot
         mzdata
-            .get_xic(722.43, ScanPolarity::Positive, 1000.0)
+            .get_xic(722.43, 1, ScanPolarity::Positive, 1000.0)
             .unwrap();
 
         let plot_data = mzdata.prepare_for_plot().unwrap();
@@ -1288,17 +1530,17 @@ mod tests {
         let mut mzdata = setup_test_parser();
 
         // Extract TIC
-        mzdata.get_tic(ScanPolarity::Positive).unwrap();
+        mzdata.get_tic(1, ScanPolarity::Positive, None).unwrap();
         let tic_rt_count = mzdata.retention_time().as_ref().unwrap().len();
 
         // Switch to XIC
         mzdata
-            .get_xic(722.43, ScanPolarity::Positive, 1000.0)
+            .get_xic(722.43, 1, ScanPolarity::Positive, 1000.0)
             .unwrap();
         let _xic_rt_count = mzdata.retention_time().as_ref().unwrap().len();
 
         // Switch to BIC
-        mzdata.get_bpic(ScanPolarity::Positive).unwrap();
+        mzdata.get_bpic(1, ScanPolarity::Positive, None).unwrap();
         let _bic_rt_count = mzdata.retention_time().as_ref().unwrap().len();
 
         // All should work without crashing
@@ -1314,7 +1556,7 @@ mod tests {
         let masses = vec![722.43, 500.0, 1000.0];
 
         for mass in masses {
-            let result = mzdata.get_xic(mass, ScanPolarity::Positive, 1000.0);
+            let result = mzdata.get_xic(mass, 1, ScanPolarity::Positive, 1000.0);
             assert!(result.is_ok());
         }
     }
@@ -1346,7 +1588,7 @@ mod tests {
     fn test_get_bpic_file_not_opened() {
         let mut mzdata = MzData::new();
 
-        let result = mzdata.get_bpic(ScanPolarity::Positive);
+        let result = mzdata.get_bpic(1, ScanPolarity::Positive, None);
         assert!(
             result.is_err(),
             "get_bpic should return Err when file not opened"
@@ -1363,7 +1605,7 @@ mod tests {
     fn test_get_tic_file_not_opened() {
         let mut mzdata = MzData::new();
 
-        let result = mzdata.get_tic(ScanPolarity::Positive);
+        let result = mzdata.get_tic(1, ScanPolarity::Positive, None);
         assert!(
             result.is_err(),
             "get_tic should return Err when file not opened"
@@ -1380,7 +1622,7 @@ mod tests {
     fn test_get_xic_file_not_opened() {
         let mut mzdata = MzData::new();
 
-        let result = mzdata.get_xic(722.43, ScanPolarity::Positive, 1000.0);
+        let result = mzdata.get_xic(722.43, 1, ScanPolarity::Positive, 1000.0);
         assert!(
             result.is_err(),
             "get_xic should return Err when file not opened"
@@ -1398,7 +1640,7 @@ mod tests {
         let mut mzdata = MzData::new();
 
         // Try to extract without opening file
-        let _ = mzdata.get_bpic(ScanPolarity::Positive);
+        let _ = mzdata.get_bpic(1, ScanPolarity::Positive, None);
 
         // Data fields should remain None (not partially filled)
         assert!(
@@ -1418,7 +1660,7 @@ mod tests {
         let mut mzdata = MzData::new();
 
         // Test negative mass
-        let result = mzdata.get_xic(-100.0, ScanPolarity::Positive, 10.0);
+        let result = mzdata.get_xic(-100.0, 1, ScanPolarity::Positive, 10.0);
         assert!(result.is_err(), "get_xic should reject negative mass");
         assert!(
             matches!(
@@ -1429,7 +1671,7 @@ mod tests {
         );
 
         // Test zero mass
-        let result = mzdata.get_xic(0.0, ScanPolarity::Positive, 10.0);
+        let result = mzdata.get_xic(0.0, 1, ScanPolarity::Positive, 10.0);
         assert!(result.is_err(), "get_xic should reject zero mass");
         assert!(
             matches!(
@@ -1445,7 +1687,7 @@ mod tests {
         let mut mzdata = MzData::new();
 
         // Test negative tolerance
-        let result = mzdata.get_xic(100.0, ScanPolarity::Positive, -5.0);
+        let result = mzdata.get_xic(100.0, 1, ScanPolarity::Positive, -5.0);
         assert!(result.is_err(), "get_xic should reject negative tolerance");
         assert!(
             matches!(
@@ -1456,7 +1698,7 @@ mod tests {
         );
 
         // Test tolerance above 1000 ppm
-        let result = mzdata.get_xic(100.0, ScanPolarity::Positive, 5000.0);
+        let result = mzdata.get_xic(100.0, 1, ScanPolarity::Positive, 5000.0);
         assert!(result.is_err(), "get_xic should reject tolerance > 1000");
         assert!(
             matches!(
@@ -1489,7 +1731,7 @@ mod tests {
         let mut mzdata = MzData::new();
 
         // These should pass validation but fail because file not opened
-        let result = mzdata.get_xic(100.5, ScanPolarity::Positive, 10.0);
+        let result = mzdata.get_xic(100.5, 1, ScanPolarity::Positive, 10.0);
         assert!(result.is_err());
 
         // Should be FileNotOpened error, not InvalidMass or InvalidTolerance
@@ -1528,7 +1770,7 @@ mod tests {
 
         // Extract XIC with tolerance that will match multiple peaks per spectrum
         mzdata
-            .get_xic(722.43, ScanPolarity::Positive, 1000.0)
+            .get_xic(722.43, 1, ScanPolarity::Positive, 1000.0)
             .unwrap();
 
         let retention_times = mzdata.retention_time().as_ref().unwrap();
@@ -1574,7 +1816,7 @@ mod tests {
 
         // Extract XIC with wide tolerance to ensure multiple peaks per spectrum
         mzdata
-            .get_xic(722.43, ScanPolarity::Positive, 1000.0)
+            .get_xic(722.43, 1, ScanPolarity::Positive, 1000.0)
             .unwrap();
 
         let intensities = mzdata.intensity().as_ref().unwrap();
@@ -1595,7 +1837,7 @@ mod tests {
 
         // Extract XIC
         mzdata
-            .get_xic(722.43, ScanPolarity::Positive, 1000.0)
+            .get_xic(722.43, 1, ScanPolarity::Positive, 1000.0)
             .unwrap();
 
         let retention_times = mzdata.retention_time().as_ref().unwrap();
@@ -1652,7 +1894,7 @@ mod tests {
 
         // Extract XIC
         mzdata
-            .get_xic(722.43, ScanPolarity::Positive, 1000.0)
+            .get_xic(722.43, 1, ScanPolarity::Positive, 1000.0)
             .unwrap();
 
         let retention_times = mzdata.retention_time().as_ref().unwrap();
@@ -1684,9 +1926,9 @@ mod tests {
 
         // Extract both
         xic_data
-            .get_xic(722.43, ScanPolarity::Positive, 1000.0)
+            .get_xic(722.43, 1, ScanPolarity::Positive, 1000.0)
             .unwrap();
-        tic_data.get_tic(ScanPolarity::Positive).unwrap();
+        tic_data.get_tic(1, ScanPolarity::Positive, None).unwrap();
 
         let xic_rt = xic_data.retention_time().as_ref().unwrap();
         let xic_idx = xic_data.index().as_ref().unwrap();
@@ -1718,14 +1960,14 @@ mod tests {
 
         // Extract XIC
         mzdata
-            .get_xic(722.43, ScanPolarity::Positive, 1000.0)
+            .get_xic(722.43, 1, ScanPolarity::Positive, 1000.0)
             .unwrap();
 
         let indices = mzdata.index().as_ref().unwrap();
 
         // Get TIC to know the valid spectrum range
         let mut tic_data = setup_test_parser();
-        tic_data.get_tic(ScanPolarity::Positive).unwrap();
+        tic_data.get_tic(1, ScanPolarity::Positive, None).unwrap();
         let max_spectrum_idx = *tic_data.index().as_ref().unwrap().iter().max().unwrap();
 
         // All XIC indices should be valid spectrum indices (within file's spectrum range)
