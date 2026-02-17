@@ -383,6 +383,10 @@ impl MzData {
             if spectrum.description.ms_level == MS_LEVEL
                 && spectrum.description.polarity == polarity
             {
+                // Store spectrum position in file (not peak position)
+                let spectrum_idx = spectrum.index();
+                let spectrum_rt = spectrum.description.acquisition.scans[0].start_time as f32;
+
                 let centroided = spectrum.clone().into_centroid().map_err(|e| {
                     ChromascopeError::MzDataError(format!("Failed to centroid spectrum: {:?}", e))
                 })?;
@@ -390,22 +394,24 @@ impl MzData {
                     .peaks
                     .all_peaks_for(mass, Tolerance::PPM(mass_tolerance));
 
-                for peak in extracted_centroided {
+                // Sum all matching peak intensities for this spectrum (e.g., isotope cluster)
+                let total_intensity: f32 =
+                    extracted_centroided.iter().map(|peak| peak.intensity).sum();
+
+                // Only add ONE entry per spectrum if we found matching peaks
+                if total_intensity > 0.0 {
                     if let Some(rt) = &mut self.retention_time {
-                        rt.push(spectrum.description.acquisition.scans[0].start_time as f32);
+                        rt.push(spectrum_rt);
                     };
                     if let Some(intensity) = &mut self.intensity {
-                        intensity.push(peak.intensity);
+                        intensity.push(total_intensity);
                     };
                     if let Some(index) = &mut self.index {
-                        index.push(peak.index as usize);
+                        index.push(spectrum_idx);
                     };
                 }
             }
         }
-        if let Some(index) = &mut self.index {
-            index.sort()
-        }; // self.index was unordered in case of XIC
 
         debug!("Successfully extracted XIC from: {:?}", &self.file_name);
         trace!("Successfully extracted the XIC of {:?}. Rt is {:?}, Index is {:?}, Mz is {:?}, Intensity is {:?}, ", &self.file_name, &self.retention_time, &self.index, &self.mz, &self.intensity);
@@ -892,7 +898,7 @@ mod tests {
     fn test_prepare_for_plot_averages_duplicates() {
         let mut mzdata = setup_test_parser();
 
-        // Extract XIC which might have duplicate RTs
+        // Extract XIC (now stores one entry per spectrum with summed intensities)
         mzdata
             .get_xic(722.43, ScanPolarity::Positive, 1000.0)
             .unwrap();
@@ -1510,6 +1516,235 @@ mod tests {
                 result.is_ok(),
                 "smooth_data should accept window size {}",
                 window
+            );
+        }
+    }
+
+    // ========== Tests for XIC Data Structure Validation (Post-Fix) ==========
+
+    #[test]
+    fn test_xic_one_entry_per_spectrum_no_duplicates() {
+        let mut mzdata = setup_test_parser();
+
+        // Extract XIC with tolerance that will match multiple peaks per spectrum
+        mzdata
+            .get_xic(722.43, ScanPolarity::Positive, 1000.0)
+            .unwrap();
+
+        let retention_times = mzdata.retention_time().as_ref().unwrap();
+        let indices = mzdata.index().as_ref().unwrap();
+        let intensities = mzdata.intensity().as_ref().unwrap();
+
+        // All arrays should have same length
+        assert_eq!(retention_times.len(), indices.len());
+        assert_eq!(retention_times.len(), intensities.len());
+
+        // No duplicate retention times (each RT appears exactly once)
+        let mut rt_sorted = retention_times.clone();
+        rt_sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let mut unique_count = 0;
+        for i in 0..rt_sorted.len() {
+            if i == 0 || rt_sorted[i] != rt_sorted[i - 1] {
+                unique_count += 1;
+            }
+        }
+
+        assert_eq!(
+            unique_count,
+            retention_times.len(),
+            "XIC should have unique retention times (one entry per spectrum). Found {} unique out of {}",
+            unique_count,
+            retention_times.len()
+        );
+
+        // No duplicate indices (each spectrum appears exactly once)
+        let mut index_set = std::collections::HashSet::new();
+        for &idx in indices.iter() {
+            assert!(
+                index_set.insert(idx),
+                "Found duplicate spectrum index: {}. XIC should store one entry per spectrum.",
+                idx
+            );
+        }
+    }
+
+    #[test]
+    fn test_xic_sums_intensities_per_spectrum() {
+        let mut mzdata = setup_test_parser();
+
+        // Extract XIC with wide tolerance to ensure multiple peaks per spectrum
+        mzdata
+            .get_xic(722.43, ScanPolarity::Positive, 1000.0)
+            .unwrap();
+
+        let intensities = mzdata.intensity().as_ref().unwrap();
+
+        // All intensities should be positive (sum of matching peaks)
+        for &intensity in intensities.iter() {
+            assert!(
+                intensity > 0.0,
+                "All XIC intensities should be positive (sum of peaks), got: {}",
+                intensity
+            );
+        }
+    }
+
+    #[test]
+    fn test_xic_arrays_parallel_with_plot_data() {
+        let mut mzdata = setup_test_parser();
+
+        // Extract XIC
+        mzdata
+            .get_xic(722.43, ScanPolarity::Positive, 1000.0)
+            .unwrap();
+
+        let retention_times = mzdata.retention_time().as_ref().unwrap();
+
+        // Prepare plot data
+        let plot_data = mzdata.prepare_for_plot().unwrap();
+
+        // Filter out the edge case 0.0 RT that comes from prepare_for_plot()'s initialization
+        let valid_plot_data: Vec<_> = plot_data.iter().filter(|point| point[0] > 0.0).collect();
+
+        // Valid plot data should have approximately same length as raw data
+        assert!(
+            valid_plot_data.len() >= retention_times.len() - 1,
+            "Plot data should have approximately same length as raw data. Got {} vs {}",
+            valid_plot_data.len(),
+            retention_times.len()
+        );
+
+        // Plot data RTs should be within the range of raw data
+        if !valid_plot_data.is_empty() && !retention_times.is_empty() {
+            let min_rt = retention_times
+                .iter()
+                .min_by(|a, b| a.partial_cmp(b).unwrap())
+                .unwrap();
+            let max_rt = retention_times
+                .iter()
+                .max_by(|a, b| a.partial_cmp(b).unwrap())
+                .unwrap();
+
+            for point in valid_plot_data.iter() {
+                let plot_rt = point[0] as f32;
+                assert!(
+                    plot_rt >= *min_rt && plot_rt <= *max_rt,
+                    "Plot RT {} should be within raw data range [{}, {}]",
+                    plot_rt,
+                    min_rt,
+                    max_rt
+                );
+            }
+        }
+
+        // Plot data should be sorted (strictly increasing RTs, excluding the 0.0 edge case)
+        for i in 1..valid_plot_data.len() {
+            assert!(
+                valid_plot_data[i][0] > valid_plot_data[i - 1][0],
+                "Plot data should have strictly increasing RTs"
+            );
+        }
+    }
+
+    #[test]
+    fn test_xic_triple_click_finds_correct_spectrum() {
+        let mut mzdata = setup_test_parser();
+
+        // Extract XIC
+        mzdata
+            .get_xic(722.43, ScanPolarity::Positive, 1000.0)
+            .unwrap();
+
+        let retention_times = mzdata.retention_time().as_ref().unwrap();
+        let indices = mzdata.index().as_ref().unwrap();
+
+        if retention_times.len() > 0 {
+            // Get a retention time from the middle
+            let mid_idx = retention_times.len() / 2;
+            let target_rt = retention_times[mid_idx];
+            let expected_spectrum_idx = indices[mid_idx];
+
+            // Simulate triple-click: find closest index
+            let found_idx = mzdata.get_closest_index_by_time(Some(target_rt));
+
+            assert!(found_idx.is_some(), "Should find a spectrum index");
+            assert_eq!(
+                found_idx.unwrap(),
+                expected_spectrum_idx,
+                "Should find the correct spectrum index for RT {}",
+                target_rt
+            );
+        }
+    }
+
+    #[test]
+    fn test_xic_structure_matches_tic() {
+        let mut xic_data = setup_test_parser();
+        let mut tic_data = setup_test_parser();
+
+        // Extract both
+        xic_data
+            .get_xic(722.43, ScanPolarity::Positive, 1000.0)
+            .unwrap();
+        tic_data.get_tic(ScanPolarity::Positive).unwrap();
+
+        let xic_rt = xic_data.retention_time().as_ref().unwrap();
+        let xic_idx = xic_data.index().as_ref().unwrap();
+        let xic_int = xic_data.intensity().as_ref().unwrap();
+
+        let tic_rt = tic_data.retention_time().as_ref().unwrap();
+        let tic_idx = tic_data.index().as_ref().unwrap();
+        let tic_int = tic_data.intensity().as_ref().unwrap();
+
+        // Both should have parallel arrays
+        assert_eq!(xic_rt.len(), xic_idx.len());
+        assert_eq!(xic_rt.len(), xic_int.len());
+        assert_eq!(tic_rt.len(), tic_idx.len());
+        assert_eq!(tic_rt.len(), tic_int.len());
+
+        // XIC indices should be subset of TIC indices (same spectrum numbering)
+        for &xic_spectrum_idx in xic_idx.iter() {
+            assert!(
+                tic_idx.contains(&xic_spectrum_idx),
+                "XIC spectrum index {} should exist in TIC (both use same spectrum numbers)",
+                xic_spectrum_idx
+            );
+        }
+    }
+
+    #[test]
+    fn test_xic_stores_spectrum_indices_not_peak_indices() {
+        let mut mzdata = setup_test_parser();
+
+        // Extract XIC
+        mzdata
+            .get_xic(722.43, ScanPolarity::Positive, 1000.0)
+            .unwrap();
+
+        let indices = mzdata.index().as_ref().unwrap();
+
+        // Get TIC to know the valid spectrum range
+        let mut tic_data = setup_test_parser();
+        tic_data.get_tic(ScanPolarity::Positive).unwrap();
+        let max_spectrum_idx = *tic_data.index().as_ref().unwrap().iter().max().unwrap();
+
+        // All XIC indices should be valid spectrum indices (within file's spectrum range)
+        for &idx in indices.iter() {
+            assert!(
+                idx <= max_spectrum_idx,
+                "XIC index {} exceeds maximum spectrum index {} - storing peak indices instead of spectrum indices?",
+                idx,
+                max_spectrum_idx
+            );
+        }
+
+        // Indices should be monotonically increasing (spectra are ordered in file)
+        for i in 1..indices.len() {
+            assert!(
+                indices[i] > indices[i - 1],
+                "XIC indices should be strictly increasing (spectrum order), but found {} followed by {}",
+                indices[i - 1],
+                indices[i]
             );
         }
     }

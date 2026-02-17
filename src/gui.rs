@@ -90,7 +90,7 @@
 use crate::{
     error::{ChromascopeError, Result},
     parser,
-    plotting_parameters::{self, LineColor, LineType, PlotType},
+    plotting_parameters::{LineColor, LineType, PlotType},
     processing::{process_chromatogram, ProcessingParams},
     validation::XicParams,
 };
@@ -435,7 +435,7 @@ impl MzViewerApp {
     /// Handles triple-click events on the chromatogram plot.
     ///
     /// Extracts and displays the mass spectrum at the clicked retention time
-    /// from the active file. Does nothing for XIC plots (domain restriction).
+    /// from the active file.
     ///
     /// # Parameters
     /// - `response: egui::Response`: The plot widget response
@@ -447,11 +447,6 @@ impl MzViewerApp {
     ) {
         if !response.triple_clicked() {
             return; // Early return if not triple-clicked
-        }
-
-        // Don't extract mass spectrum from XIC plots (domain rule)
-        if self.user_input.plot_type == plotting_parameters::PlotType::Xic {
-            return;
         }
 
         // Get active file ID
