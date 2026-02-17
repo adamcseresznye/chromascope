@@ -49,7 +49,6 @@
 //! - `invalid_file`: An enum indicating the validity of the selected file.
 //! - `state_changed`: An enum indicating whether the application state has changed.
 //! - `options_window_open`: A boolean indicating if the options window is open.
-//! - `checkbox_bool`: A boolean for managing checkbox states.
 
 //!#### Methods
 
@@ -162,10 +161,12 @@ type FileId = usize;
 /// Represents a single opened mzML file with its associated data and display settings
 struct OpenFile {
     /// Stable identifier that never changes, even if other files are removed
+    #[allow(dead_code)]
     id: FileId,
     /// The display name of the file (extracted from the path)
     name: String,
     /// The full path to the file
+    #[allow(dead_code)]
     path: String,
     /// The parsed mass spectrometry data for this file
     data: parser::MzData,
@@ -197,6 +198,7 @@ fn next_color_for_index(index: usize) -> LineColor {
     }
 }
 
+#[derive(Default)]
 pub struct MzViewerApp {
     /// Collection of opened mzML files, keyed by stable FileId
     files: HashMap<FileId, OpenFile>,
@@ -212,26 +214,8 @@ pub struct MzViewerApp {
     state_changed: StateChange,
     /// Whether the options window/pop-up is open
     options_window_open: bool,
-    /// A boolean value for a checkbox/file selector
-    checkbox_bool: bool,
     /// Error message to display to the user
     error_message: Option<String>,
-}
-
-impl Default for MzViewerApp {
-    fn default() -> Self {
-        Self {
-            files: HashMap::new(),
-            active_file_id: None,
-            next_file_id: 0,
-            user_input: UserInput::default(),
-            invalid_file: FileValidity::default(),
-            state_changed: StateChange::default(),
-            options_window_open: false,
-            checkbox_bool: false,
-            error_message: None,
-        }
-    }
 }
 
 impl MzViewerApp {
@@ -257,7 +241,6 @@ impl MzViewerApp {
             invalid_file: FileValidity::Invalid,
             state_changed: StateChange::Unchanged,
             options_window_open: false,
-            checkbox_bool: false,
             error_message: None,
         }
     }
