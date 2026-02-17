@@ -857,13 +857,13 @@ impl MzViewerApp {
     ///
     /// 1. Checks if an active file is selected and has plot data available.
     /// 2. Prompts the user to select a save location for the CSV file.
-    /// 3. Writes the plot data to the selected file in CSV format with headers "Retention Time,Intensity".
+    /// 3. Delegates to the export module to write the CSV file.
     /// 4. Uses the active file's name as the default CSV filename.
     ///
     /// # Errors
     ///
-    /// This function does not return errors. Any I/O errors during file writing will be logged as error messages.
-    fn handle_csv_export(&self) {
+    /// Displays error dialog if export fails. All I/O errors are handled internally.
+    fn handle_csv_export(&mut self) {
         // Check if an active file is selected
         let active_id = match self.active_file_id {
             Some(id) => id,
@@ -907,17 +907,15 @@ impl MzViewerApp {
                 path, active_file.name
             );
 
-            // Build CSV content
-            let mut csv_content = String::from("Retention Time,Intensity\n");
-
-            for [retention_time, intensity] in data.iter() {
-                csv_content.push_str(&format!("{},{}\n", retention_time, intensity));
-            }
-
-            // Write to file
-            match std::fs::write(&path, csv_content) {
-                Ok(_) => info!("CSV successfully exported to: {:?}", path),
-                Err(e) => error!("Failed to export CSV to {:?}: {}", path, e),
+            // Use the export module - GUI coordinates, business logic implements
+            match crate::export::export_chromatogram_csv(data, &path) {
+                Ok(_) => {
+                    info!("CSV successfully exported to: {:?}", path);
+                }
+                Err(e) => {
+                    error!("Failed to export CSV to {:?}: {}", path, e);
+                    self.show_error_dialog(format!("Export failed: {}", e));
+                }
             }
         } else {
             warn!("No file path selected for CSV export.");
