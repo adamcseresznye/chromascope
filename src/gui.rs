@@ -101,7 +101,7 @@ use std::path::PathBuf;
 
 use eframe::egui;
 use egui::{Color32, Context, Ui};
-use egui_plot::{Line, PlotPoints};
+use egui_plot::{Legend, Line, PlotPoint, PlotPoints, Polygon, VLine};
 use log::{debug, error, info, warn};
 
 const FILE_FORMAT: &str = "mzML";
@@ -253,6 +253,12 @@ pub struct MzViewerApp {
     options_window_open: bool,
     /// Error message to display to the user
     error_message: Option<String>,
+    /// RT where the user started right-click dragging (minutes)
+    integration_start_rt: Option<f64>,
+    /// RT at the current drag position — updated every frame during drag
+    integration_end_rt: Option<f64>,
+    /// Computed trapezoidal area, set on drag release
+    integration_result: Option<f64>,
 }
 
 impl MzViewerApp {
@@ -284,6 +290,9 @@ impl MzViewerApp {
             state_changed: StateChange::Unchanged,
             options_window_open: false,
             error_message: None,
+            integration_start_rt: None,
+            integration_end_rt: None,
+            integration_result: None,
         }
     }
     /// Resets the internal state of the instance.
@@ -436,19 +445,27 @@ impl MzViewerApp {
     /// # Returns
     /// - `egui::Response`: The response from the plot widget
     /// - `Option<egui_plot::PlotBounds>`: The bounds of the plot for interaction handling
+    /// - `Option<egui_plot::PlotPoint>`: The pointer position in plot-space coordinates
     fn render_chromatogram(
         &self,
         ui: &mut egui::Ui,
-    ) -> (egui::Response, Option<egui_plot::PlotBounds>) {
+    ) -> (
+        egui::Response,
+        Option<egui_plot::PlotBounds>,
+        Option<PlotPoint>,
+    ) {
         let mut plot_bounds = None;
+        let mut pointer_coord: Option<PlotPoint> = None;
 
         let response = egui_plot::Plot::new("chromatogram")
             .width(ui.available_width() * 0.99)
             .height(ui.available_height() * 0.6)
-            .legend(egui_plot::Legend::default())
+            .legend(Legend::default())
             .label_formatter(|_name, value| {
                 format!("Rt = {:.2} min\nIntensity = {:.0}", value.x, value.y)
             })
+            // Rebind boxed zoom to middle-click so secondary drag is free for integration
+            .boxed_zoom_pointer_button(egui::PointerButton::Middle)
             .show(ui, |plot_ui| {
                 // Plot all visible files (HashMap iteration is unordered, but overlay order doesn't matter)
                 for file in self.files.values() {
@@ -463,11 +480,16 @@ impl MzViewerApp {
                 if self.files.is_empty() {
                     warn!("No files opened");
                 }
+
+                // Draw integration region overlay (no-op if no drag in progress)
+                self.render_integration_overlay(plot_ui);
+
                 plot_bounds = Some(plot_ui.plot_bounds());
+                pointer_coord = plot_ui.pointer_coordinate();
             })
             .response;
 
-        (response, plot_bounds)
+        (response, plot_bounds, pointer_coord)
     }
 
     /// Creates a Line widget for a specific file's chromatogram data.
@@ -535,6 +557,151 @@ impl MzViewerApp {
         }
     }
 
+    /// Draws the integration region shading and boundary lines on the chromatogram plot.
+    ///
+    /// Called from inside the plot closure, so coordinates are already in plot-space.
+    /// Pure render — no mutation of self.
+    fn render_integration_overlay(&self, plot_ui: &mut egui_plot::PlotUi) {
+        let start = match self.integration_start_rt {
+            Some(s) => s,
+            None => return,
+        };
+
+        plot_ui.vline(
+            VLine::new(start)
+                .color(egui::Color32::from_rgb(0, 180, 0))
+                .width(2.0)
+                .style(egui_plot::LineStyle::Dashed { length: 6.0 })
+                .name("Integration start"),
+        );
+
+        let end = match self.integration_end_rt {
+            Some(e) => e,
+            None => return,
+        };
+
+        plot_ui.vline(
+            VLine::new(end)
+                .color(egui::Color32::from_rgb(0, 180, 0))
+                .width(2.0)
+                .style(egui_plot::LineStyle::Dashed { length: 6.0 })
+                .name("Integration end"),
+        );
+
+        let active_id = match self.active_file_id {
+            Some(id) => id,
+            None => return,
+        };
+        let file = match self.files.get(&active_id) {
+            Some(f) => f,
+            None => return,
+        };
+        let data = match &file.cached_plot_data {
+            Some(d) => d,
+            None => return,
+        };
+
+        let (s, e) = if start < end {
+            (start, end)
+        } else {
+            (end, start)
+        };
+
+        let region: Vec<[f64; 2]> = data
+            .iter()
+            .filter(|p| p[0] >= s && p[0] <= e)
+            .copied()
+            .collect();
+
+        if region.len() >= 2 {
+            let i_start = region.first().unwrap()[1];
+            let i_end = region.last().unwrap()[1];
+
+            // Close the polygon along the baseline (straight line between the
+            // first and last boundary intensities — NOT down to zero).
+            // Walking backwards from [e, i_end] to [s, i_start] closes the shape
+            // along that connecting line, so the shaded area visually matches
+            // exactly what is being integrated.
+            let mut poly = region.clone();
+            poly.push([e, i_end]);
+            poly.push([s, i_start]);
+
+            plot_ui.polygon(
+                Polygon::new(PlotPoints::from(poly))
+                    .fill_color(egui::Color32::from_rgba_unmultiplied(60, 200, 60, 80))
+                    .name("Integration region"),
+            );
+        }
+    }
+
+    /// Handles right-click drag events for peak integration.
+    ///
+    /// - `drag_started_by(Secondary)`: record start RT
+    /// - `dragged_by(Secondary)`:      update end RT for live overlay
+    /// - `drag_stopped_by(Secondary)`: finalise RT window, compute trapezoidal area
+    fn handle_integration_drag(
+        &mut self,
+        response: &egui::Response,
+        pointer_coord: Option<PlotPoint>,
+    ) {
+        // x-axis is retention time (minutes)
+        let rt = pointer_coord.map(|p| p.x);
+
+        if response.drag_started_by(egui::PointerButton::Secondary) {
+            self.integration_start_rt = rt;
+            self.integration_end_rt = None;
+            self.integration_result = None;
+            info!("Integration drag started at RT: {:?}", rt);
+        } else if response.dragged_by(egui::PointerButton::Secondary) {
+            self.integration_end_rt = rt;
+        } else if response.drag_stopped_by(egui::PointerButton::Secondary) {
+            self.integration_end_rt = rt;
+            self.compute_integration();
+            info!(
+                "Integration drag stopped. Result: {:?}",
+                self.integration_result
+            );
+        }
+    }
+
+    /// Computes the trapezoidal area for the current start/end RT window and stores the result.
+    fn compute_integration(&mut self) {
+        let (start, end) = match (self.integration_start_rt, self.integration_end_rt) {
+            (Some(s), Some(e)) => (s.min(e), s.max(e)),
+            _ => return,
+        };
+        // Store normalised bounds
+        self.integration_start_rt = Some(start);
+        self.integration_end_rt = Some(end);
+
+        let active_id = match self.active_file_id {
+            Some(id) => id,
+            None => return,
+        };
+
+        // Borrow cached data without cloning
+        let area_result = self
+            .files
+            .get(&active_id)
+            .and_then(|f| f.cached_plot_data.as_deref())
+            .map(|data| crate::processing::integrate_peak(data, start, end));
+
+        match area_result {
+            Some(Ok(area)) => {
+                self.integration_result = Some(area);
+                info!("Peak area [{:.3}–{:.3} min] = {:.4e}", start, end, area);
+            }
+            Some(Err(e)) => {
+                error!("Integration failed: {}", e);
+                self.show_error_dialog(format!("Integration failed: {}", e));
+                self.integration_result = None;
+            }
+            None => {
+                warn!("No cached plot data available for integration");
+            }
+        }
+    }
+
     /// Orchestrates chromatogram display: updates data when needed, renders, and handles interactions.
     ///
     /// This method coordinates three phases:
@@ -567,10 +734,11 @@ impl MzViewerApp {
         }
 
         // Phase 2: Render chromatogram from cached data
-        let (response, plot_bounds) = self.render_chromatogram(ui);
+        let (response, plot_bounds, pointer_coord) = self.render_chromatogram(ui);
 
         // Phase 3: Handle user interactions
         self.handle_chromatogram_click(response.clone(), plot_bounds);
+        self.handle_integration_drag(&response, pointer_coord);
 
         response
     }
@@ -821,7 +989,10 @@ impl MzViewerApp {
             if let Some(active_id) = self.active_file_id {
                 if let Some(file) = self.files.get_mut(&active_id) {
                     file.color = self.user_input.line_color;
-                    info!("Active file '{}' chromatogram color updated to {:?}", file.name, file.color);
+                    info!(
+                        "Active file '{}' chromatogram color updated to {:?}",
+                        file.name, file.color
+                    );
                 }
             }
         }
@@ -1258,6 +1429,35 @@ impl MzViewerApp {
                             self.add_plot_properties(ui);
                             ui.separator();
                         });
+
+                        // Integration result bar — shown only when relevant
+                        match (
+                            self.integration_start_rt,
+                            self.integration_end_rt,
+                            self.integration_result,
+                        ) {
+                            (Some(s), Some(e), Some(area)) => {
+                                ui.horizontal(|ui| {
+                                    ui.colored_label(
+                                        egui::Color32::from_rgb(60, 200, 60),
+                                        format!("∫ Area [{:.3} – {:.3} min] = {:.4e}", s, e, area),
+                                    );
+                                    if ui.small_button("✕ Clear").clicked() {
+                                        self.integration_start_rt = None;
+                                        self.integration_end_rt = None;
+                                        self.integration_result = None;
+                                    }
+                                });
+                            }
+                            (Some(s), None, _) => {
+                                ui.colored_label(
+                                    egui::Color32::YELLOW,
+                                    format!("∫ Drag to set end … (start: {:.3} min)", s),
+                                );
+                            }
+                            _ => {}
+                        }
+
                         info!("Chromatogram plotted successfully.");
                     });
 
