@@ -209,6 +209,10 @@ struct OpenFile {
     data: parser::MzData,
     /// The processed plot data for this file
     cached_plot_data: Option<Vec<[f64; 2]>>,
+    /// The last extracted chromatogram (used for triple-click spectrum lookup)
+    cached_chromatogram: Option<parser::ChromatogramData>,
+    /// The last retrieved mass spectrum (populated on triple-click)
+    cached_mass_spectrum: Option<parser::MassSpectrum>,
     /// The color assigned to this file's chromatogram line
     color: LineColor,
     /// Whether this file's chromatogram is currently visible in the plot
@@ -367,8 +371,32 @@ impl MzViewerApp {
         // Process chromatogram using business logic layer
         let result = process_chromatogram(&mut file.data, &params)?;
 
-        // Cache the result in GUI layer
+        // Cache the result and the extracted chromatogram for triple-click spectrum lookup
         file.cached_plot_data = Some(result);
+
+        // Re-extract the chromatogram (cheap since it was already computed) to cache it
+        // for use by handle_chromatogram_click -> get_closest_index
+        let chrom = match params.plot_type {
+            crate::plotting_parameters::PlotType::Tic => {
+                file.data.get_tic(params.ms_level, params.polarity, params.mz_range)
+            }
+            crate::plotting_parameters::PlotType::Bpc => {
+                file.data.get_bpic(params.ms_level, params.polarity, params.mz_range)
+            }
+            crate::plotting_parameters::PlotType::Xic => {
+                if let Some(xic_params) = &params.xic_params {
+                    file.data.get_xic(
+                        xic_params.mass(),
+                        params.ms_level,
+                        xic_params.polarity(),
+                        xic_params.mass_tolerance(),
+                    )
+                } else {
+                    Err(crate::error::ChromascopeError::MissingXicParams)
+                }
+            }
+        };
+        file.cached_chromatogram = chrom.ok();
 
         Ok(())
     }
@@ -548,12 +576,28 @@ impl MzViewerApp {
             &rt_clicked, file.name
         );
 
-        // Find and extract closest spectrum
-        if let Some(index) = file.data.get_closest_index_by_time(rt_clicked) {
-            info!("Found closest spectrum at index: {}", index);
-            file.data.get_mass_spectrum_by_index(index);
+        // Find and extract closest spectrum using cached chromatogram
+        if let Some(rt) = rt_clicked {
+            let maybe_index = file
+                .cached_chromatogram
+                .as_ref()
+                .and_then(|chrom| chrom.get_closest_index(rt));
+
+            if let Some(index) = maybe_index {
+                info!("Found closest spectrum at index: {}", index);
+                match file.data.get_mass_spectrum_by_index(index) {
+                    Ok(spectrum) => {
+                        file.cached_mass_spectrum = Some(spectrum);
+                    }
+                    Err(e) => {
+                        warn!("Failed to get mass spectrum at index {}: {:?}", index, e);
+                    }
+                }
+            } else {
+                warn!("No close spectrum found for the clicked retention time");
+            }
         } else {
-            warn!("No close spectrum found for the clicked retention time");
+            warn!("No retention time determined from click position");
         }
     }
 
@@ -792,7 +836,9 @@ impl MzViewerApp {
     fn plot_mass_spectrum(&mut self, ui: &mut egui::Ui) -> egui::Response {
         if let Some(active_id) = self.active_file_id {
             if let Some(file) = self.files.get_mut(&active_id) {
-                if let Some((mz, intensity)) = file.data.mass_spectrum() {
+                if let Some(spectrum) = &file.cached_mass_spectrum {
+                    let mz = spectrum.mz.clone();
+                    let intensity = spectrum.intensity.clone();
                     info!(
                         "Mass spectrum data available for {} (ID: {}). Plotting the spectrum.",
                         file.name, active_id
@@ -1242,6 +1288,8 @@ impl MzViewerApp {
             path: file_path_str,
             data,
             cached_plot_data: None,
+            cached_chromatogram: None,
+            cached_mass_spectrum: None,
             color: next_color_for_index(index),
             visible: true,
         })
@@ -2014,6 +2062,8 @@ mod tests {
                 path: "test.mzML".to_string(),
                 data: mock_data,
                 cached_plot_data: None,
+                cached_chromatogram: None,
+                cached_mass_spectrum: None,
                 color: LineColor::Red,
                 visible: true,
             },
@@ -2058,6 +2108,8 @@ mod tests {
                 path: "test.mzML".to_string(),
                 data: mock_data,
                 cached_plot_data: None,
+                cached_chromatogram: None,
+                cached_mass_spectrum: None,
                 color: LineColor::Red,
                 visible: true,
             },
@@ -2102,6 +2154,8 @@ mod tests {
                 path: "test.mzML".to_string(),
                 data: mock_data,
                 cached_plot_data: None,
+                cached_chromatogram: None,
+                cached_mass_spectrum: None,
                 color: LineColor::Red,
                 visible: true,
             },
@@ -2162,6 +2216,8 @@ mod tests {
             path: "/path/to/test_file.mzML".to_string(),
             data: parser::MzData::new(),
             cached_plot_data: None,
+            cached_chromatogram: None,
+            cached_mass_spectrum: None,
             color: LineColor::Blue,
             visible: true,
         };
@@ -2187,6 +2243,8 @@ mod tests {
             path: "file1.mzML".to_string(),
             data: parser::MzData::new(),
             cached_plot_data: None,
+            cached_chromatogram: None,
+            cached_mass_spectrum: None,
             color: LineColor::Red,
             visible: true,
         };
@@ -2199,6 +2257,8 @@ mod tests {
             path: "file2.mzML".to_string(),
             data: parser::MzData::new(),
             cached_plot_data: None,
+            cached_chromatogram: None,
+            cached_mass_spectrum: None,
             color: LineColor::Green,
             visible: true,
         };
@@ -2211,6 +2271,8 @@ mod tests {
             path: "file3.mzML".to_string(),
             data: parser::MzData::new(),
             cached_plot_data: None,
+            cached_chromatogram: None,
+            cached_mass_spectrum: None,
             color: LineColor::Blue,
             visible: true,
         };
@@ -2253,6 +2315,8 @@ mod tests {
                 path: format!("file{}.mzML", i),
                 data: parser::MzData::new(),
                 cached_plot_data: None,
+                cached_chromatogram: None,
+                cached_mass_spectrum: None,
                 color: next_color_for_index(i),
                 visible: true,
             };
@@ -2297,6 +2361,8 @@ mod tests {
                 path: "test.mzML".to_string(),
                 data: parser::MzData::new(),
                 cached_plot_data: None,
+                cached_chromatogram: None,
+                cached_mass_spectrum: None,
                 color: LineColor::Red,
                 visible: true,
             },
@@ -2330,6 +2396,8 @@ mod tests {
                     path: format!("file{}.mzML", i),
                     data: parser::MzData::new(),
                     cached_plot_data: None,
+                    cached_chromatogram: None,
+                    cached_mass_spectrum: None,
                     color: *color,
                     visible: true,
                 },
@@ -2347,3 +2415,5 @@ mod tests {
         assert_eq!(app.user_input.line_color, LineColor::Green);
     }
 }
+
+
