@@ -12,11 +12,13 @@
 //! or file I/O directly.
 
 use crate::error::{ChromascopeError, Result};
-use crate::parser::MzData;
+use crate::parser::{ChromatogramData, MzData};
 use crate::plotting_parameters::PlotType;
 use crate::validation::XicParams;
 use log::{debug, info, trace};
 use mzdata::spectrum::ScanPolarity;
+#[cfg(not(target_arch = "wasm32"))]
+use std::path::PathBuf;
 
 /// Parameters for processing a chromatogram extraction.
 ///
@@ -52,6 +54,89 @@ pub struct ProcessingParams {
     pub xic_params: Option<XicParams>,
     /// Optional m/z range filter for TIC/BPC (min_mz, max_mz)
     pub mz_range: Option<(f64, f64)>,
+}
+
+/// Result of a background chromatogram processing task.
+///
+/// Sent from the background thread to the GUI thread over an `mpsc` channel.
+/// Contains either the processed data (on success) or an error message.
+#[cfg(not(target_arch = "wasm32"))]
+pub enum ProcessingResult {
+    Success {
+        file_id: usize,
+        plot_data: Vec<[f64; 2]>,
+        chromatogram: ChromatogramData,
+    },
+    Error {
+        file_id: usize,
+        message: String,
+    },
+}
+
+/// Entry point for background thread processing.
+///
+/// Re-opens the file on the background thread because `MzMLReaderType<File>` is
+/// `!Send` and cannot be moved across thread boundaries. Calls
+/// `process_chromatogram` (which uses Rayon internally) to extract the data.
+///
+/// # Arguments
+/// * `path`    - Path to the mzML file (cloneable across thread boundary)
+/// * `params`  - Processing parameters (cloned from GUI state before spawning)
+/// * `file_id` - Stable `FileId` used to route the result back to the correct file
+#[cfg(not(target_arch = "wasm32"))]
+pub fn run_in_background(
+    path: PathBuf,
+    params: ProcessingParams,
+    file_id: usize,
+) -> ProcessingResult {
+    let mut data = MzData::new();
+    if let Err(e) = data.open_msfile(&path) {
+        return ProcessingResult::Error {
+            file_id,
+            message: format!("{}", e),
+        };
+    }
+
+    // Compute plot_data (smoothed Vec<[f64; 2]>).
+    let plot_data = match process_chromatogram(&mut data, &params) {
+        Ok(v) => v,
+        Err(e) => {
+            return ProcessingResult::Error {
+                file_id,
+                message: format!("{}", e),
+            }
+        }
+    };
+
+    // Re-extract raw ChromatogramData for spectrum-lookup cache.
+    let chromatogram = match params.plot_type {
+        PlotType::Tic => data.get_tic(params.ms_level, params.polarity, params.mz_range),
+        PlotType::Bpc => data.get_bpic(params.ms_level, params.polarity, params.mz_range),
+        PlotType::Xic => {
+            if let Some(ref xic_params) = params.xic_params {
+                data.get_xic(
+                    xic_params.mass(),
+                    params.ms_level,
+                    xic_params.polarity(),
+                    xic_params.mass_tolerance(),
+                )
+            } else {
+                Err(ChromascopeError::MissingXicParams)
+            }
+        }
+    };
+
+    match chromatogram {
+        Ok(c) => ProcessingResult::Success {
+            file_id,
+            plot_data,
+            chromatogram: c,
+        },
+        Err(e) => ProcessingResult::Error {
+            file_id,
+            message: format!("{}", e),
+        },
+    }
 }
 
 /// High-level orchestration of chromatogram processing.
