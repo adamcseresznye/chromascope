@@ -87,17 +87,21 @@
 
 #![warn(clippy::all)]
 
+#[cfg(target_arch = "wasm32")]
+use crate::processing::process_chromatogram;
 use crate::{
     error::{ChromascopeError, Result},
     parser,
     plotting_parameters::{LineColor, LineType, PlotType},
-    processing::{process_chromatogram, ProcessingParams},
+    processing::ProcessingParams,
     validation::XicParams,
 };
 
 use mzdata::spectrum::ScanPolarity;
 use std::collections::HashMap;
 use std::path::PathBuf;
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::mpsc;
 
 use eframe::egui;
 use egui::{Color32, Context, Ui};
@@ -263,6 +267,11 @@ pub struct MzViewerApp {
     integration_end_rt: Option<f64>,
     /// Computed trapezoidal area, set on drag release
     integration_result: Option<f64>,
+    /// Whether the background processing thread is currently running
+    is_processing: bool,
+    /// Receiver for results from the background processing thread (native only)
+    #[cfg(not(target_arch = "wasm32"))]
+    processing_rx: Option<mpsc::Receiver<crate::processing::ProcessingResult>>,
 }
 
 impl MzViewerApp {
@@ -297,6 +306,9 @@ impl MzViewerApp {
             integration_start_rt: None,
             integration_end_rt: None,
             integration_result: None,
+            is_processing: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            processing_rx: None,
         }
     }
     /// Resets the internal state of the instance.
@@ -338,6 +350,87 @@ impl MzViewerApp {
         }
     }
 
+    /// Fires a background thread to process the chromatogram, keeping the UI responsive.
+    ///
+    /// Builds processing parameters from the current GUI state, then spawns a thread
+    /// that re-opens the mzML file and calls `run_in_background`. The result is sent
+    /// back via an `mpsc` channel and polled each frame by `poll_processing_result`.
+    ///
+    /// `MzMLReaderType<File>` is `!Send`, so the file cannot be moved to the thread;
+    /// the thread opens its own independent `MzData` instance.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn request_chromatogram_update(&mut self) {
+        let params = match self.build_processing_params() {
+            Ok(p) => p,
+            Err(e) => {
+                self.show_error_dialog(format!("{}", e));
+                return;
+            }
+        };
+
+        let active_id = match self.active_file_id {
+            Some(id) => id,
+            None => return,
+        };
+
+        let path = match self.files.get(&active_id) {
+            Some(f) => PathBuf::from(&f.path),
+            None => return,
+        };
+
+        let (tx, rx) = mpsc::channel();
+        self.processing_rx = Some(rx);
+        self.is_processing = true;
+
+        std::thread::spawn(move || {
+            let result = crate::processing::run_in_background(path, params, active_id);
+            let _ = tx.send(result);
+        });
+    }
+
+    /// Polls the background processing channel for a completed result.
+    ///
+    /// Called every frame from `plot_chromatogram`. Requests a repaint while the
+    /// background thread is still running so the spinner stays animated. When the
+    /// result arrives it is applied to the matching file's cache.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn poll_processing_result(&mut self, ctx: &egui::Context) {
+        let result = match &self.processing_rx {
+            Some(rx) => match rx.try_recv() {
+                Ok(r) => r,
+                Err(mpsc::TryRecvError::Empty) => {
+                    ctx.request_repaint();
+                    return;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.is_processing = false;
+                    self.processing_rx = None;
+                    return;
+                }
+            },
+            None => return,
+        };
+
+        self.is_processing = false;
+        self.processing_rx = None;
+
+        match result {
+            crate::processing::ProcessingResult::Success {
+                file_id,
+                plot_data,
+                chromatogram,
+            } => {
+                if let Some(file) = self.files.get_mut(&file_id) {
+                    file.cached_plot_data = Some(plot_data);
+                    file.cached_chromatogram = Some(chromatogram);
+                }
+            }
+            crate::processing::ProcessingResult::Error { message, .. } => {
+                self.show_error_dialog(message);
+            }
+        }
+    }
+
     /// Updates the active file's cached chromatogram data.
     ///
     /// This method orchestrates the business logic for chromatogram extraction
@@ -352,6 +445,7 @@ impl MzViewerApp {
     /// - `MissingXicParams` - XIC selected but parameters invalid/missing
     /// - `InvalidMass` / `InvalidMassTolerance` - XIC parameter validation failed
     /// - Other errors from data extraction or smoothing
+    #[cfg(target_arch = "wasm32")]
     fn update_chromatogram_data(&mut self) -> Result<()> {
         let active_id = self.active_file_id.ok_or_else(|| {
             crate::error::ChromascopeError::FileNotOpened("No active file selected".to_string())
@@ -378,10 +472,12 @@ impl MzViewerApp {
         // for use by handle_chromatogram_click -> get_closest_index
         let chrom = match params.plot_type {
             crate::plotting_parameters::PlotType::Tic => {
-                file.data.get_tic(params.ms_level, params.polarity, params.mz_range)
+                file.data
+                    .get_tic(params.ms_level, params.polarity, params.mz_range)
             }
             crate::plotting_parameters::PlotType::Bpc => {
-                file.data.get_bpic(params.ms_level, params.polarity, params.mz_range)
+                file.data
+                    .get_bpic(params.ms_level, params.polarity, params.mz_range)
             }
             crate::plotting_parameters::PlotType::Xic => {
                 if let Some(xic_params) = &params.xic_params {
@@ -482,6 +578,17 @@ impl MzViewerApp {
         Option<egui_plot::PlotBounds>,
         Option<PlotPoint>,
     ) {
+        // Show spinner while the background thread is running
+        if self.is_processing {
+            let response = ui
+                .centered_and_justified(|ui| {
+                    ui.spinner();
+                    ui.label("Loading chromatogram…");
+                })
+                .response;
+            return (response, None, None);
+        }
+
         let mut plot_bounds = None;
         let mut pointer_coord: Option<PlotPoint> = None;
 
@@ -755,29 +862,46 @@ impl MzViewerApp {
     ///
     /// # Parameters
     /// - `ui: &mut egui::Ui`: The UI context for rendering
+    /// - `ctx: &egui::Context`: The egui context used for repaint requests while polling
     ///
     /// # Returns
     /// - `egui::Response`: The response from the plot widget
-    fn plot_chromatogram(&mut self, ui: &mut egui::Ui) -> egui::Response {
+    fn plot_chromatogram(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) -> egui::Response {
+        // Poll background result first (native only)
+        #[cfg(not(target_arch = "wasm32"))]
+        self.poll_processing_result(ctx);
+
         // Phase 1: Update data if state has changed
-        if let Some(active_id) = self.active_file_id {
-            if self.state_changed == StateChange::Changed {
+        if self.state_changed == StateChange::Changed && self.active_file_id.is_some() {
+            if let Some(active_id) = self.active_file_id {
                 if let Some(file) = self.files.get(&active_id) {
                     info!(
                         "State has changed, reprocessing plot data for active file: {} (ID: {})",
                         file.name, active_id
                     );
                 }
-                // Process the data using the business logic layer
+            }
+
+            // On native: dispatch to background thread.
+            // On WASM: process synchronously (no threads available).
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                if !self.is_processing {
+                    self.request_chromatogram_update();
+                }
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
                 if let Err(e) = self.update_chromatogram_data() {
                     error!("Failed to process chromatogram: {}", e);
                     self.show_error_dialog(format!("Failed to process chromatogram: {}", e));
                 }
-                self.state_changed = StateChange::Unchanged;
             }
+
+            self.state_changed = StateChange::Unchanged;
         }
 
-        // Phase 2: Render chromatogram from cached data
+        // Phase 2: Render chromatogram from cached data (shows spinner when processing)
         let (response, plot_bounds, pointer_coord) = self.render_chromatogram(ui);
 
         // Phase 3: Handle user interactions
@@ -1469,7 +1593,7 @@ impl MzViewerApp {
                     .default_open(true)
                     .show(ui, |ui| {
                         debug!("Plotting chromatogram.");
-                        let chromatogram = self.plot_chromatogram(ui);
+                        let chromatogram = self.plot_chromatogram(ui, ctx);
                         chromatogram.context_menu(|ui| {
                             ui.heading("Plot Properties");
                             ui.separator();
@@ -2414,6 +2538,21 @@ mod tests {
 
         assert_eq!(app.user_input.line_color, LineColor::Green);
     }
+
+    /// Calling poll_processing_result when processing_rx is None must not panic.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn test_poll_with_no_receiver_does_not_panic() {
+        let ctx = egui::Context::default();
+        let mut app = MzViewerApp::default();
+        assert!(app.processing_rx.is_none());
+        app.poll_processing_result(&ctx); // must not panic
+    }
+
+    /// is_processing starts as false.
+    #[test]
+    fn test_is_processing_default_false() {
+        let app = MzViewerApp::default();
+        assert!(!app.is_processing);
+    }
 }
-
-
