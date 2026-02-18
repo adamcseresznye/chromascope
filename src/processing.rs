@@ -15,6 +15,7 @@ use crate::error::{ChromascopeError, Result};
 use crate::parser::MzData;
 use crate::plotting_parameters::PlotType;
 use crate::validation::XicParams;
+use log::{debug, info, trace};
 use mzdata::spectrum::ScanPolarity;
 
 /// Parameters for processing a chromatogram extraction.
@@ -108,17 +109,11 @@ pub struct ProcessingParams {
 /// # Ok::<(), chromascope::error::ChromascopeError>(())
 /// ```
 pub fn process_chromatogram(data: &mut MzData, params: &ProcessingParams) -> Result<Vec<[f64; 2]>> {
-    // Step 1: Extract raw chromatogram based on type
-    // Each method mutates data's internal fields and returns &mut Self for chaining
-    match params.plot_type {
-        PlotType::Tic => {
-            data.get_tic(params.ms_level, params.polarity, params.mz_range)?;
-        }
-        PlotType::Bpc => {
-            data.get_bpic(params.ms_level, params.polarity, params.mz_range)?;
-        }
+    // Step 1: Extract raw chromatogram based on type, returning owned ChromatogramData
+    let chromatogram = match params.plot_type {
+        PlotType::Tic => data.get_tic(params.ms_level, params.polarity, params.mz_range)?,
+        PlotType::Bpc => data.get_bpic(params.ms_level, params.polarity, params.mz_range)?,
         PlotType::Xic => {
-            // XIC requires validated parameters
             let xic_params = params
                 .xic_params
                 .as_ref()
@@ -129,24 +124,56 @@ pub fn process_chromatogram(data: &mut MzData, params: &ProcessingParams) -> Res
                 params.ms_level,
                 xic_params.polarity(),
                 xic_params.mass_tolerance(),
-            )?;
+            )?
+        }
+    };
+
+    // Step 2: Prepare for visualization (aggregate duplicates, format)
+    let prepared = chromatogram.prepare_for_plot()?;
+
+    // Step 3: Apply smoothing filter and return result
+    smooth_chromatogram(prepared, params.smoothing)
+}
+
+/// Apply moving average smoothing to plot data.
+///
+/// # Arguments
+/// * `data` - Plot data as `[retention_time, intensity]` pairs
+/// * `window_size` - Size of smoothing window (0–10, where 0 means no smoothing)
+///
+/// # Returns
+/// * `Ok(Vec<[f64; 2]>)` - Smoothed plot data
+/// * `Err(ChromascopeError::InvalidSmoothingWindow)` - If `window_size > 10`
+pub fn smooth_chromatogram(data: Vec<[f64; 2]>, window_size: u8) -> Result<Vec<[f64; 2]>> {
+    info!("Starting data smoothing with window size: {}", window_size);
+
+    if window_size > 10 {
+        return Err(ChromascopeError::InvalidSmoothingWindow(window_size));
+    }
+
+    debug!("Received {} data points for smoothing", data.len());
+
+    let mut smoothed_data = Vec::new();
+    let window_size_usize = window_size as usize;
+
+    for i in 0..data.len() {
+        if i < window_size_usize || i >= data.len() - window_size_usize {
+            smoothed_data.push(data[i]);
+            trace!("Keeping original data point at index {}", i);
+        } else {
+            let sum: f64 = data[i - window_size_usize..=i + window_size_usize]
+                .iter()
+                .map(|point| point[1])
+                .sum();
+            let average = sum / (f64::from(window_size) * 2.0_f64 + 1.0_f64);
+            smoothed_data.push([data[i][0], average]);
+            trace!("Smoothed data point at index {}: {}", i, average);
         }
     }
 
-    // Step 2: Prepare for visualization (aggregate duplicates, format)
-    // This returns a new Vec without mutating data
-    let prepared = data.prepare_for_plot()?;
+    debug!("Data smoothing complete");
 
-    // Step 3: Apply smoothing filter
-    // This mutates data.plot_data field with smoothed results
-    data.smooth_data(Ok(prepared), params.smoothing)?;
-
-    // Step 4: Return the final result as owned data
-    // Clone from the internal cache and return ownership to caller
-    data.plot_data()
-        .as_ref()
-        .cloned()
-        .ok_or(ChromascopeError::NoPlotData)
+    Ok(smoothed_data)
 }
 
 /// Computes the trapezoidal area under a chromatogram between two RT bounds.
