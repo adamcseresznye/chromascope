@@ -59,6 +59,10 @@ pub enum ChromascopeError {
     /// MzML parsing error from mzdata crate
     #[error("MzML parsing error: {0}")]
     MzDataError(String),
+
+    /// Integration range is invalid (start >= end, or no data in window)
+    #[error("Invalid integration range: {0}")]
+    InvalidIntegrationRange(String),
 }
 
 /// Project-wide Result type alias

@@ -149,6 +149,55 @@ pub fn process_chromatogram(data: &mut MzData, params: &ProcessingParams) -> Res
         .ok_or(ChromascopeError::NoPlotData)
 }
 
+/// Computes the trapezoidal area under a chromatogram between two RT bounds.
+///
+/// # Arguments
+/// * `data`     - Slice of \[rt, intensity\] pairs, expected sorted by rt
+/// * `start_rt` - Integration window start (minutes)
+/// * `end_rt`   - Integration window end (minutes)
+///
+/// # Errors
+/// - `InvalidIntegrationRange` if start >= end
+/// - `InvalidIntegrationRange` if fewer than 2 points fall in the window
+pub fn integrate_peak(data: &[[f64; 2]], start_rt: f64, end_rt: f64) -> Result<f64> {
+    if start_rt >= end_rt {
+        return Err(ChromascopeError::InvalidIntegrationRange(format!(
+            "start ({:.4}) must be less than end ({:.4})",
+            start_rt, end_rt
+        )));
+    }
+
+    let window: Vec<[f64; 2]> = data
+        .iter()
+        .filter(|p| p[0] >= start_rt && p[0] <= end_rt)
+        .copied()
+        .collect();
+
+    if window.len() < 2 {
+        return Err(ChromascopeError::InvalidIntegrationRange(format!(
+            "Fewer than 2 data points between {:.4} and {:.4} min",
+            start_rt, end_rt
+        )));
+    }
+
+    let i_start = window.first().unwrap()[1];
+    let i_end = window.last().unwrap()[1];
+    let rt_start = window.first().unwrap()[0];
+    let rt_end = window.last().unwrap()[0];
+    let rt_span = rt_end - rt_start;
+
+    // Trapezoidal sum of raw intensities
+    let raw_area: f64 = window
+        .windows(2)
+        .map(|w| (w[1][0] - w[0][0]) * (w[0][1] + w[1][1]) / 2.0)
+        .sum();
+
+    // Subtract the baseline trapezoid (straight line from i_start to i_end)
+    let baseline_area = rt_span * (i_start + i_end) / 2.0;
+
+    Ok(raw_area - baseline_area)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -342,5 +391,53 @@ mod tests {
             ),
             "Should return InvalidSmoothingWindow error"
         );
+    }
+
+    // ── integrate_peak tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_integrate_peak_triangle() {
+        // Two trapezoids: [0→1] avg=50 * width=1 = 50, [1→2] avg=50 * width=1 = 50 → total 100
+        let data = vec![[0.0, 0.0], [1.0, 100.0], [2.0, 0.0]];
+        let area = integrate_peak(&data, 0.0, 2.0).unwrap();
+        assert!((area - 100.0).abs() < 1e-9, "got {}", area);
+    }
+
+    #[test]
+    fn test_integrate_peak_rectangle() {
+        let data = vec![[1.0, 100.0], [2.0, 100.0], [3.0, 100.0]];
+        let area = integrate_peak(&data, 1.0, 3.0).unwrap();
+        assert!((area - 200.0).abs() < 1e-9, "got {}", area);
+    }
+
+    #[test]
+    fn test_integrate_peak_start_ge_end_fails() {
+        let data = vec![[0.0, 50.0], [1.0, 100.0], [2.0, 50.0]];
+        assert!(matches!(
+            integrate_peak(&data, 2.0, 1.0),
+            Err(ChromascopeError::InvalidIntegrationRange(_))
+        ));
+        assert!(matches!(
+            integrate_peak(&data, 1.5, 1.5),
+            Err(ChromascopeError::InvalidIntegrationRange(_))
+        ));
+    }
+
+    #[test]
+    fn test_integrate_peak_no_points_in_window_fails() {
+        let data = vec![[0.0, 100.0], [2.0, 100.0]];
+        // Window [0.5, 1.5] contains 0 points → error
+        assert!(matches!(
+            integrate_peak(&data, 0.5, 1.5),
+            Err(ChromascopeError::InvalidIntegrationRange(_))
+        ));
+    }
+
+    #[test]
+    fn test_integrate_peak_subset() {
+        let data = vec![[0.0, 0.0], [1.0, 100.0], [2.0, 100.0], [3.0, 0.0]];
+        // Only integrate [1.0, 2.0]: perfect rectangle, area = 100
+        let area = integrate_peak(&data, 1.0, 2.0).unwrap();
+        assert!((area - 100.0).abs() < 1e-9, "got {}", area);
     }
 }
