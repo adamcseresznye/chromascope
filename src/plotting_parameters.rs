@@ -48,7 +48,7 @@
 //!
 //! This module can be used to define and manipulate line properties in graphical applications, allowing for customizable visual representations of data. The enums can be easily converted to types compatible with the `egui` and `egui_plot` libraries for rendering.
 
-#[derive(PartialEq, Default)]
+#[derive(PartialEq, Default, Clone, Copy, Debug)]
 pub enum LineColor {
     #[default]
     Red,
