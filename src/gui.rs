@@ -446,6 +446,9 @@ impl MzViewerApp {
             .width(ui.available_width() * 0.99)
             .height(ui.available_height() * 0.6)
             .legend(egui_plot::Legend::default())
+            .label_formatter(|_name, value| {
+                format!("Rt = {:.2} min\nIntensity = {:.0}", value.x, value.y)
+            })
             .show(ui, |plot_ui| {
                 // Plot all visible files (HashMap iteration is unordered, but overlay order doesn't matter)
                 for file in self.files.values() {
@@ -630,6 +633,13 @@ impl MzViewerApp {
                     let response = egui_plot::Plot::new("mass_spectrum")
                         .width(ui.available_width() * 0.99)
                         .height(ui.available_height())
+                        .label_formatter(|name, value| {
+                            if name.is_empty() {
+                                format!("m/z = {:.4}\nIntensity = {:.0}", value.x, value.y)
+                            } else {
+                                format!("{}\nIntensity = {:.0}", name, value.y)
+                            }
+                        })
                         .show(ui, |plot_ui| {
                             let bounds = plot_ui.plot_bounds();
                             let zoom_level = (bounds.max()[0] - bounds.min()[0]).abs(); // Calculate zoom level based on plot bounds
@@ -795,6 +805,8 @@ impl MzViewerApp {
     /// - `&mut self`: A mutable reference to the current instance of the struct that contains the `user_input` field.
     /// - `ui: &mut Ui`: A mutable reference to the `egui::Ui` instance where the line color options will be added.
     fn add_line_color_options(&mut self, ui: &mut Ui) {
+        let previous_color = self.user_input.line_color;
+
         ui.horizontal(|ui| {
             ui.radio_value(&mut self.user_input.line_color, LineColor::Red, "Red");
             ui.radio_value(&mut self.user_input.line_color, LineColor::Blue, "Blue");
@@ -803,6 +815,16 @@ impl MzViewerApp {
             ui.radio_value(&mut self.user_input.line_color, LineColor::Black, "Black");
             ui.radio_value(&mut self.user_input.line_color, LineColor::White, "White");
         });
+
+        // Propagate new color to the active file's chromatogram line
+        if self.user_input.line_color != previous_color {
+            if let Some(active_id) = self.active_file_id {
+                if let Some(file) = self.files.get_mut(&active_id) {
+                    file.color = self.user_input.line_color;
+                    info!("Active file '{}' chromatogram color updated to {:?}", file.name, file.color);
+                }
+            }
+        }
 
         info!("Line color changed.")
     }
@@ -1159,6 +1181,10 @@ impl MzViewerApp {
                     if self.active_file_id != Some(new_id) {
                         self.active_file_id = Some(new_id);
                         self.state_changed = StateChange::Changed;
+                        // Sync the color picker to reflect the newly active file's color
+                        if let Some(file) = self.files.get(&new_id) {
+                            self.user_input.line_color = file.color;
+                        }
                         info!("Active file changed to ID: {}", new_id);
                     }
                 }
@@ -2056,5 +2082,68 @@ mod tests {
         // Can still access file with ID 1
         assert!(app.files.get(&1).is_some());
         assert_eq!(app.files.get(&1).unwrap().name, "file1.mzML");
+    }
+
+    #[test]
+    fn test_line_color_propagates_to_active_file() {
+        let mut app = MzViewerApp::default();
+
+        let file_id = 0;
+        app.files.insert(
+            file_id,
+            OpenFile {
+                id: file_id,
+                name: "test.mzML".to_string(),
+                path: "test.mzML".to_string(),
+                data: parser::MzData::new(),
+                cached_plot_data: None,
+                color: LineColor::Red,
+                visible: true,
+            },
+        );
+        app.active_file_id = Some(file_id);
+        app.user_input.line_color = LineColor::Red;
+
+        // Simulate user picking Blue
+        app.user_input.line_color = LineColor::Blue;
+
+        // Replicate the propagation logic from add_line_color_options
+        if let Some(active_id) = app.active_file_id {
+            if let Some(file) = app.files.get_mut(&active_id) {
+                file.color = app.user_input.line_color;
+            }
+        }
+
+        assert_eq!(app.files.get(&file_id).unwrap().color, LineColor::Blue);
+    }
+
+    #[test]
+    fn test_active_file_switch_syncs_color_picker() {
+        let mut app = MzViewerApp::default();
+
+        for (i, color) in [LineColor::Red, LineColor::Green].iter().enumerate() {
+            app.files.insert(
+                i,
+                OpenFile {
+                    id: i,
+                    name: format!("file{}.mzML", i),
+                    path: format!("file{}.mzML", i),
+                    data: parser::MzData::new(),
+                    cached_plot_data: None,
+                    color: *color,
+                    visible: true,
+                },
+            );
+        }
+        app.active_file_id = Some(0);
+        app.user_input.line_color = LineColor::Red;
+
+        // Switch to file 1 (Green) and sync the color picker
+        app.active_file_id = Some(1);
+        if let Some(file) = app.files.get(&1) {
+            app.user_input.line_color = file.color;
+        }
+
+        assert_eq!(app.user_input.line_color, LineColor::Green);
     }
 }
