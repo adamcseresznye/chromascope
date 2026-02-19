@@ -102,7 +102,7 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 
 use eframe::egui;
-use log::warn;
+use log::{error, info, warn};
 
 mod dialogs;
 mod interactivity;
@@ -129,6 +129,7 @@ impl MzViewerApp {
     /// - All other fields in `user_input` are set to their default values.
     /// - All other fields in the `MzViewerApp` struct are set to their default values.
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+        let (file_loading_tx, file_loading_rx) = mpsc::sync_channel(32);
         Self {
             files: HashMap::new(),
             active_file_id: None,
@@ -151,6 +152,8 @@ impl MzViewerApp {
             integration_result: None,
             is_processing: false,
             processing_rx: None,
+            file_loading_tx,
+            file_loading_rx,
         }
     }
     /// Resets the internal state of the instance.
@@ -248,6 +251,91 @@ impl MzViewerApp {
         }
     }
 
+    /// Polls for results from background file loading threads.
+    ///
+    /// Called every frame from `update`. Requests a repaint while any file
+    /// is still loading so the spinner stays animated.
+    fn poll_file_loading_result(&mut self, ctx: &egui::Context) {
+        use crate::processing::FileLoadingResult;
+
+        let result = match self.file_loading_rx.try_recv() {
+            Ok(r) => r,
+            Err(mpsc::TryRecvError::Empty) => {
+                // If any file is still loading, request a repaint to keep spinners animating
+                if self.files.values().any(|f| f.is_loading) {
+                    ctx.request_repaint();
+                }
+                return;
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                // This shouldn't happen as file_loading_tx is on self
+                return;
+            }
+        };
+
+        match result {
+            FileLoadingResult::Success {
+                file_id,
+                bounds,
+                scan_filters,
+                path,
+                ..
+            } => {
+                if let Some(file) = self.files.get_mut(&file_id) {
+                    // Apply metadata from background thread
+                    file.data.bounds = bounds;
+                    file.data.available_scan_filters = scan_filters.clone();
+                    file.is_loading = false;
+
+                    // Open a NEW reader on the UI thread for spectrum lookups.
+                    let path_buf = PathBuf::from(&path);
+                    if let Err(e) = file.data.open_reader_only(&path_buf) {
+                        error!("Reader-only open failed for {}: {}", path, e);
+                        self.show_error_dialog(format!(
+                            "File metadata loaded but spectrum lookup unavailable: {}",
+                            e
+                        ));
+                    }
+
+                    // Seed only if no other file has SUCCESSFULLY loaded yet
+                    let no_other_file_loaded = self
+                        .files
+                        .values()
+                        .filter(|f| f.id != file_id)
+                        .all(|f| f.is_loading);
+
+                    if no_other_file_loaded {
+                        if scan_filters.iter().any(|(ms, pol)| {
+                            *ms == 1 && *pol == mzdata::spectrum::ScanPolarity::Positive
+                        }) {
+                            self.user_input.ms_level = 1;
+                            self.user_input.polarity = mzdata::spectrum::ScanPolarity::Positive;
+                        } else if let Some((ms, pol)) = scan_filters.first() {
+                            self.user_input.ms_level = *ms;
+                            self.user_input.polarity = *pol;
+                        }
+                    }
+
+                    self.state_changed = StateChange::Changed;
+                    info!("File ID {} fully loaded and reader opened", file_id);
+                }
+            }
+            FileLoadingResult::Error {
+                file_id,
+                name,
+                message,
+            } => {
+                self.files.remove(&file_id);
+                error!("Background load failed for {}: {}", name, message);
+                self.show_error_dialog(format!("Failed to open {}: {}", name, message));
+                if self.files.is_empty() {
+                    self.active_file_id = None;
+                    self.invalid_file = FileValidity::Invalid;
+                }
+            }
+        }
+    }
+
     /// Builds ProcessingParams from current GUI state with validation.
     ///
     /// This method extracts values from `self.user_input` and constructs
@@ -329,6 +417,7 @@ impl eframe::App for MzViewerApp {
     ///
     /// This method does not return any errors. It calls several other functions that may encounter errors, but those errors are handled within the respective functions
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.poll_file_loading_result(ctx);
         panels::update_data_selection_panel(self, ctx);
         panels::update_file_information_panel(self, ctx);
         panels::update_central_panel(self, ctx);
@@ -441,6 +530,7 @@ mod tests {
                 cached_mass_spectrum: None,
                 color: LineColor::Red,
                 visible: true,
+                is_loading: false,
             },
         );
         app.active_file_id = Some(file_id);
@@ -487,6 +577,7 @@ mod tests {
                 cached_mass_spectrum: None,
                 color: LineColor::Red,
                 visible: true,
+                is_loading: false,
             },
         );
         app.active_file_id = Some(file_id);
@@ -533,6 +624,7 @@ mod tests {
                 cached_mass_spectrum: None,
                 color: LineColor::Red,
                 visible: true,
+                is_loading: false,
             },
         );
         app.active_file_id = Some(file_id);
@@ -595,6 +687,7 @@ mod tests {
             cached_mass_spectrum: None,
             color: LineColor::Blue,
             visible: true,
+            is_loading: false,
         };
 
         let test_data: Vec<[f64; 2]> = vec![[1.0, 100.0], [2.0, 200.0], [3.0, 150.0]];
@@ -622,6 +715,7 @@ mod tests {
             cached_mass_spectrum: None,
             color: LineColor::Red,
             visible: true,
+            is_loading: false,
         };
         let file1_id = app.next_file_id;
         app.next_file_id += 1;
@@ -636,6 +730,7 @@ mod tests {
             cached_mass_spectrum: None,
             color: LineColor::Green,
             visible: true,
+            is_loading: false,
         };
         let file2_id = app.next_file_id;
         app.next_file_id += 1;
@@ -650,6 +745,7 @@ mod tests {
             cached_mass_spectrum: None,
             color: LineColor::Blue,
             visible: true,
+            is_loading: false,
         };
         let file3_id = app.next_file_id;
         app.next_file_id += 1;
@@ -694,6 +790,7 @@ mod tests {
                 cached_mass_spectrum: None,
                 color: next_color_for_index(i),
                 visible: true,
+                is_loading: false,
             };
             app.files.insert(i, file);
         }
@@ -740,6 +837,7 @@ mod tests {
                 cached_mass_spectrum: None,
                 color: LineColor::Red,
                 visible: true,
+                is_loading: false,
             },
         );
         app.active_file_id = Some(file_id);
@@ -775,6 +873,7 @@ mod tests {
                     cached_mass_spectrum: None,
                     color: *color,
                     visible: true,
+                    is_loading: false,
                 },
             );
         }

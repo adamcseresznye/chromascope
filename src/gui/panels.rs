@@ -1,5 +1,4 @@
 ﻿use super::plotting;
-use crate::error::Result;
 use crate::gui::state::{
     next_color_for_index, FileId, FileValidity, MzViewerApp, OpenFile, StateChange,
 };
@@ -10,10 +9,6 @@ use crate::{
 use eframe::egui;
 use egui::{Color32, Context, Ui};
 use log::{debug, error, info, warn};
-use mzdata::spectrum::ScanPolarity;
-use std::path::PathBuf;
-
-const FILE_FORMAT: &str = "mzML";
 /// Updates the data selection panel in the user interface.
 ///
 /// This function creates a top panel in the UI that contains the following elements:
@@ -217,7 +212,13 @@ pub fn handle_file_selection(app: &mut MzViewerApp) {
         let mut first_new_file_id: Option<FileId> = None;
 
         for (color_index, path) in paths.iter().enumerate() {
-            info!("Processing file: {:?}", path);
+            let path_str = path.display().to_string();
+
+            if !path_str.ends_with("mzML") {
+                warn!("Invalid file format: {}", path_str);
+                app.show_error_dialog(format!("Not an mzML file: {}", path_str));
+                continue;
+            }
 
             // Assign FileId and increment counter
             let file_id = app.next_file_id;
@@ -228,43 +229,41 @@ pub fn handle_file_selection(app: &mut MzViewerApp) {
                 first_new_file_id = Some(file_id);
             }
 
-            match create_open_file(app, path, color_index, file_id) {
-                Ok(open_file) => {
-                    info!("File added successfully: {:?} with ID {}", path, file_id);
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("Loading…")
+                .to_string();
+            let color = next_color_for_index(color_index);
 
-                    // Set default scan filter from the first file if this is the first file being opened
-                    if first_new_file_id == Some(file_id) && app.files.is_empty() {
-                        // Prefer MS1 Positive, fallback to first available
-                        if open_file
-                            .data
-                            .available_scan_filters
-                            .iter()
-                            .any(|(ms, pol)| *ms == 1 && *pol == ScanPolarity::Positive)
-                        {
-                            app.user_input.ms_level = 1;
-                            app.user_input.polarity = ScanPolarity::Positive;
-                            info!("Set default scan filter to MS1 Positive");
-                        } else if !open_file.data.available_scan_filters.is_empty() {
-                            // Get first available scan filter (sorted)
-                            let mut filters = open_file.data.available_scan_filters.to_vec();
-                            filters.sort_by_key(|(ms_level, polarity)| {
-                                (*ms_level, format!("{:?}", polarity))
-                            });
-                            if let Some((ms_level, polarity)) = filters.first() {
-                                app.user_input.ms_level = *ms_level;
-                                app.user_input.polarity = *polarity;
-                                info!("Set default scan filter to MS{} {:?}", ms_level, polarity);
-                            }
-                        }
-                    }
+            // Insert placeholder immediately — spinner shows in UI right away
+            app.files.insert(
+                file_id,
+                OpenFile {
+                    id: file_id,
+                    name,
+                    path: path_str,
+                    data: parser::MzData::new(),
+                    cached_plot_data: None,
+                    cached_chromatogram: None,
+                    cached_mass_spectrum: None,
+                    color,
+                    visible: true,
+                    is_loading: true,
+                },
+            );
 
-                    app.files.insert(file_id, open_file);
-                }
-                Err(e) => {
-                    error!("Failed to open file {:?}: {}", path, e);
-                    app.show_error_dialog(format!("Failed to open file: {}", e));
-                }
-            }
+            info!(
+                "Placeholder inserted for file ID {}, spawning background thread",
+                file_id
+            );
+
+            let tx_clone = app.file_loading_tx.clone();
+            let path_clone = path.clone();
+            std::thread::spawn(move || {
+                let result = crate::processing::open_file_in_background(path_clone, file_id, color);
+                let _ = tx_clone.send(result);
+            });
         }
 
         // Set the active file to the first newly added file
@@ -363,73 +362,6 @@ pub fn handle_csv_export(app: &mut MzViewerApp) {
 
 /// Creates an OpenFile struct from a file path.
 ///
-/// This function validates the file format, extracts the file name, loads the MzData,
-/// and assigns a color based on the file index.
-///
-/// # Parameters
-///
-/// - `path`: A reference to the file path.
-/// - `index`: The index this file will have in the files vector (used for color assignment).
-/// - `file_id`: The stable FileId to assign to this file.
-///
-/// # Returns
-///
-/// - `Option<OpenFile>`: The created OpenFile struct, or None if the file format is invalid or loading fails.
-pub fn create_open_file(
-    _app: &MzViewerApp,
-    path: &PathBuf,
-    index: usize,
-    file_id: FileId,
-) -> Result<OpenFile> {
-    let file_path_str = path.display().to_string();
-    info!("Creating OpenFile for: {}", file_path_str);
-
-    if !file_path_str.ends_with(FILE_FORMAT) {
-        warn!(
-            "Invalid file format for: {}. Expected {} file.",
-            file_path_str, FILE_FORMAT
-        );
-        return Err(crate::error::ChromascopeError::IoError(
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("Invalid file format. Expected {} file.", FILE_FORMAT),
-            ),
-        ));
-    }
-
-    // Extract file name from path
-    let file_name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .ok_or_else(|| {
-            crate::error::ChromascopeError::IoError(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "Invalid file path",
-            ))
-        })?
-        .to_string();
-
-    // Load the MzData
-    let mut data = parser::MzData::new();
-    data.open_msfile(path)?;
-
-    info!(
-        "File opened successfully: {} with ID {}",
-        file_name, file_id
-    );
-    Ok(OpenFile {
-        id: file_id,
-        name: file_name,
-        path: file_path_str,
-        data,
-        cached_plot_data: None,
-        cached_chromatogram: None,
-        cached_mass_spectrum: None,
-        color: next_color_for_index(index),
-        visible: true,
-    })
-}
-
 /// Updates the file information panel in the user interface.
 ///
 /// This function is responsible for displaying all opened files in the left-side panel of the application.
@@ -465,12 +397,49 @@ pub fn update_file_information_panel(app: &mut MzViewerApp, ctx: &egui::Context)
                 let is_active = app.active_file_id == Some(*file_id);
 
                 ui.horizontal(|ui| {
-                    // Highlight the active file
-                    if is_active {
-                        let frame = egui::Frame::default()
-                            .fill(ui.visuals().selection.bg_fill)
-                            .inner_margin(egui::Margin::same(4.0));
-                        frame.show(ui, |ui| {
+                    if file.is_loading {
+                        ui.spinner();
+                        ui.label(
+                            egui::RichText::new(&file.name)
+                                .small()
+                                .italics()
+                                .color(egui::Color32::GRAY),
+                        );
+                        // Skip close/select buttons while loading
+                    } else {
+                        // Highlight the active file
+                        if is_active {
+                            let frame = egui::Frame::default()
+                                .fill(ui.visuals().selection.bg_fill)
+                                .inner_margin(egui::Margin::same(4.0));
+                            frame.show(ui, |ui| {
+                                // Visibility checkbox
+                                if ui.checkbox(&mut file.visible, "").changed() {
+                                    info!(
+                                        "File visibility toggled: {} (ID: {}) -> {}",
+                                        file.name, file_id, file.visible
+                                    );
+                                }
+
+                                // File name label (clickable to set as active)
+                                if ui
+                                    .selectable_label(true, egui::RichText::new(&file.name).small())
+                                    .on_hover_text(format!("Active file (ID: {})", file_id))
+                                    .clicked()
+                                {
+                                    new_active_id = Some(*file_id);
+                                }
+
+                                // Close button
+                                if ui.small_button("❌").on_hover_text("Close file").clicked() {
+                                    file_to_remove = Some(*file_id);
+                                    info!(
+                                        "Close button clicked for file: {} (ID: {})",
+                                        file.name, file_id
+                                    );
+                                }
+                            });
+                        } else {
                             // Visibility checkbox
                             if ui.checkbox(&mut file.visible, "").changed() {
                                 info!(
@@ -481,8 +450,11 @@ pub fn update_file_information_panel(app: &mut MzViewerApp, ctx: &egui::Context)
 
                             // File name label (clickable to set as active)
                             if ui
-                                .selectable_label(true, egui::RichText::new(&file.name).small())
-                                .on_hover_text(format!("Active file (ID: {})", file_id))
+                                .selectable_label(false, egui::RichText::new(&file.name).small())
+                                .on_hover_text(format!(
+                                    "Click to set as active file (ID: {})",
+                                    file_id
+                                ))
                                 .clicked()
                             {
                                 new_active_id = Some(*file_id);
@@ -496,32 +468,6 @@ pub fn update_file_information_panel(app: &mut MzViewerApp, ctx: &egui::Context)
                                     file.name, file_id
                                 );
                             }
-                        });
-                    } else {
-                        // Visibility checkbox
-                        if ui.checkbox(&mut file.visible, "").changed() {
-                            info!(
-                                "File visibility toggled: {} (ID: {}) -> {}",
-                                file.name, file_id, file.visible
-                            );
-                        }
-
-                        // File name label (clickable to set as active)
-                        if ui
-                            .selectable_label(false, egui::RichText::new(&file.name).small())
-                            .on_hover_text(format!("Click to set as active file (ID: {})", file_id))
-                            .clicked()
-                        {
-                            new_active_id = Some(*file_id);
-                        }
-
-                        // Close button
-                        if ui.small_button("❌").on_hover_text("Close file").clicked() {
-                            file_to_remove = Some(*file_id);
-                            info!(
-                                "Close button clicked for file: {} (ID: {})",
-                                file.name, file_id
-                            );
                         }
                     }
                 });
