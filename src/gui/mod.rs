@@ -87,25 +87,19 @@
 
 #![warn(clippy::all)]
 
-#[cfg(target_arch = "wasm32")]
-use crate::processing::process_chromatogram;
 use crate::{
     error::{ChromascopeError, Result},
-    parser,
-    plotting_parameters::{LineColor, PlotType},
+    plotting_parameters::PlotType,
     processing::ProcessingParams,
     validation::XicParams,
 };
 
-use mzdata::spectrum::ScanPolarity;
 use std::collections::HashMap;
 use std::path::PathBuf;
-#[cfg(not(target_arch = "wasm32"))]
 use std::sync::mpsc;
 
 use eframe::egui;
-use egui::Context;
-use log::{debug, error, info, warn};
+use log::{warn};
 
 mod dialogs;
 mod interactivity;
@@ -113,7 +107,7 @@ mod panels;
 mod plotting;
 mod state;
 
-use state::{next_color_for_index, FileId, FileValidity, OpenFile, StateChange};
+use state::{FileValidity, StateChange};
 pub use state::{MzViewerApp, UserInput};
 
 impl MzViewerApp {
@@ -149,7 +143,6 @@ impl MzViewerApp {
             integration_end_rt: None,
             integration_result: None,
             is_processing: false,
-            #[cfg(not(target_arch = "wasm32"))]
             processing_rx: None,
         }
     }
@@ -169,17 +162,6 @@ impl MzViewerApp {
         self.error_message = Some(message);
     }
 
-    /// Renders the error dialog if an error message is present.
-    ///
-    /// This creates a centered modal window with the error message and an OK button.
-    /// The dialog blocks interaction until dismissed by clicking OK.
-    ///
-    /// # Parameters
-    /// - `ctx`: The egui context for rendering the dialog
-    fn render_error_dialog(&mut self, ctx: &egui::Context) {
-        dialogs::render_error_dialog(self, ctx);
-    }
-
     /// Fires a background thread to process the chromatogram, keeping the UI responsive.
     ///
     /// Builds processing parameters from the current GUI state, then spawns a thread
@@ -188,7 +170,6 @@ impl MzViewerApp {
     ///
     /// `MzMLReaderType<File>` is `!Send`, so the file cannot be moved to the thread;
     /// the thread opens its own independent `MzData` instance.
-    #[cfg(not(target_arch = "wasm32"))]
     fn request_chromatogram_update(&mut self) {
         let params = match self.build_processing_params() {
             Ok(p) => p,
@@ -223,7 +204,6 @@ impl MzViewerApp {
     /// Called every frame from `plot_chromatogram`. Requests a repaint while the
     /// background thread is still running so the spinner stays animated. When the
     /// result arrives it is applied to the matching file's cache.
-    #[cfg(not(target_arch = "wasm32"))]
     fn poll_processing_result(&mut self, ctx: &egui::Context) {
         let result = match &self.processing_rx {
             Some(rx) => match rx.try_recv() {
@@ -259,72 +239,6 @@ impl MzViewerApp {
                 self.show_error_dialog(message);
             }
         }
-    }
-
-    /// Updates the active file's cached chromatogram data.
-    ///
-    /// This method orchestrates the business logic for chromatogram extraction
-    /// by delegating to the processing module. It should be called whenever
-    /// parameters change (polarity, plot type, smoothing, etc.)
-    ///
-    /// # Returns
-    /// - `Ok(())` if processing succeeded and cache was updated
-    /// - `Err(ChromascopeError)` if validation, extraction, or processing failed
-    ///
-    /// # Errors
-    /// - `MissingXicParams` - XIC selected but parameters invalid/missing
-    /// - `InvalidMass` / `InvalidMassTolerance` - XIC parameter validation failed
-    /// - Other errors from data extraction or smoothing
-    #[cfg(target_arch = "wasm32")]
-    fn update_chromatogram_data(&mut self) -> Result<()> {
-        let active_id = self.active_file_id.ok_or_else(|| {
-            crate::error::ChromascopeError::FileNotOpened("No active file selected".to_string())
-        })?;
-
-        // Build processing parameters from current GUI state first
-        let params = self.build_processing_params()?;
-
-        // Then get mutable reference to file
-        let file = self.files.get_mut(&active_id).ok_or_else(|| {
-            crate::error::ChromascopeError::FileNotOpened(format!(
-                "Active file ID {} not found in files",
-                active_id
-            ))
-        })?;
-
-        // Process chromatogram using business logic layer
-        let result = process_chromatogram(&mut file.data, &params)?;
-
-        // Cache the result and the extracted chromatogram for triple-click spectrum lookup
-        file.cached_plot_data = Some(result);
-
-        // Re-extract the chromatogram (cheap since it was already computed) to cache it
-        // for use by handle_chromatogram_click -> get_closest_index
-        let chrom = match params.plot_type {
-            crate::plotting_parameters::PlotType::Tic => {
-                file.data
-                    .get_tic(params.ms_level, params.polarity, params.mz_range)
-            }
-            crate::plotting_parameters::PlotType::Bpc => {
-                file.data
-                    .get_bpic(params.ms_level, params.polarity, params.mz_range)
-            }
-            crate::plotting_parameters::PlotType::Xic => {
-                if let Some(xic_params) = &params.xic_params {
-                    file.data.get_xic(
-                        xic_params.mass(),
-                        params.ms_level,
-                        xic_params.polarity(),
-                        xic_params.mass_tolerance(),
-                    )
-                } else {
-                    Err(crate::error::ChromascopeError::MissingXicParams)
-                }
-            }
-        };
-        file.cached_chromatogram = chrom.ok();
-
-        Ok(())
     }
 
     /// Builds ProcessingParams from current GUI state with validation.
@@ -385,34 +299,6 @@ impl MzViewerApp {
             xic_params,
             mz_range,
         })
-    }
-
-    /// Updates the XIC (Extracted Ion Chromatogram) settings window.
-    ///
-    /// This function is responsible for rendering the UI elements that allow the user to configure the settings for the XIC plot, such as the m/z value and mass tolerance.
-    ///
-    /// # Parameters
-    ///
-    /// - `ctx`: A reference to the `egui::Context` object, which is used to render the UI elements.
-    ///
-    /// # Functionality
-    ///
-    /// 1. Checks if the `options_window_open` field is `true`, indicating that the XIC settings window should be displayed.
-    /// 2. If the window should be displayed, it creates a new `egui::Window` with the title "XIC settings".
-    /// 3. The window is set to be open by default, and the `options_window_open` field is used to control whether the window should remain open or be closed.
-    /// 4. Inside the window, it adds a label that instructs the user to enter the m/z and mass tolerance values.
-    /// 5. It adds a `TextEdit` widget for the user to enter the m/z value.
-    ///    - If the user loses focus on the m/z input field, the function updates the `user_input.mass` field with the entered value (or the default value if the input is invalid).
-    ///    - It also sets the `state_changed` field to `StateChange::Changed`.
-    /// 6. It adds a `TextEdit` widget for the user to enter the mass tolerance value in ppm.
-    ///    - If the user loses focus on the mass tolerance input field, the function updates the `user_input.mass_tolerance` field with the entered value (or the default value if the input is invalid).
-    ///    - It also sets the `state_changed` field to `StateChange::Changed`.
-    ///
-    /// # Errors
-    ///
-    /// This function does not return any errors. It handles the rendering of the XIC settings window and the updating of the corresponding fields in the struct.
-    fn update_xic_settings_window(&mut self, ctx: &egui::Context) {
-        dialogs::render_xic_settings_window(self, ctx);
     }
 }
 impl eframe::App for MzViewerApp {
@@ -898,7 +784,6 @@ mod tests {
     }
 
     /// Calling poll_processing_result when processing_rx is None must not panic.
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn test_poll_with_no_receiver_does_not_panic() {
         let ctx = egui::Context::default();

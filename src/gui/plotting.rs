@@ -1,7 +1,7 @@
 use crate::gui::state::{MzViewerApp, OpenFile, StateChange};
 use eframe::egui;
 use egui_plot::{Legend, Line, PlotPoint, PlotPoints, Polygon, VLine};
-use log::{debug, error, info, warn};
+use log::{debug, info, warn};
 
 /// Renders the chromatogram plot widget and returns the response plus coordinate data.
 pub fn render_chromatogram(
@@ -141,7 +141,6 @@ pub fn plot_chromatogram(
     ui: &mut egui::Ui,
     ctx: &egui::Context,
 ) -> egui::Response {
-    #[cfg(not(target_arch = "wasm32"))]
     app.poll_processing_result(ctx);
 
     if app.state_changed == StateChange::Changed && app.active_file_id.is_some() {
@@ -154,18 +153,8 @@ pub fn plot_chromatogram(
             }
         }
 
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            if !app.is_processing {
-                app.request_chromatogram_update();
-            }
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            if let Err(e) = app.update_chromatogram_data() {
-                error!("Failed to process chromatogram: {}", e);
-                app.show_error_dialog(format!("Failed to process chromatogram: {}", e));
-            }
+        if !app.is_processing {
+            app.request_chromatogram_update();
         }
 
         app.state_changed = StateChange::Unchanged;

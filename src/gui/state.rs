@@ -4,7 +4,6 @@
 };
 use mzdata::spectrum::ScanPolarity;
 use std::collections::HashMap;
-#[cfg(not(target_arch = "wasm32"))]
 use std::sync::mpsc;
 
 #[derive(PartialEq)]
@@ -167,6 +166,5 @@ pub struct MzViewerApp {
     /// Whether the background processing thread is currently running
     pub(crate) is_processing: bool,
     /// Receiver for results from the background processing thread (native only)
-    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) processing_rx: Option<mpsc::Receiver<crate::processing::ProcessingResult>>,
 }

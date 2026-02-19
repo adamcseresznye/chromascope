@@ -538,7 +538,6 @@ dependencies = [
  "rfd",
  "serde",
  "thiserror",
- "wasm-bindgen-futures",
 ]
 
 [[package]]
