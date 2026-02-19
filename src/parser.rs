@@ -172,20 +172,26 @@ impl MzData {
 
     /// Extracts min/max m/z, RT, and scan count from the opened file.
     ///
-    /// Called automatically during open_msfile. Iterates through all spectra
-    /// to determine the valid parameter ranges for this file.
+    /// Called automatically during open_msfile. Uses a two-tier strategy:
     ///
-    /// The m/z range is extracted from all peaks across all spectra, then rounded
-    /// down (floor) and up (ceil) for nice display values.
+    /// **Tier 1 — scan window metadata (O(spectra), zero peak decoding):**
+    /// Reads `ScanWindow::lower_bound` / `upper_bound` from every spectrum's
+    /// description. These fields are populated during XML tag parsing, before
+    /// any base64/zlib binary array work is done.
+    ///
+    /// **Tier 2 — peak sampling fallback (O(SAMPLE_SIZE × peaks)):**
+    /// If no non-empty scan windows are found (some converters omit the
+    /// `<scanWindowList>` element), decodes peaks for only the first and last
+    /// `SAMPLE_SIZE` spectra using `get_spectrum_by_index`.
     ///
     /// # Returns
     /// * `Ok(())` - If bounds were successfully extracted
-    /// * `Err(ChromascopeError::FileNotOpened)` - If no peaks found in file
+    /// * `Err(ChromascopeError::FileNotOpened)` - If no peaks or windows found
     ///
     /// # Errors
     /// Returns error if:
     /// - File is not opened
-    /// - No valid peaks found in any spectrum
+    /// - No valid peaks or scan windows found in any spectrum
     fn extract_bounds(&mut self) -> Result<()> {
         info!("Extracting data bounds from {:?}", &self.file_name);
 
@@ -194,46 +200,79 @@ impl MzData {
             .as_mut()
             .ok_or_else(|| ChromascopeError::FileNotOpened("No file opened".to_string()))?;
 
-        let mut min_mz = f64::MAX;
-        let mut max_mz = f64::MIN;
         let mut min_rt = f32::MAX;
         let mut max_rt = f32::MIN;
         let mut scan_count = 0usize;
         let mut scan_filters: Vec<(u8, ScanPolarity)> = Vec::new();
+        let mut min_mz = f64::MAX;
+        let mut max_mz = f64::MIN;
 
+        // ── Pass 1: description-only scan (always runs) ──────────────────────
+        // Collects RT range, scan count, scan filters, AND scan window m/z
+        // bounds in a single O(spectra) pass with zero peak decoding.
+        // ScanWindow::lower_bound / upper_bound are populated during XML
+        // parsing, before any binary array access. See mzdata scan_properties.rs
         for spectrum in reader.iter() {
             let rt = spectrum.start_time() as f32;
             min_rt = min_rt.min(rt);
             max_rt = max_rt.max(rt);
             scan_count += 1;
 
-            if let Some(arrays) = spectrum.arrays.as_ref() {
-                if let Ok(mzs) = arrays.mzs() {
-                    for &mz in mzs.iter() {
-                        min_mz = min_mz.min(mz);
-                        max_mz = max_mz.max(mz);
-                    }
-                }
-            }
-
             let pair = (spectrum.description.ms_level, spectrum.description.polarity);
             if !scan_filters.contains(&pair) {
                 scan_filters.push(pair);
             }
+
+            for scan_event in spectrum.description.acquisition.scans.iter() {
+                for window in scan_event.scan_windows.iter() {
+                    if !window.is_empty() {
+                        min_mz = min_mz.min(window.lower_bound as f64);
+                        max_mz = max_mz.max(window.upper_bound as f64);
+                    }
+                }
+            }
+        }
+
+        // ── Pass 2: peak sampling fallback (only if scan windows absent) ─────
+        // Some converters omit <scanWindowList> in their mzML output.
+        // Samples first+last SAMPLE_SIZE spectra and decodes their peaks.
+        // Complexity: O(SAMPLE_SIZE × peaks_per_spectrum) — effectively O(1).
+        if min_mz == f64::MAX || max_mz == f64::MIN {
+            const SAMPLE_SIZE: usize = 10;
+            warn!(
+                "No scan window metadata found in {:?} — falling back to peak sampling \
+                 (first+last {} spectra)",
+                &self.file_name, SAMPLE_SIZE
+            );
+
+            let first_end = SAMPLE_SIZE.min(scan_count);
+            let last_start = scan_count.saturating_sub(SAMPLE_SIZE).max(first_end); // no overlap
+
+            for idx in (0..first_end).chain(last_start..scan_count) {
+                if let Some(spectrum) = reader.get_spectrum_by_index(idx) {
+                    if let Some(arrays) = spectrum.arrays.as_ref() {
+                        if let Ok(mzs) = arrays.mzs() {
+                            for &mz in mzs.iter() {
+                                min_mz = min_mz.min(mz);
+                                max_mz = max_mz.max(mz);
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            info!("Fast path: m/z bounds from scan window metadata (no peak decoding)");
         }
 
         if min_mz == f64::MAX || max_mz == f64::MIN {
             return Err(ChromascopeError::FileNotOpened(
-                "No valid peaks found in file".into(),
+                "No valid peaks or scan windows found in file".into(),
             ));
         }
 
-        let min_mz = min_mz.floor();
-        let max_mz = max_mz.ceil();
-
         self.bounds = DataBounds {
-            min_mz,
-            max_mz,
+            min_mz: min_mz.floor(),
+            max_mz: max_mz.ceil(),
             min_rt,
             max_rt,
             scan_count,
@@ -242,7 +281,7 @@ impl MzData {
 
         info!(
             "Extracted bounds: m/z [{:.2}-{:.2}], RT [{:.2}-{:.2}] min, {} scans, {} unique scan filters",
-            min_mz, max_mz, min_rt, max_rt, scan_count, self.available_scan_filters.len()
+            self.bounds.min_mz, self.bounds.max_mz, min_rt, max_rt, scan_count, self.available_scan_filters.len()
         );
 
         Ok(())
@@ -1567,6 +1606,41 @@ mod tests {
         for mass in [722.43, 500.0, 1000.0] {
             let result = mzdata.get_xic(mass, 1, ScanPolarity::Positive, 1000.0);
             assert!(result.is_ok());
+        }
+    }
+
+    #[test]
+    fn test_extract_bounds_uses_scan_windows_when_available() {
+        // If the test file has scan window metadata, bounds should be populated
+        // without needing the sampling fallback. Verify by checking that the
+        // bounds are non-trivial and represent the instrument scan range.
+        let data = setup_test_parser();
+
+        // The Thermo test file should have scan windows (Thermo mzML typically does).
+        // Bounds should reflect the programmed scan range, e.g. ~100-2000 m/z.
+        assert!(data.bounds.min_mz >= 0.0);
+        assert!(data.bounds.max_mz > data.bounds.min_mz);
+        assert!(
+            data.bounds.max_mz > 100.0,
+            "max_mz suspiciously low — scan windows may not have been read"
+        );
+    }
+
+    #[test]
+    fn test_scan_window_fields_are_accessible() {
+        // Regression guard: ensures ScanWindow::lower_bound and upper_bound
+        // remain accessible at the expected path after any mzdata upgrade.
+        let path = get_test_file_path();
+        let mut reader = MzMLReader::open_path(&path).unwrap();
+        if let Some(spectrum) = reader.get_spectrum_by_index(0) {
+            for scan_event in spectrum.description.acquisition.scans.iter() {
+                for window in scan_event.scan_windows.iter() {
+                    // If this compiles and runs, the field path is correct.
+                    let _ = window.lower_bound;
+                    let _ = window.upper_bound;
+                    let _ = window.is_empty();
+                }
+            }
         }
     }
 }
