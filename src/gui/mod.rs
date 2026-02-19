@@ -94,12 +94,15 @@ use crate::{
     validation::XicParams,
 };
 
+#[cfg(test)]
+use crate::{parser, plotting_parameters::LineColor};
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::mpsc;
 
 use eframe::egui;
-use log::{warn};
+use log::warn;
 
 mod dialogs;
 mod interactivity;
@@ -108,6 +111,10 @@ mod plotting;
 mod state;
 
 use state::{FileValidity, StateChange};
+
+#[cfg(test)]
+use state::{next_color_for_index, OpenFile};
+
 pub use state::{MzViewerApp, UserInput};
 
 impl MzViewerApp {

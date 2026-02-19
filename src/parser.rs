@@ -40,35 +40,6 @@ pub struct ChromatogramData {
     pub index: Vec<usize>,
 }
 
-impl ChromatogramData {
-    /// Prepare chromatogram data for plotting by averaging duplicate retention times.
-    ///
-    /// Returns a vector of `[retention_time, average_intensity]` pairs suitable for plotting.
-    ///
-    /// # Deprecated
-    /// Use [`crate::processing::prepare_chromatogram_for_plot`] instead.
-    #[deprecated(note = "Use crate::processing::prepare_chromatogram_for_plot instead")]
-    pub fn prepare_for_plot(&self) -> Result<Vec<[f64; 2]>> {
-        crate::processing::prepare_chromatogram_for_plot(self)
-    }
-
-    /// Find the closest spectrum index by retention time using binary search.
-    ///
-    /// # Arguments
-    /// * `clicked_rt` - Target retention time to search for
-    ///
-    /// # Returns
-    /// * `Some(usize)` - Spectrum index closest to the target retention time
-    /// * `None` - If retention time data is empty
-    ///
-    /// # Deprecated
-    /// Use [`crate::processing::find_closest_spectrum_index`] instead.
-    #[deprecated(note = "Use crate::processing::find_closest_spectrum_index instead")]
-    pub fn get_closest_index(&self, clicked_rt: f32) -> Option<usize> {
-        crate::processing::find_closest_spectrum_index(self, clicked_rt)
-    }
-}
-
 /// Represents a mass spectrum at a specific retention time.
 #[derive(Debug, Clone)]
 pub struct MassSpectrum {
@@ -86,8 +57,8 @@ pub struct MassSpectrum {
 pub struct MzData {
     /// An optional `String` representing the name of the data file.
     file_name: Option<String>,
-    /// A `Result` containing the `MzMLReaderType<File>`, which represents the parsed mass spectrometry file.
-    msfile: Result<MzMLReaderType<File>>,
+    /// An optional `MzMLReaderType<File>` representing the parsed mass spectrometry file.
+    msfile: Option<MzMLReaderType<File>>,
     /// Valid parameter ranges for this file (extracted during opening)
     pub bounds: DataBounds,
     /// Vector of unique (ms_level, polarity) combinations found in this file
@@ -99,7 +70,7 @@ impl core::fmt::Debug for MzData {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("MzData")
             .field("file_name", &self.file_name)
-            .field("msfile", &"Result<MzMLReaderType<File>>")
+            .field("msfile", &"Option<MzMLReaderType<File>>")
             .field("bounds", &self.bounds)
             .field("available_scan_filters", &self.available_scan_filters)
             .finish()
@@ -121,9 +92,7 @@ impl MzData {
     pub fn new() -> Self {
         Self {
             file_name: None,
-            msfile: Err(ChromascopeError::FileNotOpened(
-                "No file opened yet".to_string(),
-            )),
+            msfile: None,
             bounds: DataBounds::unrestricted(),
             available_scan_filters: Vec::new(),
         }
@@ -154,7 +123,7 @@ impl MzData {
 
         match MzMLReader::open_path(&path) {
             Ok(reader) => {
-                self.msfile = Ok(reader);
+                self.msfile = Some(reader);
                 self.file_name = Some(path.display().to_string());
                 debug!("Successfully opened MzML file at path: {:?}", &path);
 
@@ -198,7 +167,7 @@ impl MzData {
         let reader = self
             .msfile
             .as_mut()
-            .map_err(|e| ChromascopeError::FileNotOpened(format!("{}", e)))?;
+            .ok_or_else(|| ChromascopeError::FileNotOpened("No file opened".to_string()))?;
 
         // Collect all spectra once; the mzdata iterator is not parallel-safe directly.
         let spectra: Vec<_> = reader.iter().collect();
@@ -284,13 +253,12 @@ impl MzData {
             &self.file_name, ms_level, polarity
         );
 
-        if self.msfile.is_err() {
-            return Err(ChromascopeError::FileNotOpened(
+        let reader = self.msfile.as_mut().ok_or_else(|| {
+            ChromascopeError::FileNotOpened(
                 "File must be opened before extracting chromatogram".to_string(),
-            ));
-        }
+            )
+        })?;
 
-        let reader = self.msfile.as_mut().unwrap();
         let spectra: Vec<_> = reader.iter().collect();
 
         let mut results: Vec<(f32, f32, f32, usize)> = spectra
@@ -300,24 +268,30 @@ impl MzData {
                 let rt = spectrum.start_time() as f32;
                 let idx = spectrum.index();
                 let (intensity, mz) = if let Some((min_mz, max_mz)) = mz_range {
-                    let centroided = spectrum.clone().into_centroid().unwrap_or_else(|_| {
-                        warn!("Failed to centroid spectrum at RT {}", rt);
-                        // Return a zero-intensity peak on failure
-                        spectrum.clone().into_centroid().unwrap()
-                    });
-                    let max_peak = centroided
-                        .peaks
-                        .iter()
-                        .filter(|p| p.mz >= min_mz && p.mz <= max_mz)
-                        .max_by(|a, b| {
-                            a.intensity
-                                .partial_cmp(&b.intensity)
-                                .unwrap_or(Ordering::Equal)
-                        });
-                    if let Some(peak) = max_peak {
-                        (peak.intensity, peak.mz as f32)
-                    } else {
-                        (0.0_f32, 0.0_f32)
+                    match spectrum.clone().into_centroid() {
+                        Ok(centroided) => {
+                            let max_peak = centroided
+                                .peaks
+                                .iter()
+                                .filter(|p| p.mz >= min_mz && p.mz <= max_mz)
+                                .max_by(|a, b| {
+                                    a.intensity
+                                        .partial_cmp(&b.intensity)
+                                        .unwrap_or(Ordering::Equal)
+                                });
+                            if let Some(peak) = max_peak {
+                                (peak.intensity, peak.mz as f32)
+                            } else {
+                                (0.0_f32, 0.0_f32)
+                            }
+                        }
+                        Err(_) => {
+                            warn!(
+                                "Failed to centroid spectrum at RT {}, using zero intensity",
+                                rt
+                            );
+                            (0.0_f32, 0.0_f32)
+                        }
                     }
                 } else {
                     let bp = spectrum.peaks().base_peak();
@@ -372,13 +346,12 @@ impl MzData {
             &self.file_name, ms_level, polarity
         );
 
-        if self.msfile.is_err() {
-            return Err(ChromascopeError::FileNotOpened(
+        let reader = self.msfile.as_mut().ok_or_else(|| {
+            ChromascopeError::FileNotOpened(
                 "File must be opened before extracting chromatogram".to_string(),
-            ));
-        }
+            )
+        })?;
 
-        let reader = self.msfile.as_mut().unwrap();
         let spectra: Vec<_> = reader.iter().collect();
 
         let mut results: Vec<(f32, f32, usize)> = spectra
@@ -388,16 +361,21 @@ impl MzData {
                 let rt = spectrum.start_time() as f32;
                 let idx = spectrum.index();
                 let tic = if let Some((min_mz, max_mz)) = mz_range {
-                    let centroided = spectrum.clone().into_centroid().unwrap_or_else(|_| {
-                        warn!("Failed to centroid spectrum at RT {}", rt);
-                        spectrum.clone().into_centroid().unwrap()
-                    });
-                    centroided
-                        .peaks
-                        .iter()
-                        .filter(|p| p.mz >= min_mz && p.mz <= max_mz)
-                        .map(|p| p.intensity)
-                        .sum()
+                    match spectrum.clone().into_centroid() {
+                        Ok(centroided) => centroided
+                            .peaks
+                            .iter()
+                            .filter(|p| p.mz >= min_mz && p.mz <= max_mz)
+                            .map(|p| p.intensity)
+                            .sum(),
+                        Err(_) => {
+                            warn!(
+                                "Failed to centroid spectrum at RT {}, using zero intensity",
+                                rt
+                            );
+                            0.0_f32
+                        }
+                    }
                 } else {
                     spectrum.peaks().tic()
                 };
@@ -458,13 +436,12 @@ impl MzData {
             return Err(ChromascopeError::InvalidMassTolerance(mass_tolerance));
         }
 
-        if self.msfile.is_err() {
-            return Err(ChromascopeError::FileNotOpened(
+        let reader = self.msfile.as_mut().ok_or_else(|| {
+            ChromascopeError::FileNotOpened(
                 "File must be opened before extracting chromatogram".to_string(),
-            ));
-        }
+            )
+        })?;
 
-        let reader = self.msfile.as_mut().unwrap();
         let spectra: Vec<_> = reader.iter().collect();
 
         // into_centroid is the most expensive per-spectrum call — highest parallelism gain.
@@ -526,7 +503,7 @@ impl MzData {
         let reader = self
             .msfile
             .as_mut()
-            .map_err(|e| ChromascopeError::FileNotOpened(format!("{}", e)))?;
+            .ok_or_else(|| ChromascopeError::FileNotOpened("No file opened".to_string()))?;
 
         let spec = reader.get_spectrum_by_index(index).ok_or_else(|| {
             ChromascopeError::MzDataError(format!("No spectrum found at index: {}", index))
@@ -572,9 +549,13 @@ impl MzData {
         &self.file_name
     }
 
-    /// Returns a reference to the msfile Result.
-    pub fn msfile(&self) -> &Result<MzMLReaderType<File>> {
-        &self.msfile
+    /// Checks if a mass spectrometry file is currently open.
+    ///
+    /// # Returns
+    ///
+    /// `true` if a file is open, `false` otherwise.
+    pub fn is_open(&self) -> bool {
+        self.msfile.is_some()
     }
 }
 
@@ -651,7 +632,7 @@ mod tests {
     #[test]
     fn test_new() {
         let mzdata = MzData::new();
-        assert!(mzdata.msfile().is_err());
+        assert!(!mzdata.is_open());
         assert!(mzdata.file_name().is_none());
     }
 
@@ -666,7 +647,7 @@ mod tests {
         let mut mzdata = MzData::new();
         let result = mzdata.open_msfile(&normalized_d);
         assert!(result.is_ok());
-        assert!(mzdata.msfile().is_ok());
+        assert!(mzdata.is_open());
     }
 
     #[test]
@@ -864,7 +845,7 @@ mod tests {
         let (mut mzdata, _) = setup_with_tic();
         let chrom = mzdata.get_tic(1, ScanPolarity::Positive, None).unwrap();
 
-        let result = chrom.prepare_for_plot();
+        let result = crate::processing::prepare_chromatogram_for_plot(&chrom);
         assert!(result.is_ok());
 
         let plot_data = result.unwrap();
@@ -885,7 +866,7 @@ mod tests {
             index: vec![],
         };
 
-        let result = chrom.prepare_for_plot();
+        let result = crate::processing::prepare_chromatogram_for_plot(&chrom);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().len(), 0);
     }
@@ -898,7 +879,7 @@ mod tests {
             .get_xic(722.43, 1, ScanPolarity::Positive, 1000.0)
             .unwrap();
 
-        let result = chrom.prepare_for_plot();
+        let result = crate::processing::prepare_chromatogram_for_plot(&chrom);
         assert!(result.is_ok());
 
         let plot_data = result.unwrap();
@@ -916,7 +897,7 @@ mod tests {
         let (mut mzdata, _) = setup_with_tic();
         let chrom = mzdata.get_tic(1, ScanPolarity::Positive, None).unwrap();
 
-        let result = chrom.prepare_for_plot();
+        let result = crate::processing::prepare_chromatogram_for_plot(&chrom);
         assert!(result.is_ok());
 
         let plot_data = result.unwrap();
@@ -935,7 +916,7 @@ mod tests {
         assert!(!chrom.retention_time.is_empty());
         let first_rt = chrom.retention_time[0];
 
-        let result = chrom.prepare_for_plot().unwrap();
+        let result = crate::processing::prepare_chromatogram_for_plot(&chrom).unwrap();
         assert!(!result.is_empty());
         // The first plot point's RT should match the first actual RT (not 0.0)
         assert_relative_eq!(result[0][0] as f32, first_rt, epsilon = 0.001);
@@ -1004,7 +985,7 @@ mod tests {
         if !chrom.retention_time.is_empty() {
             let exact_rt = chrom.retention_time[0];
 
-            let result = chrom.get_closest_index(exact_rt);
+            let result = crate::processing::find_closest_spectrum_index(&chrom, exact_rt);
             assert!(result.is_some(), "Should find index for exact RT match");
 
             let found_index = result.unwrap();
@@ -1022,7 +1003,7 @@ mod tests {
             let rt2 = chrom.retention_time[1];
             let between_rt = (rt1 + rt2) / 2.0;
 
-            let result = chrom.get_closest_index(between_rt);
+            let result = crate::processing::find_closest_spectrum_index(&chrom, between_rt);
             assert!(result.is_some(), "Should find closest index");
 
             let found_index = result.unwrap();
@@ -1041,7 +1022,7 @@ mod tests {
         if !chrom.retention_time.is_empty() {
             let before_rt = chrom.retention_time[0] - 1.0;
 
-            let result = chrom.get_closest_index(before_rt);
+            let result = crate::processing::find_closest_spectrum_index(&chrom, before_rt);
             assert!(result.is_some());
             assert_eq!(result.unwrap(), chrom.index[0]);
         }
@@ -1055,7 +1036,7 @@ mod tests {
         if !chrom.retention_time.is_empty() {
             let after_rt = chrom.retention_time[chrom.retention_time.len() - 1] + 1.0;
 
-            let result = chrom.get_closest_index(after_rt);
+            let result = crate::processing::find_closest_spectrum_index(&chrom, after_rt);
             assert!(result.is_some());
             assert_eq!(result.unwrap(), *chrom.index.last().unwrap());
         }
@@ -1070,7 +1051,7 @@ mod tests {
             index: vec![],
         };
 
-        let result = chrom.get_closest_index(10.0);
+        let result = crate::processing::find_closest_spectrum_index(&chrom, 10.0);
         assert!(result.is_none());
     }
 
@@ -1237,7 +1218,7 @@ mod tests {
         let mut mzdata = setup_test_parser();
 
         let chrom = mzdata.get_tic(1, ScanPolarity::Positive, None).unwrap();
-        let plot_data = chrom.prepare_for_plot().unwrap();
+        let plot_data = crate::processing::prepare_chromatogram_for_plot(&chrom).unwrap();
         assert!(plot_data.len() > 0);
 
         let smoothed = crate::processing::smooth_chromatogram(plot_data, 3).unwrap();
@@ -1252,7 +1233,7 @@ mod tests {
             .get_xic(722.43, 1, ScanPolarity::Positive, 1000.0)
             .unwrap();
 
-        let plot_data = chrom.prepare_for_plot().unwrap();
+        let plot_data = crate::processing::prepare_chromatogram_for_plot(&chrom).unwrap();
         assert!(plot_data.len() > 0);
     }
 
@@ -1264,7 +1245,9 @@ mod tests {
             let mid_idx_in_chrom = chrom.retention_time.len() / 2;
             let mid_rt = chrom.retention_time[mid_idx_in_chrom];
 
-            if let Some(spectrum_idx) = chrom.get_closest_index(mid_rt) {
+            if let Some(spectrum_idx) =
+                crate::processing::find_closest_spectrum_index(&chrom, mid_rt)
+            {
                 let spectrum = mzdata.get_mass_spectrum_by_index(spectrum_idx).unwrap();
                 assert!(!spectrum.mz.is_empty());
             }
@@ -1448,7 +1431,7 @@ mod tests {
             let target_rt = chrom.retention_time[mid_idx];
             let expected_spectrum_idx = chrom.index[mid_idx];
 
-            let found_idx = chrom.get_closest_index(target_rt);
+            let found_idx = crate::processing::find_closest_spectrum_index(&chrom, target_rt);
 
             assert!(found_idx.is_some());
             assert_eq!(found_idx.unwrap(), expected_spectrum_idx);
