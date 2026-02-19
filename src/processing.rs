@@ -148,40 +148,11 @@ pub fn run_in_background(
         };
     }
 
-    // Compute plot_data (smoothed Vec<[f64; 2]>).
-    let plot_data = match process_chromatogram(&mut data, &params) {
-        Ok(v) => v,
-        Err(e) => {
-            return ProcessingResult::Error {
-                file_id,
-                message: format!("{}", e),
-            }
-        }
-    };
-
-    // Re-extract raw ChromatogramData for spectrum-lookup cache.
-    let chromatogram = match params.plot_type {
-        PlotType::Tic => data.get_tic(params.ms_level, params.polarity, params.mz_range),
-        PlotType::Bpc => data.get_bpic(params.ms_level, params.polarity, params.mz_range),
-        PlotType::Xic => {
-            if let Some(ref xic_params) = params.xic_params {
-                data.get_xic(
-                    xic_params.mass(),
-                    params.ms_level,
-                    xic_params.polarity(),
-                    xic_params.mass_tolerance(),
-                )
-            } else {
-                Err(ChromascopeError::MissingXicParams)
-            }
-        }
-    };
-
-    match chromatogram {
-        Ok(c) => ProcessingResult::Success {
+    match process_chromatogram(&mut data, &params) {
+        Ok((plot_data, chromatogram)) => ProcessingResult::Success {
             file_id,
             plot_data,
-            chromatogram: c,
+            chromatogram,
         },
         Err(e) => ProcessingResult::Error {
             file_id,
@@ -209,7 +180,9 @@ pub fn run_in_background(
 /// * `params` - Configuration for extraction and processing
 ///
 /// # Returns
-/// * `Ok(Vec<[f64; 2]>)` - Chromatogram data as (retention_time, intensity) pairs
+/// * `Ok((Vec<[f64; 2]>, ChromatogramData))` - A tuple of the smoothed plot data
+///   (retention_time, intensity) pairs and the raw extracted chromatogram
+///   (used for spectrum-lookup by the GUI)
 /// * `Err(ChromascopeError)` - If extraction, preparation, or smoothing fails
 ///
 /// # Errors
@@ -240,11 +213,15 @@ pub fn run_in_background(
 ///     mz_range: None,
 /// };
 ///
-/// let result = process_chromatogram(&mut data, &params)?;
-/// println!("Extracted {} data points", result.len());
+/// let (plot_data, chromatogram) = process_chromatogram(&mut data, &params)?;
+/// println!("Extracted {} data points", plot_data.len());
+/// println!("Raw chromatogram has {} scans", chromatogram.retention_time.len());
 /// # Ok::<(), chromascope::error::ChromascopeError>(())
 /// ```
-pub fn process_chromatogram(data: &mut MzData, params: &ProcessingParams) -> Result<Vec<[f64; 2]>> {
+pub fn process_chromatogram(
+    data: &mut MzData,
+    params: &ProcessingParams,
+) -> Result<(Vec<[f64; 2]>, ChromatogramData)> {
     // Step 1: Extract raw chromatogram based on type, returning owned ChromatogramData
     let chromatogram = match params.plot_type {
         PlotType::Tic => data.get_tic(params.ms_level, params.polarity, params.mz_range)?,
@@ -267,8 +244,9 @@ pub fn process_chromatogram(data: &mut MzData, params: &ProcessingParams) -> Res
     // Step 2: Prepare for visualization (aggregate duplicates, format)
     let prepared = prepare_chromatogram_for_plot(&chromatogram)?;
 
-    // Step 3: Apply smoothing filter and return result
-    smooth_chromatogram(prepared, params.smoothing)
+    // Step 3: Apply smoothing filter and return both plot data and raw chromatogram
+    let plot_data = smooth_chromatogram(prepared, params.smoothing)?;
+    Ok((plot_data, chromatogram))
 }
 
 /// Prepare chromatogram data for plotting by averaging duplicate retention times.
@@ -498,10 +476,14 @@ mod tests {
 
         // Assert
         assert!(result.is_ok(), "TIC processing should succeed");
-        let chromatogram = result.unwrap();
-        assert!(!chromatogram.is_empty(), "TIC should have data points");
+        let (plot_data, chromatogram) = result.unwrap();
+        assert!(!plot_data.is_empty(), "TIC should have data points");
         assert!(
-            chromatogram[0][0] < chromatogram[chromatogram.len() - 1][0],
+            !chromatogram.retention_time.is_empty(),
+            "Raw chromatogram should be non-empty"
+        );
+        assert!(
+            plot_data[0][0] < plot_data[plot_data.len() - 1][0],
             "Retention times should be increasing"
         );
     }
@@ -524,8 +506,12 @@ mod tests {
 
         // Assert
         assert!(result.is_ok(), "BPC processing should succeed");
-        let chromatogram = result.unwrap();
-        assert!(!chromatogram.is_empty(), "BPC should have data points");
+        let (plot_data, chromatogram) = result.unwrap();
+        assert!(!plot_data.is_empty(), "BPC should have data points");
+        assert!(
+            !chromatogram.retention_time.is_empty(),
+            "Raw chromatogram should be non-empty"
+        );
     }
 
     #[test]
@@ -580,9 +566,13 @@ mod tests {
 
         // Assert
         assert!(result.is_ok(), "XIC with valid params should succeed");
-        let chromatogram = result.unwrap();
+        let (plot_data, chromatogram) = result.unwrap();
         // XIC may have fewer points than TIC/BPC, but should have some data
-        assert!(!chromatogram.is_empty(), "XIC should have data points");
+        assert!(!plot_data.is_empty(), "XIC should have data points");
+        assert!(
+            !chromatogram.retention_time.is_empty(),
+            "Raw chromatogram should be non-empty"
+        );
     }
 
     #[test]
@@ -603,10 +593,14 @@ mod tests {
 
         // Assert
         assert!(result.is_ok(), "BPC with smoothing should succeed");
-        let chromatogram = result.unwrap();
+        let (plot_data, chromatogram) = result.unwrap();
         assert!(
-            !chromatogram.is_empty(),
+            !plot_data.is_empty(),
             "Smoothed chromatogram should have data"
+        );
+        assert!(
+            !chromatogram.retention_time.is_empty(),
+            "Raw chromatogram should be non-empty"
         );
     }
 
@@ -629,9 +623,9 @@ mod tests {
         // Assert
         // May succeed with empty data or fail depending on file content
         // The key is that it doesn't panic
-        if let Ok(chromatogram) = result {
+        if let Ok((plot_data, _chromatogram)) = result {
             // If file has negative polarity scans, we should get data
-            println!("Negative polarity: {} data points", chromatogram.len());
+            println!("Negative polarity: {} data points", plot_data.len());
         }
     }
 
@@ -663,6 +657,42 @@ mod tests {
     }
 
     // ── integrate_peak tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_process_chromatogram_returns_both_plot_data_and_raw_chromatogram() {
+        // Ensures we never regress to the double-read pattern.
+        // The tuple must contain the smoothed plot data AND the indexable raw chromatogram.
+        let mut data = load_test_file();
+        let params = ProcessingParams {
+            plot_type: PlotType::Tic,
+            polarity: ScanPolarity::Positive,
+            smoothing: 2,
+            xic_params: None,
+            ms_level: 1,
+            mz_range: None,
+        };
+
+        let (plot_data, chromatogram) =
+            process_chromatogram(&mut data, &params).expect("TIC processing should succeed");
+
+        // plot_data is smoothed [f64; 2] pairs — used for rendering
+        assert!(!plot_data.is_empty(), "plot_data must be non-empty");
+
+        // chromatogram is the raw extraction — used for triple-click spectrum lookup
+        assert!(
+            !chromatogram.retention_time.is_empty(),
+            "raw chromatogram must be non-empty"
+        );
+        assert!(
+            !chromatogram.index.is_empty(),
+            "raw chromatogram must carry spectrum indices"
+        );
+
+        // Lengths must be consistent (plot_data may differ due to duplicate RT aggregation,
+        // but both must be non-trivially populated)
+        assert!(plot_data.len() > 0);
+        assert_eq!(chromatogram.retention_time.len(), chromatogram.index.len());
+    }
 
     #[test]
     fn test_integrate_peak_triangle() {
