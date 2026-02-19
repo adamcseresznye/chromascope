@@ -32,7 +32,6 @@ image = { version = "0.25.2", default-features = false, features = ["png"] }
 # You only need serde if you want app persistence:
 serde = { version = "1", features = ["derive"] }
 env_logger = "0.10"
-rayon = "1.10"
 
 
 [profile.release]
