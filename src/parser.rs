@@ -21,11 +21,10 @@ use log::{debug, error, info, trace, warn};
 use mzdata::io::mzml::MzMLReaderType;
 use mzdata::spectrum::ScanPolarity;
 use mzdata::{prelude::*, MzMLReader};
+use rayon::prelude::*;
 use std::cmp::Ordering;
 use std::fs::File;
 use std::path::PathBuf;
-#[cfg(not(target_arch = "wasm32"))]
-use rayon::prelude::*;
 
 /// Represents extracted chromatogram data from a mass spectrometry file.
 /// Returned by `get_tic()`, `get_bpic()`, and `get_xic()` methods.
@@ -204,7 +203,6 @@ impl MzData {
         // Collect all spectra once; the mzdata iterator is not parallel-safe directly.
         let spectra: Vec<_> = reader.iter().collect();
 
-        #[cfg(not(target_arch = "wasm32"))]
         let (min_mz, max_mz, min_rt, max_rt) = spectra
             .par_iter()
             .map(|spectrum| {
@@ -227,28 +225,6 @@ impl MzData {
                 },
             );
 
-        #[cfg(target_arch = "wasm32")]
-        let (min_mz, max_mz, min_rt, max_rt) = {
-            let mut lo = f64::MAX;
-            let mut hi = f64::MIN;
-            let mut rlo = f32::MAX;
-            let mut rhi = f32::MIN;
-            for spectrum in &spectra {
-                let rt = spectrum.start_time() as f32;
-                rlo = rlo.min(rt);
-                rhi = rhi.max(rt);
-                if let Some(arrays) = spectrum.arrays.as_ref() {
-                    if let Ok(mzs) = arrays.mzs() {
-                        for &mz in mzs.iter() {
-                            lo = lo.min(mz);
-                            hi = hi.max(mz);
-                        }
-                    }
-                }
-            }
-            (lo, hi, rlo, rhi)
-        };
-
         if min_mz == f64::MAX || max_mz == f64::MIN {
             return Err(ChromascopeError::FileNotOpened(
                 "No valid peaks found in file".into(),
@@ -258,10 +234,7 @@ impl MzData {
         // Collect unique (ms_level, polarity) pairs — small, not worth parallelising.
         let mut scan_filters: Vec<(u8, ScanPolarity)> = Vec::new();
         for spectrum in &spectra {
-            let pair = (
-                spectrum.description.ms_level,
-                spectrum.description.polarity,
-            );
+            let pair = (spectrum.description.ms_level, spectrum.description.polarity);
             if !scan_filters.contains(&pair) {
                 scan_filters.push(pair);
             }
@@ -320,12 +293,9 @@ impl MzData {
         let reader = self.msfile.as_mut().unwrap();
         let spectra: Vec<_> = reader.iter().collect();
 
-        #[cfg(not(target_arch = "wasm32"))]
         let mut results: Vec<(f32, f32, f32, usize)> = spectra
             .par_iter()
-            .filter(|s| {
-                s.description.ms_level == ms_level && s.description.polarity == polarity
-            })
+            .filter(|s| s.description.ms_level == ms_level && s.description.polarity == polarity)
             .map(|spectrum| {
                 let rt = spectrum.start_time() as f32;
                 let idx = spectrum.index();
@@ -357,44 +327,7 @@ impl MzData {
             })
             .collect();
 
-        #[cfg(not(target_arch = "wasm32"))]
         results.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
-
-        #[cfg(target_arch = "wasm32")]
-        let results: Vec<(f32, f32, f32, usize)> = spectra
-            .iter()
-            .filter(|s| {
-                s.description.ms_level == ms_level && s.description.polarity == polarity
-            })
-            .map(|spectrum| {
-                let rt = spectrum.start_time() as f32;
-                let idx = spectrum.index();
-                let (intensity, mz) = if let Some((min_mz, max_mz)) = mz_range {
-                    let centroided = spectrum.clone().into_centroid().unwrap_or_else(|_| {
-                        warn!("Failed to centroid spectrum at RT {}", rt);
-                        spectrum.clone().into_centroid().unwrap()
-                    });
-                    let max_peak = centroided
-                        .peaks
-                        .iter()
-                        .filter(|p| p.mz >= min_mz && p.mz <= max_mz)
-                        .max_by(|a, b| {
-                            a.intensity
-                                .partial_cmp(&b.intensity)
-                                .unwrap_or(Ordering::Equal)
-                        });
-                    if let Some(peak) = max_peak {
-                        (peak.intensity, peak.mz as f32)
-                    } else {
-                        (0.0_f32, 0.0_f32)
-                    }
-                } else {
-                    let bp = spectrum.peaks().base_peak();
-                    (bp.intensity, bp.mz as f32)
-                };
-                (rt, intensity, mz, idx)
-            })
-            .collect();
 
         debug!("Successfully extracted BIC from: {:?}", &self.file_name);
         trace!(
@@ -448,12 +381,9 @@ impl MzData {
         let reader = self.msfile.as_mut().unwrap();
         let spectra: Vec<_> = reader.iter().collect();
 
-        #[cfg(not(target_arch = "wasm32"))]
         let mut results: Vec<(f32, f32, usize)> = spectra
             .par_iter()
-            .filter(|s| {
-                s.description.ms_level == ms_level && s.description.polarity == polarity
-            })
+            .filter(|s| s.description.ms_level == ms_level && s.description.polarity == polarity)
             .map(|spectrum| {
                 let rt = spectrum.start_time() as f32;
                 let idx = spectrum.index();
@@ -475,35 +405,7 @@ impl MzData {
             })
             .collect();
 
-        #[cfg(not(target_arch = "wasm32"))]
         results.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
-
-        #[cfg(target_arch = "wasm32")]
-        let results: Vec<(f32, f32, usize)> = spectra
-            .iter()
-            .filter(|s| {
-                s.description.ms_level == ms_level && s.description.polarity == polarity
-            })
-            .map(|spectrum| {
-                let rt = spectrum.start_time() as f32;
-                let idx = spectrum.index();
-                let tic = if let Some((min_mz, max_mz)) = mz_range {
-                    let centroided = spectrum.clone().into_centroid().unwrap_or_else(|_| {
-                        warn!("Failed to centroid spectrum at RT {}", rt);
-                        spectrum.clone().into_centroid().unwrap()
-                    });
-                    centroided
-                        .peaks
-                        .iter()
-                        .filter(|p| p.mz >= min_mz && p.mz <= max_mz)
-                        .map(|p| p.intensity)
-                        .sum()
-                } else {
-                    spectrum.peaks().tic()
-                };
-                (rt, tic, idx)
-            })
-            .collect();
 
         debug!("Successfully extracted TIC from: {:?}", &self.file_name);
         trace!(
@@ -566,15 +468,11 @@ impl MzData {
         let spectra: Vec<_> = reader.iter().collect();
 
         // into_centroid is the most expensive per-spectrum call — highest parallelism gain.
-        #[cfg(not(target_arch = "wasm32"))]
         let mut results: Vec<(f32, f32, usize)> = spectra
             .par_iter()
-            .filter(|s| {
-                s.description.ms_level == ms_level && s.description.polarity == polarity
-            })
+            .filter(|s| s.description.ms_level == ms_level && s.description.polarity == polarity)
             .filter_map(|spectrum| {
-                let spectrum_rt =
-                    spectrum.description.acquisition.scans[0].start_time as f32;
+                let spectrum_rt = spectrum.description.acquisition.scans[0].start_time as f32;
                 let spectrum_idx = spectrum.index();
                 let centroided = spectrum.clone().into_centroid().ok()?;
                 let total_intensity: f32 = centroided
@@ -591,31 +489,7 @@ impl MzData {
             })
             .collect();
 
-        #[cfg(not(target_arch = "wasm32"))]
         results.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
-
-        #[cfg(target_arch = "wasm32")]
-        let mut results: Vec<(f32, f32, usize)> = Vec::new();
-        #[cfg(target_arch = "wasm32")]
-        for spectrum in spectra
-            .iter()
-            .filter(|s| s.description.ms_level == ms_level && s.description.polarity == polarity)
-        {
-            let spectrum_idx = spectrum.index();
-            let spectrum_rt = spectrum.description.acquisition.scans[0].start_time as f32;
-            let centroided = spectrum.clone().into_centroid().map_err(|e| {
-                ChromascopeError::MzDataError(format!("Failed to centroid spectrum: {:?}", e))
-            })?;
-            let total_intensity: f32 = centroided
-                .peaks
-                .all_peaks_for(mass, Tolerance::PPM(mass_tolerance))
-                .iter()
-                .map(|p| p.intensity)
-                .sum();
-            if total_intensity > 0.0 {
-                results.push((spectrum_rt, total_intensity, spectrum_idx));
-            }
-        }
 
         debug!("Successfully extracted XIC from: {:?}", &self.file_name);
         trace!(
@@ -736,12 +610,14 @@ mod tests {
     // ── Parallel correctness tests ────────────────────────────────────────────
 
     /// Parallel TIC must return data and must be non-decreasing in RT.
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn test_parallel_tic_matches_sequential() {
         let mut data = setup_test_parser();
         let result = data.get_tic(1, ScanPolarity::Positive, None).unwrap();
-        assert!(!result.retention_time.is_empty(), "TIC should have data points");
+        assert!(
+            !result.retention_time.is_empty(),
+            "TIC should have data points"
+        );
         for i in 1..result.retention_time.len() {
             assert!(
                 result.retention_time[i] >= result.retention_time[i - 1],
@@ -754,12 +630,13 @@ mod tests {
     }
 
     /// Parallel XIC result must be sorted by RT.
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn test_parallel_xic_output_sorted_by_rt() {
         let mut data = setup_test_parser();
         // Use a wide tolerance to ensure we get hits across the file.
-        let result = data.get_xic(722.43, 1, ScanPolarity::Positive, 1000.0).unwrap();
+        let result = data
+            .get_xic(722.43, 1, ScanPolarity::Positive, 1000.0)
+            .unwrap();
         for i in 1..result.retention_time.len() {
             assert!(
                 result.retention_time[i] >= result.retention_time[i - 1],

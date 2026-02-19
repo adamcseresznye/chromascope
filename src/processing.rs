@@ -13,12 +13,11 @@
 
 use crate::error::{ChromascopeError, Result};
 use crate::parser::{ChromatogramData, MzData};
-use std::cmp::Ordering;
 use crate::plotting_parameters::PlotType;
 use crate::validation::XicParams;
 use log::{debug, info, trace};
 use mzdata::spectrum::ScanPolarity;
-#[cfg(not(target_arch = "wasm32"))]
+use std::cmp::Ordering;
 use std::path::PathBuf;
 
 /// Parameters for processing a chromatogram extraction.
@@ -61,7 +60,6 @@ pub struct ProcessingParams {
 ///
 /// Sent from the background thread to the GUI thread over an `mpsc` channel.
 /// Contains either the processed data (on success) or an error message.
-#[cfg(not(target_arch = "wasm32"))]
 pub enum ProcessingResult {
     Success {
         file_id: usize,
@@ -84,7 +82,6 @@ pub enum ProcessingResult {
 /// * `path`    - Path to the mzML file (cloneable across thread boundary)
 /// * `params`  - Processing parameters (cloned from GUI state before spawning)
 /// * `file_id` - Stable `FileId` used to route the result back to the correct file
-#[cfg(not(target_arch = "wasm32"))]
 pub fn run_in_background(
     path: PathBuf,
     params: ProcessingParams,
@@ -260,8 +257,7 @@ pub fn prepare_chromatogram_for_plot(chrom: &ChromatogramData) -> Result<Vec<[f6
     if !temp_intensity_collector.is_empty() {
         data.push([
             temp_rt as f64,
-            temp_intensity_collector.iter().sum::<f64>()
-                / temp_intensity_collector.len() as f64,
+            temp_intensity_collector.iter().sum::<f64>() / temp_intensity_collector.len() as f64,
         ]);
         trace!("Added final data point for RT: {}", temp_rt);
     }
@@ -287,9 +283,10 @@ pub fn find_closest_spectrum_index(chrom: &ChromatogramData, clicked_rt: f32) ->
         return None;
     }
 
-    match chrom.retention_time.binary_search_by(|spectrum| {
-        spectrum.partial_cmp(&clicked_rt).unwrap_or(Ordering::Equal)
-    }) {
+    match chrom
+        .retention_time
+        .binary_search_by(|spectrum| spectrum.partial_cmp(&clicked_rt).unwrap_or(Ordering::Equal))
+    {
         Ok(found_index) => {
             info!("Exact RT match found at index: {:?}", found_index);
             Some(chrom.index[found_index])

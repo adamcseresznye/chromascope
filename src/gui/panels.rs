@@ -376,7 +376,7 @@ pub fn handle_csv_export(app: &mut MzViewerApp) {
 ///
 /// - `Option<OpenFile>`: The created OpenFile struct, or None if the file format is invalid or loading fails.
 pub fn create_open_file(
-    app: &MzViewerApp,
+    _app: &MzViewerApp,
     path: &PathBuf,
     index: usize,
     file_id: FileId,
