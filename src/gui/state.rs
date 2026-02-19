@@ -117,6 +117,9 @@ pub(crate) struct OpenFile {
     pub(crate) color: LineColor,
     /// Whether this file's chromatogram is currently visible in the plot
     pub(crate) visible: bool,
+    /// True while the background thread is still reading the file metadata.
+    /// The file list shows a spinner when this is true.
+    pub(crate) is_loading: bool,
 }
 
 /// Returns the next color in the cycle based on the file index
@@ -139,7 +142,6 @@ pub(crate) fn next_color_for_index(index: usize) -> LineColor {
     }
 }
 
-#[derive(Default)]
 pub struct MzViewerApp {
     /// Collection of opened mzML files, keyed by stable FileId
     pub(crate) files: HashMap<FileId, OpenFile>,
@@ -167,4 +169,31 @@ pub struct MzViewerApp {
     pub(crate) is_processing: bool,
     /// Receiver for results from the background processing thread (native only)
     pub(crate) processing_rx: Option<mpsc::Receiver<crate::processing::ProcessingResult>>,
+    /// Sender for results from background file-loading threads.
+    pub(crate) file_loading_tx: mpsc::SyncSender<crate::processing::FileLoadingResult>,
+    /// Receives results from background file-loading threads.
+    pub(crate) file_loading_rx: mpsc::Receiver<crate::processing::FileLoadingResult>,
+}
+
+impl Default for MzViewerApp {
+    fn default() -> Self {
+        let (file_loading_tx, file_loading_rx) = mpsc::sync_channel(32);
+        Self {
+            files: HashMap::default(),
+            active_file_id: None,
+            next_file_id: 0,
+            user_input: UserInput::default(),
+            invalid_file: FileValidity::default(),
+            state_changed: StateChange::default(),
+            options_window_open: false,
+            error_message: None,
+            integration_start_rt: None,
+            integration_end_rt: None,
+            integration_result: None,
+            is_processing: false,
+            processing_rx: None,
+            file_loading_tx,
+            file_loading_rx,
+        }
+    }
 }

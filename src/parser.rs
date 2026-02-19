@@ -144,6 +144,32 @@ impl MzData {
         }
     }
 
+    /// Opens the mzML file reader for on-demand spectrum lookups only.
+    ///
+    /// Unlike `open_msfile`, this does NOT call `extract_bounds`.
+    /// Use this on the UI thread after a background thread has already extracted
+    /// the bounds and returned them via `FileLoadingResult`.
+    ///
+    /// # Why this exists
+    /// `MzMLReaderType<File>` is `!Send` — it cannot cross thread boundaries.
+    /// The background thread opens, extracts bounds, then drops its own reader.
+    /// The UI thread calls this method to open a new reader for triple-click
+    /// spectrum lookups, skipping the expensive bounds scan.
+    pub fn open_reader_only(&mut self, path: &PathBuf) -> Result<&mut Self> {
+        match MzMLReader::open_path(path) {
+            Ok(reader) => {
+                self.msfile = Some(reader);
+                self.file_name = Some(path.display().to_string());
+                debug!("Opened reader-only (no bounds scan) for: {:?}", path);
+                Ok(self)
+            }
+            Err(e) => Err(ChromascopeError::MzDataError(format!(
+                "Failed to open mzML reader: {:?}",
+                e
+            ))),
+        }
+    }
+
     /// Extracts min/max m/z, RT, and scan count from the opened file.
     ///
     /// Called automatically during open_msfile. Iterates through all spectra
@@ -577,6 +603,35 @@ mod tests {
         let path = get_test_file_path();
         mzdata.open_msfile(&path).unwrap();
         mzdata
+    }
+
+    #[test]
+    fn test_open_reader_only_does_not_extract_bounds() {
+        let mut data = MzData::new();
+        let path = get_test_file_path();
+        data.open_reader_only(&path).unwrap();
+
+        // Reader is open for spectrum lookup
+        assert!(data.is_open());
+
+        // But bounds were NOT extracted (still default/unrestricted)
+        assert_eq!(data.bounds.min_mz, 0.0);
+        assert_eq!(data.bounds.max_mz, f64::MAX);
+        assert!(data.available_scan_filters.is_empty());
+    }
+
+    #[test]
+    fn test_get_mass_spectrum_works_after_reader_only_open() {
+        let mut data = MzData::new();
+        let path = get_test_file_path();
+
+        // Simulate what poll_file_loading_result does:
+        // bounds set from background thread (not done here), reader opened without scan
+        data.open_reader_only(&path).unwrap();
+
+        // Spectrum lookup must work
+        let result = data.get_mass_spectrum_by_index(0);
+        assert!(result.is_ok());
     }
 
     /// Helper function to create parser with TIC already extracted

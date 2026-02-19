@@ -13,8 +13,8 @@
 
 use crate::error::{ChromascopeError, Result};
 use crate::parser::{ChromatogramData, MzData};
-use crate::plotting_parameters::PlotType;
-use crate::validation::XicParams;
+use crate::plotting_parameters::{LineColor, PlotType};
+use crate::validation::{DataBounds, XicParams};
 use log::{debug, info, trace};
 use mzdata::spectrum::ScanPolarity;
 use std::cmp::Ordering;
@@ -70,6 +70,59 @@ pub enum ProcessingResult {
         file_id: usize,
         message: String,
     },
+}
+
+/// Result of a background file-loading task.
+/// Sent from the background thread to the UI thread via mpsc channel.
+pub enum FileLoadingResult {
+    Success {
+        file_id: usize,
+        name: String,
+        path: String,
+        color: LineColor,
+        bounds: DataBounds,
+        scan_filters: Vec<(u8, ScanPolarity)>,
+    },
+    Error {
+        file_id: usize,
+        name: String,
+        message: String,
+    },
+}
+
+/// Opens a file and extracts metadata on a background thread.
+///
+/// # Design note
+/// `MzData` is fully created and dropped inside this function.
+/// It never crosses a thread boundary, satisfying the `!Send` constraint.
+pub fn open_file_in_background(
+    path: PathBuf,
+    file_id: usize,
+    color: LineColor,
+) -> FileLoadingResult {
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("unknown")
+        .to_string();
+    let path_str = path.display().to_string();
+
+    let mut data = MzData::new();
+    match data.open_msfile(&path) {
+        Ok(_) => FileLoadingResult::Success {
+            file_id,
+            name,
+            path: path_str,
+            color,
+            bounds: data.bounds,
+            scan_filters: data.available_scan_filters.clone(),
+        },
+        Err(e) => FileLoadingResult::Error {
+            file_id,
+            name,
+            message: format!("{}", e),
+        },
+    }
 }
 
 /// Entry point for background thread processing.
