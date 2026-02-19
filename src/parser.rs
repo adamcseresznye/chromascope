@@ -45,50 +45,12 @@ impl ChromatogramData {
     /// Prepare chromatogram data for plotting by averaging duplicate retention times.
     ///
     /// Returns a vector of `[retention_time, average_intensity]` pairs suitable for plotting.
+    ///
+    /// # Deprecated
+    /// Use [`crate::processing::prepare_chromatogram_for_plot`] instead.
+    #[deprecated(note = "Use crate::processing::prepare_chromatogram_for_plot instead")]
     pub fn prepare_for_plot(&self) -> Result<Vec<[f64; 2]>> {
-        info!("Starting to prepare data for plotting");
-
-        if self.retention_time.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let mut data = Vec::new();
-
-        // FIX: Initialize with first actual RT value, not 0.0
-        let mut temp_rt = self.retention_time[0];
-        let mut temp_intensity_collector: Vec<f64> = Vec::new();
-
-        trace!(
-            "Processing {} retention times and intensities",
-            self.retention_time.len()
-        );
-
-        for (idx, &rt) in self.retention_time.iter().enumerate() {
-            if rt != temp_rt && !temp_intensity_collector.is_empty() {
-                data.push([
-                    temp_rt as f64,
-                    temp_intensity_collector.iter().sum::<f64>()
-                        / temp_intensity_collector.len() as f64,
-                ]);
-                trace!("Added data point for RT: {}", temp_rt);
-                temp_intensity_collector.clear();
-                temp_rt = rt;
-            }
-            temp_intensity_collector.push(self.intensity[idx] as f64);
-        }
-
-        if !temp_intensity_collector.is_empty() {
-            data.push([
-                temp_rt as f64,
-                temp_intensity_collector.iter().sum::<f64>()
-                    / temp_intensity_collector.len() as f64,
-            ]);
-            trace!("Added final data point for RT: {}", temp_rt);
-        }
-
-        debug!("Prepared {} data points for plotting", data.len());
-
-        Ok(data)
+        crate::processing::prepare_chromatogram_for_plot(self)
     }
 
     /// Find the closest spectrum index by retention time using binary search.
@@ -99,50 +61,12 @@ impl ChromatogramData {
     /// # Returns
     /// * `Some(usize)` - Spectrum index closest to the target retention time
     /// * `None` - If retention time data is empty
+    ///
+    /// # Deprecated
+    /// Use [`crate::processing::find_closest_spectrum_index`] instead.
+    #[deprecated(note = "Use crate::processing::find_closest_spectrum_index instead")]
     pub fn get_closest_index(&self, clicked_rt: f32) -> Option<usize> {
-        if self.retention_time.is_empty() {
-            warn!("Retention time data is missing.");
-            return None;
-        }
-
-        match self.retention_time.binary_search_by(|spectrum| {
-            spectrum.partial_cmp(&clicked_rt).unwrap_or(Ordering::Equal)
-        }) {
-            Ok(found_index) => {
-                info!("Exact RT match found at index: {:?}", found_index);
-                Some(self.index[found_index])
-            }
-            Err(found_index) => {
-                info!(
-                    "Closest RT match not found, using nearest index: {:?}",
-                    found_index
-                );
-                if found_index == 0 {
-                    info!("Returning the first index: {:?}", self.index.first());
-                    self.index.first().copied()
-                } else if found_index == self.index.len() {
-                    info!("Returning the last index: {:?}", self.index.last());
-                    self.index.last().copied()
-                } else {
-                    let prev = &self.retention_time[found_index - 1];
-                    let next = &self.retention_time[found_index];
-                    info!(
-                        "Comparing previous: {:?} and next: {:?} for RT: {:?}",
-                        prev, next, clicked_rt
-                    );
-                    if (clicked_rt - prev).abs() < (next - clicked_rt).abs() {
-                        info!(
-                            "Returning previous index: {:?}",
-                            self.index[found_index - 1]
-                        );
-                        Some(self.index[found_index - 1])
-                    } else {
-                        info!("Returning next index: {:?}", self.index[found_index]);
-                        Some(self.index[found_index])
-                    }
-                }
-            }
-        }
+        crate::processing::find_closest_spectrum_index(self, clicked_rt)
     }
 }
 
