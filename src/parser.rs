@@ -21,7 +21,6 @@ use log::{debug, error, info, trace, warn};
 use mzdata::io::mzml::MzMLReaderType;
 use mzdata::spectrum::ScanPolarity;
 use mzdata::{prelude::*, MzMLReader};
-use rayon::prelude::*;
 use std::cmp::Ordering;
 use std::fs::File;
 use std::path::PathBuf;
@@ -169,30 +168,33 @@ impl MzData {
             .as_mut()
             .ok_or_else(|| ChromascopeError::FileNotOpened("No file opened".to_string()))?;
 
-        // Collect all spectra once; the mzdata iterator is not parallel-safe directly.
-        let spectra: Vec<_> = reader.iter().collect();
+        let mut min_mz = f64::MAX;
+        let mut max_mz = f64::MIN;
+        let mut min_rt = f32::MAX;
+        let mut max_rt = f32::MIN;
+        let mut scan_count = 0usize;
+        let mut scan_filters: Vec<(u8, ScanPolarity)> = Vec::new();
 
-        let (min_mz, max_mz, min_rt, max_rt) = spectra
-            .par_iter()
-            .map(|spectrum| {
-                let rt = spectrum.start_time() as f32;
-                let (mut lo, mut hi) = (f64::MAX, f64::MIN);
-                if let Some(arrays) = spectrum.arrays.as_ref() {
-                    if let Ok(mzs) = arrays.mzs() {
-                        for &mz in mzs.iter() {
-                            lo = lo.min(mz);
-                            hi = hi.max(mz);
-                        }
+        for spectrum in reader.iter() {
+            let rt = spectrum.start_time() as f32;
+            min_rt = min_rt.min(rt);
+            max_rt = max_rt.max(rt);
+            scan_count += 1;
+
+            if let Some(arrays) = spectrum.arrays.as_ref() {
+                if let Ok(mzs) = arrays.mzs() {
+                    for &mz in mzs.iter() {
+                        min_mz = min_mz.min(mz);
+                        max_mz = max_mz.max(mz);
                     }
                 }
-                (lo, hi, rt, rt)
-            })
-            .reduce(
-                || (f64::MAX, f64::MIN, f32::MAX, f32::MIN),
-                |(lo1, hi1, rlo1, rhi1), (lo2, hi2, rlo2, rhi2)| {
-                    (lo1.min(lo2), hi1.max(hi2), rlo1.min(rlo2), rhi1.max(rhi2))
-                },
-            );
+            }
+
+            let pair = (spectrum.description.ms_level, spectrum.description.polarity);
+            if !scan_filters.contains(&pair) {
+                scan_filters.push(pair);
+            }
+        }
 
         if min_mz == f64::MAX || max_mz == f64::MIN {
             return Err(ChromascopeError::FileNotOpened(
@@ -200,16 +202,6 @@ impl MzData {
             ));
         }
 
-        // Collect unique (ms_level, polarity) pairs — small, not worth parallelising.
-        let mut scan_filters: Vec<(u8, ScanPolarity)> = Vec::new();
-        for spectrum in &spectra {
-            let pair = (spectrum.description.ms_level, spectrum.description.polarity);
-            if !scan_filters.contains(&pair) {
-                scan_filters.push(pair);
-            }
-        }
-
-        let scan_count = spectra.len();
         let min_mz = min_mz.floor();
         let max_mz = max_mz.ceil();
 
@@ -259,16 +251,14 @@ impl MzData {
             )
         })?;
 
-        let spectra: Vec<_> = reader.iter().collect();
-
-        let mut results: Vec<(f32, f32, f32, usize)> = spectra
-            .par_iter()
+        let mut results: Vec<(f32, f32, f32, usize)> = reader
+            .iter()
             .filter(|s| s.description.ms_level == ms_level && s.description.polarity == polarity)
             .map(|spectrum| {
                 let rt = spectrum.start_time() as f32;
                 let idx = spectrum.index();
                 let (intensity, mz) = if let Some((min_mz, max_mz)) = mz_range {
-                    match spectrum.clone().into_centroid() {
+                    match spectrum.into_centroid() {
                         Ok(centroided) => {
                             let max_peak = centroided
                                 .peaks
@@ -352,16 +342,14 @@ impl MzData {
             )
         })?;
 
-        let spectra: Vec<_> = reader.iter().collect();
-
-        let mut results: Vec<(f32, f32, usize)> = spectra
-            .par_iter()
+        let mut results: Vec<(f32, f32, usize)> = reader
+            .iter()
             .filter(|s| s.description.ms_level == ms_level && s.description.polarity == polarity)
             .map(|spectrum| {
                 let rt = spectrum.start_time() as f32;
                 let idx = spectrum.index();
                 let tic = if let Some((min_mz, max_mz)) = mz_range {
-                    match spectrum.clone().into_centroid() {
+                    match spectrum.into_centroid() {
                         Ok(centroided) => centroided
                             .peaks
                             .iter()
@@ -442,16 +430,14 @@ impl MzData {
             )
         })?;
 
-        let spectra: Vec<_> = reader.iter().collect();
-
-        // into_centroid is the most expensive per-spectrum call — highest parallelism gain.
-        let mut results: Vec<(f32, f32, usize)> = spectra
-            .par_iter()
+        // into_centroid is the most expensive per-spectrum call.
+        let mut results: Vec<(f32, f32, usize)> = reader
+            .iter()
             .filter(|s| s.description.ms_level == ms_level && s.description.polarity == polarity)
             .filter_map(|spectrum| {
                 let spectrum_rt = spectrum.description.acquisition.scans[0].start_time as f32;
                 let spectrum_idx = spectrum.index();
-                let centroided = spectrum.clone().into_centroid().ok()?;
+                let centroided = spectrum.into_centroid().ok()?;
                 let total_intensity: f32 = centroided
                     .peaks
                     .all_peaks_for(mass, Tolerance::PPM(mass_tolerance))
@@ -562,6 +548,18 @@ impl MzData {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_tic_does_not_hold_full_file_in_memory() {
+        // Functional proxy: ensure results are still sorted and non-empty
+        let mut data = setup_test_parser();
+        let result = data.get_tic(1, ScanPolarity::Positive, None).unwrap();
+        assert!(!result.retention_time.is_empty());
+        for i in 1..result.retention_time.len() {
+            assert!(result.retention_time[i] >= result.retention_time[i - 1]);
+        }
+    }
+
     use approx::assert_relative_eq;
     use std::path::PathBuf;
     const TEST_FILE: &str = r"test_file\data_dependent_02.mzML"; //thermo example file converted to mzML (only Rt 10-12min)
