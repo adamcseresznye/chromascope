@@ -13,6 +13,7 @@
 
 use crate::error::{ChromascopeError, Result};
 use crate::parser::{ChromatogramData, MzData};
+use std::cmp::Ordering;
 use crate::plotting_parameters::PlotType;
 use crate::validation::XicParams;
 use log::{debug, info, trace};
@@ -214,10 +215,116 @@ pub fn process_chromatogram(data: &mut MzData, params: &ProcessingParams) -> Res
     };
 
     // Step 2: Prepare for visualization (aggregate duplicates, format)
-    let prepared = chromatogram.prepare_for_plot()?;
+    let prepared = prepare_chromatogram_for_plot(&chromatogram)?;
 
     // Step 3: Apply smoothing filter and return result
     smooth_chromatogram(prepared, params.smoothing)
+}
+
+/// Prepare chromatogram data for plotting by averaging duplicate retention times.
+///
+/// Returns a vector of `[retention_time, average_intensity]` pairs suitable for plotting.
+pub fn prepare_chromatogram_for_plot(chrom: &ChromatogramData) -> Result<Vec<[f64; 2]>> {
+    use log::{debug, info, trace};
+    info!("Starting to prepare data for plotting");
+
+    if chrom.retention_time.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut data = Vec::new();
+
+    // FIX: Initialize with first actual RT value, not 0.0
+    let mut temp_rt = chrom.retention_time[0];
+    let mut temp_intensity_collector: Vec<f64> = Vec::new();
+
+    trace!(
+        "Processing {} retention times and intensities",
+        chrom.retention_time.len()
+    );
+
+    for (idx, &rt) in chrom.retention_time.iter().enumerate() {
+        if rt != temp_rt && !temp_intensity_collector.is_empty() {
+            data.push([
+                temp_rt as f64,
+                temp_intensity_collector.iter().sum::<f64>()
+                    / temp_intensity_collector.len() as f64,
+            ]);
+            trace!("Added data point for RT: {}", temp_rt);
+            temp_intensity_collector.clear();
+            temp_rt = rt;
+        }
+        temp_intensity_collector.push(chrom.intensity[idx] as f64);
+    }
+
+    if !temp_intensity_collector.is_empty() {
+        data.push([
+            temp_rt as f64,
+            temp_intensity_collector.iter().sum::<f64>()
+                / temp_intensity_collector.len() as f64,
+        ]);
+        trace!("Added final data point for RT: {}", temp_rt);
+    }
+
+    debug!("Prepared {} data points for plotting", data.len());
+
+    Ok(data)
+}
+
+/// Find the closest spectrum index by retention time using binary search.
+///
+/// # Arguments
+/// * `chrom` - Chromatogram data to search through
+/// * `clicked_rt` - Target retention time to search for
+///
+/// # Returns
+/// * `Some(usize)` - Spectrum index closest to the target retention time
+/// * `None` - If retention time data is empty
+pub fn find_closest_spectrum_index(chrom: &ChromatogramData, clicked_rt: f32) -> Option<usize> {
+    use log::{info, warn};
+    if chrom.retention_time.is_empty() {
+        warn!("Retention time data is missing.");
+        return None;
+    }
+
+    match chrom.retention_time.binary_search_by(|spectrum| {
+        spectrum.partial_cmp(&clicked_rt).unwrap_or(Ordering::Equal)
+    }) {
+        Ok(found_index) => {
+            info!("Exact RT match found at index: {:?}", found_index);
+            Some(chrom.index[found_index])
+        }
+        Err(found_index) => {
+            info!(
+                "Closest RT match not found, using nearest index: {:?}",
+                found_index
+            );
+            if found_index == 0 {
+                info!("Returning the first index: {:?}", chrom.index.first());
+                chrom.index.first().copied()
+            } else if found_index == chrom.index.len() {
+                info!("Returning the last index: {:?}", chrom.index.last());
+                chrom.index.last().copied()
+            } else {
+                let prev = &chrom.retention_time[found_index - 1];
+                let next = &chrom.retention_time[found_index];
+                info!(
+                    "Comparing previous: {:?} and next: {:?} for RT: {:?}",
+                    prev, next, clicked_rt
+                );
+                if (clicked_rt - prev).abs() < (next - clicked_rt).abs() {
+                    info!(
+                        "Returning previous index: {:?}",
+                        chrom.index[found_index - 1]
+                    );
+                    Some(chrom.index[found_index - 1])
+                } else {
+                    info!("Returning next index: {:?}", chrom.index[found_index]);
+                    Some(chrom.index[found_index])
+                }
+            }
+        }
+    }
 }
 
 /// Apply moving average smoothing to plot data.
@@ -519,7 +626,8 @@ mod tests {
     fn test_integrate_peak_rectangle() {
         let data = vec![[1.0, 100.0], [2.0, 100.0], [3.0, 100.0]];
         let area = integrate_peak(&data, 1.0, 3.0).unwrap();
-        assert!((area - 200.0).abs() < 1e-9, "got {}", area);
+        // With baseline subtraction, a flat line has 0 area relative to its own start/end points
+        assert!((area - 0.0).abs() < 1e-9, "got {}", area);
     }
 
     #[test]
@@ -548,8 +656,19 @@ mod tests {
     #[test]
     fn test_integrate_peak_subset() {
         let data = vec![[0.0, 0.0], [1.0, 100.0], [2.0, 100.0], [3.0, 0.0]];
-        // Only integrate [1.0, 2.0]: perfect rectangle, area = 100
+        // Integration range [1.0, 2.0] is a flat line at 100.0.
+        // Relative to the baseline (chord between p[1.0] and p[2.0]), the area is 0.
         let area = integrate_peak(&data, 1.0, 2.0).unwrap();
-        assert!((area - 100.0).abs() < 1e-9, "got {}", area);
+        assert!((area - 0.0).abs() < 1e-9, "got {}", area);
+    }
+
+    #[test]
+    fn test_integrate_peak_slanted_baseline() {
+        let data = vec![[0.0, 50.0], [1.0, 200.0], [2.0, 100.0]];
+        // raw_area = (1-0)*(50+200)/2 + (2-1)*(200+100)/2 = 125 + 150 = 275
+        // baseline_area = 2 * (50+100)/2 = 150
+        // expected = 275 - 150 = 125
+        let area = integrate_peak(&data, 0.0, 2.0).unwrap();
+        assert!((area - 125.0).abs() < 1e-9, "got {}", area);
     }
 }
