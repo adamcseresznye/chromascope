@@ -90,80 +90,51 @@ pub fn render_xic_settings_window(app: &mut MzViewerApp, ctx: &egui::Context) {
                 }
                 if ui
                     .add(
-                        egui::TextEdit::singleline(&mut app.user_input.mass_input)
+                        egui::TextEdit::singleline(&mut app.user_input.mass.text)
                             .hint_text("Enter m/z"),
                     )
                     .lost_focus()
                 {
-                    match app.user_input.mass_input.parse::<f64>() {
-                        Ok(parsed_mass) => {
-                            let temp_bounds = crate::validation::DataBounds::unrestricted();
-                            match XicParams::new(
-                                parsed_mass,
-                                app.user_input.polarity,
-                                app.user_input.mass_tolerance,
-                                &temp_bounds,
-                            ) {
-                                Ok(_) => {
-                                    app.user_input.mass = parsed_mass;
-                                    app.state_changed = StateChange::Changed;
-                                }
-                                Err(e) => {
-                                    error!("Invalid mass value: {}", e);
-                                    error_message = Some(format!("Invalid mass: {}", e));
-                                    app.user_input.mass_input = app.user_input.mass.to_string();
-                                }
-                            }
+                    let current_mass = app.user_input.mass.value;
+                    let current_tolerance = app.user_input.mass_tolerance.value;
+                    // Validate: mass must be positive and pass XicParams validation
+                    let valid = app.user_input.mass.sync_on_focus_lost(|m| {
+                        let temp_bounds = crate::validation::DataBounds::unrestricted();
+                        XicParams::new(*m, app.user_input.polarity, current_tolerance, &temp_bounds).is_ok()
+                    });
+                    match valid {
+                        Ok(()) => {
+                            app.state_changed = StateChange::Changed;
                         }
                         Err(_) => {
-                            error!("Failed to parse mass input: {}", app.user_input.mass_input);
-                            error_message = Some(format!(
-                                "Invalid number format: '{}'",
-                                app.user_input.mass_input
-                            ));
-                            app.user_input.mass_input = app.user_input.mass.to_string();
+                            error!("Invalid mass value: {}", app.user_input.mass.text);
+                            error_message = Some(format!("Invalid mass: '{}'", current_mass));
                         }
                     }
                 };
                 if ui
                     .add(
-                        egui::TextEdit::singleline(&mut app.user_input.mass_tolerance_input)
+                        egui::TextEdit::singleline(&mut app.user_input.mass_tolerance.text)
                             .hint_text("Enter mass tolerance in ppm"),
                     )
                     .lost_focus()
                 {
-                    match app.user_input.mass_tolerance_input.parse::<f64>() {
-                        Ok(parsed_tolerance) => {
-                            let temp_bounds = crate::validation::DataBounds::unrestricted();
-                            match XicParams::new(
-                                app.user_input.mass,
-                                app.user_input.polarity,
-                                parsed_tolerance,
-                                &temp_bounds,
-                            ) {
-                                Ok(_) => {
-                                    app.user_input.mass_tolerance = parsed_tolerance;
-                                    app.state_changed = StateChange::Changed;
-                                }
-                                Err(e) => {
-                                    error!("Invalid mass tolerance: {}", e);
-                                    error_message = Some(format!("Invalid mass tolerance: {}", e));
-                                    app.user_input.mass_tolerance_input =
-                                        app.user_input.mass_tolerance.to_string();
-                                }
-                            }
+                    let current_mass = app.user_input.mass.value;
+                    // Validate: tolerance must be in range for XicParams
+                    let valid = app.user_input.mass_tolerance.sync_on_focus_lost(|t| {
+                        let temp_bounds = crate::validation::DataBounds::unrestricted();
+                        XicParams::new(current_mass, app.user_input.polarity, *t, &temp_bounds).is_ok()
+                    });
+                    match valid {
+                        Ok(()) => {
+                            app.state_changed = StateChange::Changed;
                         }
                         Err(_) => {
-                            error!(
-                                "Failed to parse mass tolerance input: {}",
-                                app.user_input.mass_tolerance_input
-                            );
+                            error!("Invalid mass tolerance: {}", app.user_input.mass_tolerance.text);
                             error_message = Some(format!(
-                                "Invalid number format: '{}'",
-                                app.user_input.mass_tolerance_input
+                                "Invalid mass tolerance: '{}'",
+                                app.user_input.mass_tolerance.text
                             ));
-                            app.user_input.mass_tolerance_input =
-                                app.user_input.mass_tolerance.to_string();
                         }
                     }
                 };

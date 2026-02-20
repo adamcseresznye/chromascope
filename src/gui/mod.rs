@@ -110,10 +110,10 @@ mod panels;
 mod plotting;
 mod state;
 
-use state::{FileValidity, StateChange};
+use state::{AsyncState, FileValidity, IntegrationState, StateChange};
 
 #[cfg(test)]
-use state::{next_color_for_index, OpenFile};
+use state::{next_color_for_index, FileCache, FileDisplaySettings, OpenFile};
 
 pub use state::{MzViewerApp, UserInput};
 
@@ -129,33 +129,20 @@ impl MzViewerApp {
     /// - All other fields in `user_input` are set to their default values.
     /// - All other fields in the `MzViewerApp` struct are set to their default values.
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
-        let (file_loading_tx, file_loading_rx) = mpsc::sync_channel(32);
         Self {
             files: HashMap::new(),
             active_file_id: None,
             next_file_id: 0,
             user_input: UserInput {
                 line_width: 1.0,
-                range_enabled: false,
-                range_min_input: String::new(),
-                range_max_input: String::new(),
-                range_min: 0.0,
-                range_max: 0.0,
                 ..Default::default()
             },
             invalid_file: FileValidity::Invalid,
             state_changed: StateChange::Unchanged,
             options_window_open: false,
             error_message: None,
-            integration_start_rt: None,
-            integration_end_rt: None,
-            integration_result: None,
-            integration_start_intensity: None,
-            integration_end_intensity: None,
-            is_processing: false,
-            processing_rx: None,
-            file_loading_tx,
-            file_loading_rx,
+            integration: IntegrationState::default(),
+            async_state: AsyncState::new(),
         }
     }
     /// Resets the internal state of the instance.
@@ -202,8 +189,10 @@ impl MzViewerApp {
         };
 
         // SHORT-CIRCUIT: skip if params unchanged since last extraction
-        if self.files.get(&active_id)
-            .and_then(|f| f.last_processing_params.as_ref())
+        if self
+            .files
+            .get(&active_id)
+            .and_then(|f| f.cache.last_processing_params.as_ref())
             == Some(&params)
         {
             return;
@@ -211,12 +200,12 @@ impl MzViewerApp {
 
         // Store params before spawning
         if let Some(file) = self.files.get_mut(&active_id) {
-            file.last_processing_params = Some(params.clone());
+            file.cache.last_processing_params = Some(params.clone());
         }
 
         let (tx, rx) = mpsc::channel();
-        self.processing_rx = Some(rx);
-        self.is_processing = true;
+        self.async_state.processing_rx = Some(rx);
+        self.async_state.is_processing = true;
 
         std::thread::spawn(move || {
             let result = crate::processing::run_in_background(path, params, active_id);
@@ -230,7 +219,7 @@ impl MzViewerApp {
     /// background thread is still running so the spinner stays animated. When the
     /// result arrives it is applied to the matching file's cache.
     fn poll_processing_result(&mut self, ctx: &egui::Context) {
-        let result = match &self.processing_rx {
+        let result = match &self.async_state.processing_rx {
             Some(rx) => match rx.try_recv() {
                 Ok(r) => r,
                 Err(mpsc::TryRecvError::Empty) => {
@@ -238,16 +227,16 @@ impl MzViewerApp {
                     return;
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    self.is_processing = false;
-                    self.processing_rx = None;
+                    self.async_state.is_processing = false;
+                    self.async_state.processing_rx = None;
                     return;
                 }
             },
             None => return,
         };
 
-        self.is_processing = false;
-        self.processing_rx = None;
+        self.async_state.is_processing = false;
+        self.async_state.processing_rx = None;
 
         match result {
             crate::processing::ProcessingResult::Success {
@@ -256,8 +245,8 @@ impl MzViewerApp {
                 chromatogram,
             } => {
                 if let Some(file) = self.files.get_mut(&file_id) {
-                    file.cached_plot_data = Some(plot_data);
-                    file.cached_chromatogram = Some(chromatogram);
+                    file.cache.plot_data = Some(plot_data);
+                    file.cache.chromatogram = Some(chromatogram);
                 }
             }
             crate::processing::ProcessingResult::Error { message, .. } => {
@@ -273,7 +262,7 @@ impl MzViewerApp {
     fn poll_file_loading_result(&mut self, ctx: &egui::Context) {
         use crate::processing::FileLoadingResult;
 
-        let result = match self.file_loading_rx.try_recv() {
+        let result = match self.async_state.file_loading_rx.try_recv() {
             Ok(r) => r,
             Err(mpsc::TryRecvError::Empty) => {
                 // If any file is still loading, request a repaint to keep spinners animating
@@ -382,9 +371,9 @@ impl MzViewerApp {
         // For XIC, validate and construct XicParams with file bounds
         let xic_params = if self.user_input.plot_type == PlotType::Xic {
             Some(XicParams::new(
-                self.user_input.mass,
+                self.user_input.mass.value,
                 self.user_input.polarity,
-                self.user_input.mass_tolerance,
+                self.user_input.mass_tolerance.value,
                 &active_file.data.bounds,
             )?)
         } else {
@@ -394,9 +383,12 @@ impl MzViewerApp {
         // Build m/z range filter for TIC/BPC if enabled
         let mz_range = if self.user_input.range_enabled
             && self.user_input.plot_type != PlotType::Xic
-            && self.user_input.range_min < self.user_input.range_max
+            && self.user_input.range_min.value < self.user_input.range_max.value
         {
-            Some((self.user_input.range_min, self.user_input.range_max))
+            Some((
+                self.user_input.range_min.value,
+                self.user_input.range_max.value,
+            ))
         } else {
             None
         };
@@ -540,13 +532,12 @@ mod tests {
                 name: "test.mzML".to_string(),
                 path: "test.mzML".to_string(),
                 data: mock_data,
-                cached_plot_data: None,
-                cached_chromatogram: None,
-                cached_mass_spectrum: None,
-                color: LineColor::Red,
-                visible: true,
+                display: FileDisplaySettings {
+                    color: LineColor::Red,
+                    visible: true,
+                },
+                cache: FileCache::default(),
                 is_loading: false,
-                last_processing_params: None,
             },
         );
         app.active_file_id = Some(file_id);
@@ -588,13 +579,12 @@ mod tests {
                 name: "test.mzML".to_string(),
                 path: "test.mzML".to_string(),
                 data: mock_data,
-                cached_plot_data: None,
-                cached_chromatogram: None,
-                cached_mass_spectrum: None,
-                color: LineColor::Red,
-                visible: true,
+                display: FileDisplaySettings {
+                    color: LineColor::Red,
+                    visible: true,
+                },
+                cache: FileCache::default(),
                 is_loading: false,
-                last_processing_params: None,
             },
         );
         app.active_file_id = Some(file_id);
@@ -636,13 +626,12 @@ mod tests {
                 name: "test.mzML".to_string(),
                 path: "test.mzML".to_string(),
                 data: mock_data,
-                cached_plot_data: None,
-                cached_chromatogram: None,
-                cached_mass_spectrum: None,
-                color: LineColor::Red,
-                visible: true,
+                display: FileDisplaySettings {
+                    color: LineColor::Red,
+                    visible: true,
+                },
+                cache: FileCache::default(),
                 is_loading: false,
-                last_processing_params: None,
             },
         );
         app.active_file_id = Some(file_id);
@@ -650,8 +639,8 @@ mod tests {
         // Set up for XIC plot with valid parameters
         app.user_input.plot_type = PlotType::Xic;
         app.user_input.polarity = mzdata::spectrum::ScanPolarity::Positive;
-        app.user_input.mass = 524.3;
-        app.user_input.mass_tolerance = 10.0;
+        app.user_input.mass.value = 524.3;
+        app.user_input.mass_tolerance.value = 10.0;
         app.user_input.smoothing = 2;
 
         let result = app.build_processing_params();
@@ -669,8 +658,8 @@ mod tests {
 
         // Set up for XIC plot with invalid mass
         app.user_input.plot_type = PlotType::Xic;
-        app.user_input.mass = 0.0; // Invalid: must be positive
-        app.user_input.mass_tolerance = 10.0;
+        app.user_input.mass.value = 0.0; // Invalid: must be positive
+        app.user_input.mass_tolerance.value = 10.0;
 
         let result = app.build_processing_params();
 
@@ -683,8 +672,8 @@ mod tests {
 
         // Set up for XIC plot with invalid tolerance
         app.user_input.plot_type = PlotType::Xic;
-        app.user_input.mass = 500.0;
-        app.user_input.mass_tolerance = 1500.0; // Invalid: exceeds maximum 1000 ppm
+        app.user_input.mass.value = 500.0;
+        app.user_input.mass_tolerance.value = 1500.0; // Invalid: exceeds maximum 1000 ppm
 
         let result = app.build_processing_params();
 
@@ -700,13 +689,12 @@ mod tests {
             name: "test_file.mzML".to_string(),
             path: "/path/to/test_file.mzML".to_string(),
             data: parser::MzData::new(),
-            cached_plot_data: None,
-            cached_chromatogram: None,
-            cached_mass_spectrum: None,
-            color: LineColor::Blue,
-            visible: true,
+            display: FileDisplaySettings {
+                color: LineColor::Blue,
+                visible: true,
+            },
+            cache: FileCache::default(),
             is_loading: false,
-            last_processing_params: None,
         };
 
         let test_data: Vec<[f64; 2]> = vec![[1.0, 100.0], [2.0, 200.0], [3.0, 150.0]];
@@ -729,13 +717,12 @@ mod tests {
             name: "file1.mzML".to_string(),
             path: "file1.mzML".to_string(),
             data: parser::MzData::new(),
-            cached_plot_data: None,
-            cached_chromatogram: None,
-            cached_mass_spectrum: None,
-            color: LineColor::Red,
-            visible: true,
+            display: FileDisplaySettings {
+                color: LineColor::Red,
+                visible: true,
+            },
+            cache: FileCache::default(),
             is_loading: false,
-            last_processing_params: None,
         };
         let file1_id = app.next_file_id;
         app.next_file_id += 1;
@@ -745,13 +732,12 @@ mod tests {
             name: "file2.mzML".to_string(),
             path: "file2.mzML".to_string(),
             data: parser::MzData::new(),
-            cached_plot_data: None,
-            cached_chromatogram: None,
-            cached_mass_spectrum: None,
-            color: LineColor::Green,
-            visible: true,
+            display: FileDisplaySettings {
+                color: LineColor::Green,
+                visible: true,
+            },
+            cache: FileCache::default(),
             is_loading: false,
-            last_processing_params: None,
         };
         let file2_id = app.next_file_id;
         app.next_file_id += 1;
@@ -761,13 +747,12 @@ mod tests {
             name: "file3.mzML".to_string(),
             path: "file3.mzML".to_string(),
             data: parser::MzData::new(),
-            cached_plot_data: None,
-            cached_chromatogram: None,
-            cached_mass_spectrum: None,
-            color: LineColor::Blue,
-            visible: true,
+            display: FileDisplaySettings {
+                color: LineColor::Blue,
+                visible: true,
+            },
+            cache: FileCache::default(),
             is_loading: false,
-            last_processing_params: None,
         };
         let file3_id = app.next_file_id;
         app.next_file_id += 1;
@@ -807,13 +792,12 @@ mod tests {
                 name: format!("file{}.mzML", i),
                 path: format!("file{}.mzML", i),
                 data: parser::MzData::new(),
-                cached_plot_data: None,
-                cached_chromatogram: None,
-                cached_mass_spectrum: None,
-                color: next_color_for_index(i),
-                visible: true,
+                display: FileDisplaySettings {
+                    color: next_color_for_index(i),
+                    visible: true,
+                },
+                cache: FileCache::default(),
                 is_loading: false,
-                last_processing_params: None,
             };
             app.files.insert(i, file);
         }
@@ -855,13 +839,12 @@ mod tests {
                 name: "test.mzML".to_string(),
                 path: "test.mzML".to_string(),
                 data: parser::MzData::new(),
-                cached_plot_data: None,
-                cached_chromatogram: None,
-                cached_mass_spectrum: None,
-                color: LineColor::Red,
-                visible: true,
+                display: FileDisplaySettings {
+                    color: LineColor::Red,
+                    visible: true,
+                },
+                cache: FileCache::default(),
                 is_loading: false,
-                last_processing_params: None,
             },
         );
         app.active_file_id = Some(file_id);
@@ -873,11 +856,14 @@ mod tests {
         // Replicate the propagation logic from add_line_color_options
         if let Some(active_id) = app.active_file_id {
             if let Some(file) = app.files.get_mut(&active_id) {
-                file.color = app.user_input.line_color;
+                file.display.color = app.user_input.line_color;
             }
         }
 
-        assert_eq!(app.files.get(&file_id).unwrap().color, LineColor::Blue);
+        assert_eq!(
+            app.files.get(&file_id).unwrap().display.color,
+            LineColor::Blue
+        );
     }
 
     #[test]
@@ -892,13 +878,12 @@ mod tests {
                     name: format!("file{}.mzML", i),
                     path: format!("file{}.mzML", i),
                     data: parser::MzData::new(),
-                    cached_plot_data: None,
-                    cached_chromatogram: None,
-                    cached_mass_spectrum: None,
-                    color: *color,
-                    visible: true,
+                    display: FileDisplaySettings {
+                        color: *color,
+                        visible: true,
+                    },
+                    cache: FileCache::default(),
                     is_loading: false,
-                    last_processing_params: None,
                 },
             );
         }
@@ -908,7 +893,7 @@ mod tests {
         // Switch to file 1 (Green) and sync the color picker
         app.active_file_id = Some(1);
         if let Some(file) = app.files.get(&1) {
-            app.user_input.line_color = file.color;
+            app.user_input.line_color = file.display.color;
         }
 
         assert_eq!(app.user_input.line_color, LineColor::Green);
@@ -919,7 +904,7 @@ mod tests {
     fn test_poll_with_no_receiver_does_not_panic() {
         let ctx = egui::Context::default();
         let mut app = MzViewerApp::default();
-        assert!(app.processing_rx.is_none());
+        assert!(app.async_state.processing_rx.is_none());
         app.poll_processing_result(&ctx); // must not panic
     }
 
@@ -927,7 +912,7 @@ mod tests {
     #[test]
     fn test_is_processing_default_false() {
         let app = MzViewerApp::default();
-        assert!(!app.is_processing);
+        assert!(!app.async_state.is_processing);
     }
 
     /// Verify that calling request_chromatogram_update with identical params
@@ -971,13 +956,15 @@ mod tests {
                 name: "test.mzML".to_string(),
                 path: "test.mzML".to_string(),
                 data: mock_data,
-                cached_plot_data: None,
-                cached_chromatogram: None,
-                cached_mass_spectrum: None,
-                color: LineColor::Red,
-                visible: true,
+                display: FileDisplaySettings {
+                    color: LineColor::Red,
+                    visible: true,
+                },
+                cache: FileCache {
+                    last_processing_params: Some(cached_params),
+                    ..FileCache::default()
+                },
                 is_loading: false,
-                last_processing_params: Some(cached_params),
             },
         );
 
@@ -985,6 +972,6 @@ mod tests {
         app.request_chromatogram_update();
 
         // The background thread must NOT have been spawned.
-        assert!(!app.is_processing);
+        assert!(!app.async_state.is_processing);
     }
 }
