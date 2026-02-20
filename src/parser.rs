@@ -676,13 +676,12 @@ mod tests {
 
     use approx::assert_relative_eq;
     use std::path::PathBuf;
-    const TEST_FILE: &str = r"test_file\data_dependent_02.mzML"; //thermo example file converted to mzML (only Rt 10-12min)
 
     /// Helper function to create a normalized test file path
     fn get_test_file_path() -> PathBuf {
         let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        d.push(TEST_FILE);
-        PathBuf::from(d.to_str().unwrap().replace("\\", "/"))
+        d.push(std::path::Path::new("test_file").join("data_dependent_02.mzML"));
+        d
     }
 
     /// Helper function to create and open an MzData parser
@@ -780,13 +779,10 @@ mod tests {
     #[test]
     fn test_open_msfile() {
         let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        d.push(TEST_FILE);
-
-        // Normalize the path to account for different separators
-        let normalized_d = PathBuf::from(d.to_str().unwrap().replace("\\", "/"));
+        d.push(std::path::Path::new("test_file").join("data_dependent_02.mzML"));
 
         let mut mzdata = MzData::new();
-        let result = mzdata.open_msfile(&normalized_d);
+        let result = mzdata.open_msfile(&d);
         assert!(result.is_ok());
         assert!(mzdata.is_open());
     }

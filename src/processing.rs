@@ -543,9 +543,10 @@ mod tests {
     use std::path::PathBuf;
 
     // Helper to load test file
+    // Helper to load test file
     fn load_test_file() -> MzData {
         let mut data = MzData::new();
-        let path = PathBuf::from("test_file/data_dependent_02.mzML");
+        let path = std::path::Path::new("test_file").join("data_dependent_02.mzML");
         data.open_msfile(&path).expect("Failed to load test file");
         data
     }
