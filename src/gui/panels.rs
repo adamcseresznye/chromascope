@@ -1,6 +1,7 @@
 ﻿use super::plotting;
 use crate::gui::state::{
-    next_color_for_index, FileId, FileValidity, MzViewerApp, OpenFile, StateChange,
+    next_color_for_index, FileCache, FileDisplaySettings, FileId, FileValidity, MzViewerApp,
+    OpenFile, StateChange,
 };
 use crate::{
     parser,
@@ -83,7 +84,7 @@ pub fn update_data_selection_panel(app: &mut MzViewerApp, ctx: &Context) {
 /// - `ui: &mut Ui`: A mutable reference to the `egui::Ui` instance where the display options will be added.
 pub fn add_display_options(app: &mut MzViewerApp, ui: &mut Ui) {
     ui.menu_button("Smoothing", |ui| {
-        let slider = egui::Slider::new(&mut app.user_input.smoothing, 0..=11);
+        let slider = egui::Slider::new(&mut app.user_input.smoothing, 0..=10);
         let response = ui.add(slider);
         if response.changed() {
             app.state_changed = StateChange::Changed;
@@ -160,10 +161,10 @@ pub fn add_line_color_options(app: &mut MzViewerApp, ui: &mut Ui) {
     if app.user_input.line_color != previous_color {
         if let Some(active_id) = app.active_file_id {
             if let Some(file) = app.files.get_mut(&active_id) {
-                file.color = app.user_input.line_color;
+                file.display.color = app.user_input.line_color;
                 info!(
                     "Active file '{}' chromatogram color updated to {:?}",
-                    file.name, file.color
+                    file.name, file.display.color
                 );
             }
         }
@@ -214,7 +215,7 @@ pub fn handle_file_selection(app: &mut MzViewerApp) {
         for (color_index, path) in paths.iter().enumerate() {
             let path_str = path.display().to_string();
 
-            if !path_str.ends_with("mzML") {
+            if !path_str.to_lowercase().ends_with("mzml") {
                 warn!("Invalid file format: {}", path_str);
                 app.show_error_dialog(format!("Not an mzML file: {}", path_str));
                 continue;
@@ -244,13 +245,9 @@ pub fn handle_file_selection(app: &mut MzViewerApp) {
                     name,
                     path: path_str,
                     data: parser::MzData::new(),
-                    cached_plot_data: None,
-                    cached_chromatogram: None,
-                    cached_mass_spectrum: None,
-                    color,
-                    visible: true,
+                    display: FileDisplaySettings { color, visible: true },
+                    cache: FileCache::default(),
                     is_loading: true,
-                    last_processing_params: None,
                 },
             );
 
@@ -259,7 +256,7 @@ pub fn handle_file_selection(app: &mut MzViewerApp) {
                 file_id
             );
 
-            let tx_clone = app.file_loading_tx.clone();
+            let tx_clone = app.async_state.file_loading_tx.clone();
             let path_clone = path.clone();
             std::thread::spawn(move || {
                 let result = crate::processing::open_file_in_background(path_clone, file_id, color);
@@ -274,7 +271,7 @@ pub fn handle_file_selection(app: &mut MzViewerApp) {
 
             // Ensure we're in a safe state for initial processing
             // If plot type is XIC but mass is invalid, switch to TIC
-            if app.user_input.plot_type == PlotType::Xic && app.user_input.mass <= 0.0 {
+            if app.user_input.plot_type == PlotType::Xic && app.user_input.mass.value <= 0.0 {
                 info!(
                     "Switching to TIC plot type for initial file opening (XIC requires valid mass)"
                 );
@@ -321,7 +318,7 @@ pub fn handle_csv_export(app: &mut MzViewerApp) {
     };
 
     // Check if plot data exists for the active file
-    let data = match &active_file.cached_plot_data {
+    let data = match &active_file.cache.plot_data {
         Some(d) => d,
         None => {
             warn!(
@@ -415,10 +412,10 @@ pub fn update_file_information_panel(app: &mut MzViewerApp, ctx: &egui::Context)
                                 .inner_margin(egui::Margin::same(4.0));
                             frame.show(ui, |ui| {
                                 // Visibility checkbox
-                                if ui.checkbox(&mut file.visible, "").changed() {
+                                if ui.checkbox(&mut file.display.visible, "").changed() {
                                     info!(
                                         "File visibility toggled: {} (ID: {}) -> {}",
-                                        file.name, file_id, file.visible
+                                        file.name, file_id, file.display.visible
                                     );
                                 }
 
@@ -442,10 +439,10 @@ pub fn update_file_information_panel(app: &mut MzViewerApp, ctx: &egui::Context)
                             });
                         } else {
                             // Visibility checkbox
-                            if ui.checkbox(&mut file.visible, "").changed() {
+                            if ui.checkbox(&mut file.display.visible, "").changed() {
                                 info!(
                                     "File visibility toggled: {} (ID: {}) -> {}",
-                                    file.name, file_id, file.visible
+                                    file.name, file_id, file.display.visible
                                 );
                             }
 
@@ -481,7 +478,7 @@ pub fn update_file_information_panel(app: &mut MzViewerApp, ctx: &egui::Context)
                     app.state_changed = StateChange::Changed;
                     // Sync the color picker to reflect the newly active file's color
                     if let Some(file) = app.files.get(&new_id) {
-                        app.user_input.line_color = file.color;
+                        app.user_input.line_color = file.display.color;
                     }
                     info!("Active file changed to ID: {}", new_id);
                 }
@@ -559,9 +556,9 @@ pub fn update_central_panel(app: &mut MzViewerApp, ctx: &Context) {
 
                     // Integration result bar — shown only when relevant
                     match (
-                        app.integration_start_rt,
-                        app.integration_end_rt,
-                        app.integration_result,
+                        app.integration.start_rt,
+                        app.integration.end_rt,
+                        app.integration.result,
                     ) {
                         (Some(s), Some(e), Some(area)) => {
                             ui.horizontal(|ui| {
@@ -570,9 +567,9 @@ pub fn update_central_panel(app: &mut MzViewerApp, ctx: &Context) {
                                     format!("∫ Area [{:.3} – {:.3} min] = {:.4e}", s, e, area),
                                 );
                                 if ui.small_button("✕ Clear").clicked() {
-                                    app.integration_start_rt = None;
-                                    app.integration_end_rt = None;
-                                    app.integration_result = None;
+                                    app.integration.start_rt = None;
+                                    app.integration.end_rt = None;
+                                    app.integration.result = None;
                                 }
                             });
                         }
@@ -750,24 +747,22 @@ pub fn add_range_options(app: &mut MzViewerApp, ui: &mut Ui) {
             // Min m/z input
             ui.label("Min:");
             let min_response = ui.add(
-                egui::TextEdit::singleline(&mut app.user_input.range_min_input)
+                egui::TextEdit::singleline(&mut app.user_input.range_min.text)
                     .desired_width(70.0)
                     .hint_text("0.0"),
             );
 
             if min_response.lost_focus() {
-                if let Ok(parsed) = app.user_input.range_min_input.parse::<f64>() {
-                    if parsed >= 0.0 {
-                        app.user_input.range_min = parsed;
+                let result = app.user_input.range_min.sync_on_focus_lost(|v| *v >= 0.0);
+                match result {
+                    Ok(()) => {
                         app.state_changed = StateChange::Changed;
-                        info!("Range min set to: {}", parsed);
-                    } else {
-                        app.show_error_dialog("Min m/z must be non-negative".to_string());
-                        app.user_input.range_min_input = app.user_input.range_min.to_string();
+                        info!("Range min set to: {}", app.user_input.range_min.value);
                     }
-                } else if !app.user_input.range_min_input.is_empty() {
-                    app.show_error_dialog("Invalid min m/z format".to_string());
-                    app.user_input.range_min_input = app.user_input.range_min.to_string();
+                    Err(_) if !app.user_input.range_min.text.is_empty() => {
+                        app.show_error_dialog("Min m/z must be non-negative".to_string());
+                    }
+                    _ => {}
                 }
             }
 
@@ -776,24 +771,27 @@ pub fn add_range_options(app: &mut MzViewerApp, ui: &mut Ui) {
             // Max m/z input
             ui.label("Max:");
             let max_response = ui.add(
-                egui::TextEdit::singleline(&mut app.user_input.range_max_input)
+                egui::TextEdit::singleline(&mut app.user_input.range_max.text)
                     .desired_width(70.0)
                     .hint_text("2000.0"),
             );
 
             if max_response.lost_focus() {
-                if let Ok(parsed) = app.user_input.range_max_input.parse::<f64>() {
-                    if parsed > app.user_input.range_min {
-                        app.user_input.range_max = parsed;
+                let range_min_value = app.user_input.range_min.value;
+                let result = app
+                    .user_input
+                    .range_max
+                    .sync_on_focus_lost(|v| *v > range_min_value);
+                match result {
+                    Ok(()) => {
                         app.state_changed = StateChange::Changed;
-                        info!("Range max set to: {}", parsed);
-                    } else {
-                        app.show_error_dialog("Max m/z must be greater than min m/z".to_string());
-                        app.user_input.range_max_input = app.user_input.range_max.to_string();
+                        info!("Range max set to: {}", app.user_input.range_max.value);
                     }
-                } else if !app.user_input.range_max_input.is_empty() {
-                    app.show_error_dialog("Invalid max m/z format".to_string());
-                    app.user_input.range_max_input = app.user_input.range_max.to_string();
+                    Err(_) if !app.user_input.range_max.text.is_empty() => {
+                        app
+                            .show_error_dialog("Max m/z must be greater than min m/z".to_string());
+                    }
+                    _ => {}
                 }
             }
 

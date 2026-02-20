@@ -7,6 +7,61 @@ use mzdata::spectrum::ScanPolarity;
 use std::collections::HashMap;
 use std::sync::mpsc;
 
+/// A validated text input that keeps a last-known-good value alongside the raw text.
+///
+/// - `text` — the raw string shown in the `TextEdit` widget.
+/// - `value` — the last successfully parsed, validated value.
+///
+/// When focus is lost, call `sync_on_focus_lost` to attempt parsing. Invalid
+/// input is rejected and `text` is reverted to the previous `value`, ensuring
+/// the UI never drifts from a known-good state.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ValidatedInput<T> {
+    pub text: String,
+    pub value: T,
+}
+
+impl<T: ToString + Copy + Default> Default for ValidatedInput<T> {
+    fn default() -> Self {
+        Self {
+            text: String::new(),
+            value: T::default(),
+        }
+    }
+}
+
+impl<T: ToString + Copy> ValidatedInput<T> {
+    /// Create a new `ValidatedInput` with both `text` and `value` initialised
+    /// from `default_value`.
+    pub fn new(default_value: T) -> Self {
+        Self {
+            text: default_value.to_string(),
+            value: default_value,
+        }
+    }
+
+    /// Attempt to parse `text` and validate the result with `validate`.
+    ///
+    /// On success the `value` is updated.  On failure `text` is reverted to
+    /// `value.to_string()` (last-known-good state) and an `Err` is returned.
+    pub fn sync_on_focus_lost<F>(&mut self, validate: F) -> Result<(), String>
+    where
+        T: std::str::FromStr,
+        F: Fn(&T) -> bool,
+    {
+        match self.text.parse::<T>() {
+            Ok(parsed) if validate(&parsed) => {
+                self.value = parsed;
+                Ok(())
+            }
+            _ => {
+                self.text = self.value.to_string(); // revert to last good state
+                Err("Invalid input".to_string())
+            }
+        }
+    }
+}
+
 #[derive(PartialEq)]
 pub struct UserInput {
     /// Optional file path for the input data
@@ -17,14 +72,10 @@ pub struct UserInput {
     pub ms_level: u8,
     /// The polarity of the scan. It can be either ScanPolarity::Positive or ScanPolarity::Negative
     pub polarity: ScanPolarity,
-    /// The mass input value provided by the user
-    pub mass_input: String,
-    /// The mass tolerance input value provided by the user
-    pub mass_tolerance_input: String,
-    /// The mass value parsed from the `mass_input`
-    pub mass: f64,
-    /// The mass tolerance value parsed from `mass_tolerance_input`
-    pub mass_tolerance: f64,
+    /// The m/z value entered by the user — text for the TextEdit, value for processing.
+    pub mass: ValidatedInput<f64>,
+    /// The mass tolerance in ppm — text for the TextEdit, value for processing.
+    pub mass_tolerance: ValidatedInput<f64>,
     /// The type of line to be used in the plot
     pub line_type: LineType,
     /// The color of the line to be used in the plot
@@ -37,14 +88,10 @@ pub struct UserInput {
     pub retention_time_ms_spectrum: Option<f32>,
     /// Whether to use range filtering for TIC/BPC plots
     pub range_enabled: bool,
-    /// User input for minimum m/z range
-    pub range_min_input: String,
-    /// User input for maximum m/z range
-    pub range_max_input: String,
-    /// Parsed minimum m/z value
-    pub range_min: f64,
-    /// Parsed maximum m/z value
-    pub range_max: f64,
+    /// Minimum m/z range — text for the TextEdit, value for processing.
+    pub range_min: ValidatedInput<f64>,
+    /// Maximum m/z range — text for the TextEdit, value for processing.
+    pub range_max: ValidatedInput<f64>,
 }
 
 impl Default for UserInput {
@@ -54,20 +101,16 @@ impl Default for UserInput {
             plot_type: PlotType::default(),
             ms_level: 1, // Default to MS1
             polarity: ScanPolarity::default(),
-            mass_input: String::default(),
-            mass_tolerance_input: String::default(),
-            mass: f64::default(),
-            mass_tolerance: f64::default(),
+            mass: ValidatedInput::default(),
+            mass_tolerance: ValidatedInput::default(),
             line_type: LineType::default(),
             line_color: LineColor::default(),
             smoothing: u8::default(),
             line_width: f32::default(),
             retention_time_ms_spectrum: None,
             range_enabled: bool::default(),
-            range_min_input: String::default(),
-            range_max_input: String::default(),
-            range_min: f64::default(),
-            range_max: f64::default(),
+            range_min: ValidatedInput::default(),
+            range_max: ValidatedInput::default(),
         }
     }
 }
@@ -85,6 +128,21 @@ pub(crate) enum StateChange {
     Unchanged,
 }
 
+/// Holds all state for the peak integration feature.
+#[derive(Debug, Default)]
+pub(crate) struct IntegrationState {
+    /// RT where the user started right-click dragging (minutes)
+    pub(crate) start_rt: Option<f64>,
+    /// RT at the current drag position — updated every frame during drag
+    pub(crate) end_rt: Option<f64>,
+    /// Computed trapezoidal area, set on drag release
+    pub(crate) result: Option<f64>,
+    /// Interpolated intensity at the integration start point — used to render the baseline chord
+    pub(crate) start_intensity: Option<f64>,
+    /// Interpolated intensity at the integration end point — used to render the baseline chord
+    pub(crate) end_intensity: Option<f64>,
+}
+
 /// Stable identifier for opened files.
 ///
 /// FileId is assigned when a file is opened and never changes, even if other files
@@ -96,7 +154,30 @@ pub(crate) enum StateChange {
 /// when elements are removed.
 pub(crate) type FileId = usize;
 
-/// Represents a single opened mzML file with its associated data and display settings
+/// Display/presentation settings for an opened file.
+#[derive(Debug)]
+pub(crate) struct FileDisplaySettings {
+    /// The color assigned to this file's chromatogram line
+    pub(crate) color: LineColor,
+    /// Whether this file's chromatogram is currently visible in the plot
+    pub(crate) visible: bool,
+}
+
+/// Cached computation results for an opened file.
+#[derive(Debug, Default)]
+pub(crate) struct FileCache {
+    /// The processed plot data for this file
+    pub(crate) plot_data: Option<Vec<[f64; 2]>>,
+    /// The last extracted chromatogram (used for triple-click spectrum lookup)
+    pub(crate) chromatogram: Option<parser::ChromatogramData>,
+    /// The last retrieved mass spectrum (populated on triple-click)
+    pub(crate) mass_spectrum: Option<parser::MassSpectrum>,
+    /// The last set of processing params used for extraction. Used to skip
+    /// redundant background thread spawns when nothing extraction-relevant changed.
+    pub(crate) last_processing_params: Option<ProcessingParams>,
+}
+
+/// Represents a single opened mzML file — thin coordinator over data, display, and cache.
 pub(crate) struct OpenFile {
     /// Stable identifier that never changes, even if other files are removed
     #[allow(dead_code)]
@@ -108,22 +189,13 @@ pub(crate) struct OpenFile {
     pub(crate) path: String,
     /// The parsed mass spectrometry data for this file
     pub(crate) data: parser::MzData,
-    /// The processed plot data for this file
-    pub(crate) cached_plot_data: Option<Vec<[f64; 2]>>,
-    /// The last extracted chromatogram (used for triple-click spectrum lookup)
-    pub(crate) cached_chromatogram: Option<parser::ChromatogramData>,
-    /// The last retrieved mass spectrum (populated on triple-click)
-    pub(crate) cached_mass_spectrum: Option<parser::MassSpectrum>,
-    /// The color assigned to this file's chromatogram line
-    pub(crate) color: LineColor,
-    /// Whether this file's chromatogram is currently visible in the plot
-    pub(crate) visible: bool,
+    /// Display/presentation settings (color, visibility)
+    pub(crate) display: FileDisplaySettings,
+    /// Cached computation results (plot data, chromatogram, spectrum, last params)
+    pub(crate) cache: FileCache,
     /// True while the background thread is still reading the file metadata.
     /// The file list shows a spinner when this is true.
     pub(crate) is_loading: bool,
-    /// The last set of processing params used for extraction. Used to skip
-    /// redundant background thread spawns when nothing extraction-relevant changed.
-    pub(crate) last_processing_params: Option<ProcessingParams>,
 }
 
 /// Returns the next color in the cycle based on the file index
@@ -136,13 +208,31 @@ pub(crate) fn next_color_for_index(index: usize) -> LineColor {
         LineColor::Black,
         LineColor::White,
     ];
-    match index % colors.len() {
-        0 => LineColor::Red,
-        1 => LineColor::Green,
-        2 => LineColor::Blue,
-        3 => LineColor::Yellow,
-        4 => LineColor::Black,
-        _ => LineColor::White,
+    colors[index % colors.len()]
+}
+
+/// Holds all async-machinery fields (background threads, channels).
+#[derive(Debug)]
+pub(crate) struct AsyncState {
+    /// Whether the background processing thread is currently running
+    pub(crate) is_processing: bool,
+    /// Receiver for results from the background processing thread (native only)
+    pub(crate) processing_rx: Option<mpsc::Receiver<crate::processing::ProcessingResult>>,
+    /// Sender for results from background file-loading threads.
+    pub(crate) file_loading_tx: mpsc::SyncSender<crate::processing::FileLoadingResult>,
+    /// Receives results from background file-loading threads.
+    pub(crate) file_loading_rx: mpsc::Receiver<crate::processing::FileLoadingResult>,
+}
+
+impl AsyncState {
+    pub(crate) fn new() -> Self {
+        let (file_loading_tx, file_loading_rx) = mpsc::sync_channel(32);
+        Self {
+            is_processing: false,
+            processing_rx: None,
+            file_loading_tx,
+            file_loading_rx,
+        }
     }
 }
 
@@ -163,29 +253,14 @@ pub struct MzViewerApp {
     pub(crate) options_window_open: bool,
     /// Error message to display to the user
     pub(crate) error_message: Option<String>,
-    /// RT where the user started right-click dragging (minutes)
-    pub(crate) integration_start_rt: Option<f64>,
-    /// RT at the current drag position — updated every frame during drag
-    pub(crate) integration_end_rt: Option<f64>,
-    /// Computed trapezoidal area, set on drag release
-    pub(crate) integration_result: Option<f64>,
-    /// Interpolated intensity at the integration start point — used to render the baseline chord
-    pub(crate) integration_start_intensity: Option<f64>,
-    /// Interpolated intensity at the integration end point — used to render the baseline chord
-    pub(crate) integration_end_intensity: Option<f64>,
-    /// Whether the background processing thread is currently running
-    pub(crate) is_processing: bool,
-    /// Receiver for results from the background processing thread (native only)
-    pub(crate) processing_rx: Option<mpsc::Receiver<crate::processing::ProcessingResult>>,
-    /// Sender for results from background file-loading threads.
-    pub(crate) file_loading_tx: mpsc::SyncSender<crate::processing::FileLoadingResult>,
-    /// Receives results from background file-loading threads.
-    pub(crate) file_loading_rx: mpsc::Receiver<crate::processing::FileLoadingResult>,
+    /// Peak integration state (drag-select region + result)
+    pub(crate) integration: IntegrationState,
+    /// Async machinery (background threads, channels)
+    pub(crate) async_state: AsyncState,
 }
 
 impl Default for MzViewerApp {
     fn default() -> Self {
-        let (file_loading_tx, file_loading_rx) = mpsc::sync_channel(32);
         Self {
             files: HashMap::default(),
             active_file_id: None,
@@ -195,15 +270,78 @@ impl Default for MzViewerApp {
             state_changed: StateChange::default(),
             options_window_open: false,
             error_message: None,
-            integration_start_rt: None,
-            integration_end_rt: None,
-            integration_result: None,
-            integration_start_intensity: None,
-            integration_end_intensity: None,
-            is_processing: false,
-            processing_rx: None,
-            file_loading_tx,
-            file_loading_rx,
+            integration: IntegrationState::default(),
+            async_state: AsyncState::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_integration_state_default() {
+        let state = IntegrationState::default();
+        assert!(state.start_rt.is_none());
+        assert!(state.end_rt.is_none());
+        assert!(state.result.is_none());
+        assert!(state.start_intensity.is_none());
+        assert!(state.end_intensity.is_none());
+    }
+
+    #[test]
+    fn test_file_cache_default() {
+        let cache = FileCache::default();
+        assert!(cache.plot_data.is_none());
+        assert!(cache.chromatogram.is_none());
+        assert!(cache.mass_spectrum.is_none());
+        assert!(cache.last_processing_params.is_none());
+    }
+
+    #[test]
+    fn test_validated_input_default() {
+        let input: ValidatedInput<f64> = ValidatedInput::default();
+        assert_eq!(input.value, 0.0);
+        assert_eq!(input.text, "");
+    }
+
+    #[test]
+    fn test_validated_input_new() {
+        let input = ValidatedInput::new(42.0_f64);
+        assert_eq!(input.value, 42.0);
+        assert_eq!(input.text, "42");
+    }
+
+    #[test]
+    fn test_validated_input_sync_accepts_valid() {
+        let mut input = ValidatedInput::new(10.0_f64);
+        input.text = "524.3".to_string();
+        let result = input.sync_on_focus_lost(|v| *v > 0.0);
+        assert!(result.is_ok());
+        assert_eq!(input.value, 524.3);
+        assert_eq!(input.text, "524.3");
+    }
+
+    #[test]
+    fn test_validated_input_sync_rejects_invalid_parse() {
+        let mut input = ValidatedInput::new(10.0_f64);
+        input.text = "not_a_number".to_string();
+        let result = input.sync_on_focus_lost(|_| true);
+        assert!(result.is_err());
+        // Text is reverted to last-known-good
+        assert_eq!(input.text, "10");
+        assert_eq!(input.value, 10.0);
+    }
+
+    #[test]
+    fn test_validated_input_sync_rejects_failing_validation() {
+        let mut input = ValidatedInput::new(10.0_f64);
+        input.text = "0.0".to_string();
+        // validate rejects zero
+        let result = input.sync_on_focus_lost(|v| *v > 0.0);
+        assert!(result.is_err());
+        assert_eq!(input.value, 10.0); // unchanged
+        assert_eq!(input.text, "10"); // reverted
     }
 }

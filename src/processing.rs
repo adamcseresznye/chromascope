@@ -60,6 +60,7 @@ pub struct ProcessingParams {
 ///
 /// Sent from the background thread to the GUI thread over an `mpsc` channel.
 /// Contains either the processed data (on success) or an error message.
+#[derive(Debug)]
 pub enum ProcessingResult {
     Success {
         file_id: usize,
@@ -74,6 +75,7 @@ pub enum ProcessingResult {
 
 /// Result of a background file-loading task.
 /// Sent from the background thread to the UI thread via mpsc channel.
+#[derive(Debug)]
 pub enum FileLoadingResult {
     Success {
         file_id: usize,

@@ -12,7 +12,7 @@ pub fn render_chromatogram(
     Option<egui_plot::PlotBounds>,
     Option<PlotPoint>,
 ) {
-    if app.is_processing {
+    if app.async_state.is_processing {
         let response = ui
             .centered_and_justified(|ui| {
                 ui.spinner();
@@ -35,8 +35,8 @@ pub fn render_chromatogram(
         .boxed_zoom_pointer_button(egui::PointerButton::Middle)
         .show(ui, |plot_ui| {
             for file in app.files.values() {
-                if file.visible {
-                    if let Some(data) = &file.cached_plot_data {
+                if file.display.visible {
+                    if let Some(data) = &file.cache.plot_data {
                         let line = create_line_for_file(app, file, data);
                         plot_ui.line(line);
                     }
@@ -62,13 +62,13 @@ pub fn create_line_for_file(app: &MzViewerApp, file: &OpenFile, data: &[[f64; 2]
     Line::new(PlotPoints::from(data.to_vec()))
         .width(app.user_input.line_width)
         .style(app.user_input.line_type.to_egui())
-        .color(file.color.to_egui())
+        .color(file.display.color.to_egui())
         .name(&file.name)
 }
 
 /// Draws the integration region shading and boundary lines on the chromatogram plot.
 pub fn render_integration_overlay(app: &MzViewerApp, plot_ui: &mut egui_plot::PlotUi) {
-    let start = match app.integration_start_rt {
+    let start = match app.integration.start_rt {
         Some(s) => s,
         None => return,
     };
@@ -81,7 +81,7 @@ pub fn render_integration_overlay(app: &MzViewerApp, plot_ui: &mut egui_plot::Pl
             .name("Integration start"),
     );
 
-    let end = match app.integration_end_rt {
+    let end = match app.integration.end_rt {
         Some(e) => e,
         None => return,
     };
@@ -102,7 +102,7 @@ pub fn render_integration_overlay(app: &MzViewerApp, plot_ui: &mut egui_plot::Pl
         Some(f) => f,
         None => return,
     };
-    let data = match &file.cached_plot_data {
+    let data = match &file.cache.plot_data {
         Some(d) => d,
         None => return,
     };
@@ -116,10 +116,10 @@ pub fn render_integration_overlay(app: &MzViewerApp, plot_ui: &mut egui_plot::Pl
     // Use cached interpolated boundary intensities when available; else fall back to
     // the nearest data-point intensities so the overlay renders during a drag.
     let i_start = app
-        .integration_start_intensity
+        .integration.start_intensity
         .unwrap_or_else(|| interpolate_in_slice(data, s));
     let i_end = app
-        .integration_end_intensity
+        .integration.end_intensity
         .unwrap_or_else(|| interpolate_in_slice(data, e));
 
     // Top edge: left interpolated boundary → interior curve points → right interpolated boundary.
@@ -200,7 +200,7 @@ pub fn plot_chromatogram(
             }
         }
 
-        if !app.is_processing {
+        if !app.async_state.is_processing {
             app.request_chromatogram_update();
         }
 
@@ -219,7 +219,7 @@ pub fn plot_chromatogram(
 pub fn plot_mass_spectrum(app: &mut MzViewerApp, ui: &mut egui::Ui) -> egui::Response {
     if let Some(active_id) = app.active_file_id {
         if let Some(file) = app.files.get_mut(&active_id) {
-            if let Some(spectrum) = &file.cached_mass_spectrum {
+            if let Some(spectrum) = &file.cache.mass_spectrum {
                 let mz = spectrum.mz.clone();
                 let intensity = spectrum.intensity.clone();
                 info!(
