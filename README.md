@@ -1,28 +1,29 @@
-<p align="center">
-<img src="assets/icon_large.png" alt="Chromascope logo" width="200" />
-</p>
+<div align="center">
 
-<p align="center">
-<a target="_blank" href="https://adamcseresznye.github.io/chromascope/docs/chromascope/index.html" title="Documentation"><img src="https://img.shields.io/badge/README-Documentation-green.svg"></a>
-</p>
+<img src="assets/icon_large.svg" alt="Chromascope logo" width="120" />
 
 # Chromascope
 
-Chromascope is a lightweight and easy-to-use GUI application designed for reading and visualizing mzML mass spectrometry data.
+**A lightweight GUI for reading and visualizing mzML mass spectrometry data**
 
-<p align="center">
-<img src="assets/demo.gif" alt="demo" width="900" />
-</p>
+[![Rust](https://img.shields.io/badge/built%20with-Rust-orange?logo=rust)](https://www.rust-lang.org/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)]()
 
-## Why
+<img src="assets/demo.gif" alt="Chromascope demo" width="860" />
 
-mzML is an open, XML-based format, commonly used for storing and processing mass spectrometry data. While vendor-specific mass spectrometry files are straightforward to open and read, finding a GUI-based tool that handles mzML files with the same ease can be challenging. This project aims to offer a simple, lightweight application for quickly inspecting mass spectrometry data.
+</div>
 
-## The name
+---
 
-Chromascope, a fusion of ‘chromatography’ and ‘scope, as in telescope,’ embodies the spirit of exploration, analysis, and the pursuit of insight as you work with mass spectrometry data.
+## Why Chromascope?
+
+mzML is an open, XML-based format widely used for storing and processing mass spectrometry data. While vendor-specific tools handle proprietary formats well, finding a lightweight GUI that works seamlessly with mzML files remains surprisingly difficult. Chromascope fills that gap — offering instant, no-setup inspection of your mass spectrometry data.
+
+> **Chromascope** — a fusion of *chromatography* and *scope* (as in telescope) — embodies the spirit of exploration and analytical precision.
 
 ## Features
+
 
 - **mzML File Support**: Chromascope supports the mzML format, a widely used open standard for mass spectrometry data.
 - **User-Friendly Interface**: Easily plot TIC, BPC, or XIC by clicking on the chromatogram, with a triple-click revealing the mass spectrum at any selected retention time.
