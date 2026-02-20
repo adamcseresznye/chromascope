@@ -250,6 +250,7 @@ pub fn handle_file_selection(app: &mut MzViewerApp) {
                     color,
                     visible: true,
                     is_loading: true,
+                    last_processing_params: None,
                 },
             );
 
