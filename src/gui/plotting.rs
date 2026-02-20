@@ -113,26 +113,73 @@ pub fn render_integration_overlay(app: &MzViewerApp, plot_ui: &mut egui_plot::Pl
         (end, start)
     };
 
-    let region: Vec<[f64; 2]> = data
-        .iter()
-        .filter(|p| p[0] >= s && p[0] <= e)
-        .copied()
-        .collect();
+    // Use cached interpolated boundary intensities when available; else fall back to
+    // the nearest data-point intensities so the overlay renders during a drag.
+    let i_start = app
+        .integration_start_intensity
+        .unwrap_or_else(|| interpolate_in_slice(data, s));
+    let i_end = app
+        .integration_end_intensity
+        .unwrap_or_else(|| interpolate_in_slice(data, e));
 
-    if region.len() >= 2 {
-        let i_start = region.first().unwrap()[1];
-        let i_end = region.last().unwrap()[1];
+    // Top edge: left interpolated boundary → interior curve points → right interpolated boundary.
+    let mut top: Vec<[f64; 2]> = Vec::new();
+    top.push([s, i_start]);
+    top.extend(data.iter().filter(|p| p[0] > s && p[0] < e).copied());
+    top.push([e, i_end]);
 
-        let mut poly = region.clone();
-        poly.push([e, i_end]);
-        poly.push([s, i_start]);
+    if top.len() < 2 {
+        return;
+    }
 
+    // Shade the area between the curve and the chord by emitting one convex
+    // Polygon quad per segment.  Each individual trapezoid (two adjacent curve
+    // points on top, chord values at the same x on the bottom) is always
+    // convex, so egui_plot::Polygon fills it correctly regardless of the
+    // overall peak shape.
+    let fill_color = egui::Color32::from_rgba_unmultiplied(60, 200, 60, 80);
+    for i in 0..top.len().saturating_sub(1) {
+        let x0 = top[i][0];
+        let x1 = top[i + 1][0];
+        let quad = vec![
+            top[i],
+            top[i + 1],
+            [x1, chord_y(x1, s, i_start, e, i_end)],
+            [x0, chord_y(x0, s, i_start, e, i_end)],
+        ];
         plot_ui.polygon(
-            Polygon::new(PlotPoints::from(poly))
-                .fill_color(egui::Color32::from_rgba_unmultiplied(60, 200, 60, 80))
-                .name("Integration region"),
+            Polygon::new(PlotPoints::from(quad))
+                .fill_color(fill_color)
+                .stroke(egui::Stroke::NONE)
+                .name(""),
         );
     }
+
+    // Draw the baseline chord as a dashed yellow line so the user can see
+    // exactly where the integration baseline sits.
+    let baseline = egui_plot::Line::new(vec![[s, i_start], [e, i_end]])
+        .color(egui::Color32::YELLOW)
+        .width(1.5)
+        .style(egui_plot::LineStyle::Dashed { length: 6.0 })
+        .name("Baseline chord");
+    plot_ui.line(baseline);
+}
+
+/// Linearly interpolates the y-value on the chord connecting `(x0, y0)` to
+/// `(x1, y1)` at the given `x`.
+fn chord_y(x: f64, x0: f64, y0: f64, x1: f64, y1: f64) -> f64 {
+    let dx = x1 - x0;
+    if dx.abs() < f64::EPSILON {
+        return y0;
+    }
+    y0 + (x - x0) / dx * (y1 - y0)
+}
+
+/// Returns the linearly interpolated intensity at `rt` from `data` without
+/// caching — used as a fallback during live dragging before the integration
+/// result has been committed.
+fn interpolate_in_slice(data: &[[f64; 2]], rt: f64) -> f64 {
+    crate::processing::interpolate_at(data, rt)
 }
 
 /// Orchestrates chromatogram display: update → render → handle interactions.
