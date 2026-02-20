@@ -150,6 +150,8 @@ impl MzViewerApp {
             integration_start_rt: None,
             integration_end_rt: None,
             integration_result: None,
+            integration_start_intensity: None,
+            integration_end_intensity: None,
             is_processing: false,
             processing_rx: None,
             file_loading_tx,

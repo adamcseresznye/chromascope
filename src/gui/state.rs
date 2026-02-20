@@ -169,6 +169,10 @@ pub struct MzViewerApp {
     pub(crate) integration_end_rt: Option<f64>,
     /// Computed trapezoidal area, set on drag release
     pub(crate) integration_result: Option<f64>,
+    /// Interpolated intensity at the integration start point — used to render the baseline chord
+    pub(crate) integration_start_intensity: Option<f64>,
+    /// Interpolated intensity at the integration end point — used to render the baseline chord
+    pub(crate) integration_end_intensity: Option<f64>,
     /// Whether the background processing thread is currently running
     pub(crate) is_processing: bool,
     /// Receiver for results from the background processing thread (native only)
@@ -194,6 +198,8 @@ impl Default for MzViewerApp {
             integration_start_rt: None,
             integration_end_rt: None,
             integration_result: None,
+            integration_start_intensity: None,
+            integration_end_intensity: None,
             is_processing: false,
             processing_rx: None,
             file_loading_tx,

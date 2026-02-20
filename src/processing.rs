@@ -415,16 +415,54 @@ pub fn smooth_chromatogram(data: Vec<[f64; 2]>, window_size: u8) -> Result<Vec<[
     Ok(smoothed_data)
 }
 
-/// Computes the trapezoidal area under a chromatogram between two RT bounds.
+/// Linearly interpolates the intensity at a given RT between two adjacent data points.
+fn interpolate_intensity(p0: [f64; 2], p1: [f64; 2], rt: f64) -> f64 {
+    if (p1[0] - p0[0]).abs() < f64::EPSILON {
+        return p0[1];
+    }
+    let t = (rt - p0[0]) / (p1[0] - p0[0]);
+    p0[1] + t * (p1[1] - p0[1])
+}
+
+/// Returns the interpolated intensity of the chromatogram at any given RT.
+///
+/// Clamps to the first or last data point outside the covered range.
+/// Sorts are not performed — `data` must be sorted ascending by RT.
+pub fn interpolate_at(data: &[[f64; 2]], rt: f64) -> f64 {
+    if data.is_empty() {
+        return 0.0;
+    }
+    let idx = data.partition_point(|p| p[0] < rt);
+    if idx == 0 {
+        return data[0][1];
+    }
+    if idx >= data.len() {
+        return data[data.len() - 1][1];
+    }
+    let p0 = data[idx - 1];
+    let p1 = data[idx];
+    if (p1[0] - p0[0]).abs() < f64::EPSILON {
+        return p0[1];
+    }
+    let t = (rt - p0[0]) / (p1[0] - p0[0]);
+    p0[1] + t * (p1[1] - p0[1])
+}
+
+/// Computes the baseline-corrected trapezoidal area above the chord connecting
+/// the exact start and end RTs.
+///
+/// Boundary intensities are **linearly interpolated** from the nearest data
+/// points so the result is independent of how data points happen to land
+/// relative to the drag endpoints.
 ///
 /// # Arguments
-/// * `data`     - Slice of \[rt, intensity\] pairs, expected sorted by rt
+/// * `data`     - Slice of \[rt, intensity\] pairs, sorted ascending by rt
 /// * `start_rt` - Integration window start (minutes)
 /// * `end_rt`   - Integration window end (minutes)
 ///
 /// # Errors
-/// - `InvalidIntegrationRange` if start >= end
-/// - `InvalidIntegrationRange` if fewer than 2 points fall in the window
+/// - `InvalidIntegrationRange` if `start_rt >= end_rt`
+/// - `InvalidIntegrationRange` if the window cannot yield at least 2 integration points
 pub fn integrate_peak(data: &[[f64; 2]], start_rt: f64, end_rt: f64) -> Result<f64> {
     if start_rt >= end_rt {
         return Err(ChromascopeError::InvalidIntegrationRange(format!(
@@ -433,32 +471,65 @@ pub fn integrate_peak(data: &[[f64; 2]], start_rt: f64, end_rt: f64) -> Result<f
         )));
     }
 
-    let window: Vec<[f64; 2]> = data
-        .iter()
-        .filter(|p| p[0] >= start_rt && p[0] <= end_rt)
-        .copied()
-        .collect();
-
-    if window.len() < 2 {
+    if data.is_empty() {
         return Err(ChromascopeError::InvalidIntegrationRange(format!(
-            "Fewer than 2 data points between {:.4} and {:.4} min",
+            "No data points available between {:.4} and {:.4} min",
             start_rt, end_rt
         )));
     }
 
-    let i_start = window.first().unwrap()[1];
-    let i_end = window.last().unwrap()[1];
-    let rt_start = window.first().unwrap()[0];
-    let rt_end = window.last().unwrap()[0];
-    let rt_span = rt_end - rt_start;
+    // left_idx: first index where data[i][0] >= start_rt
+    let left_idx = data.partition_point(|p| p[0] < start_rt);
+    // right_idx: first index where data[i][0] > end_rt
+    let right_idx = data.partition_point(|p| p[0] <= end_rt);
 
-    // Trapezoidal sum of raw intensities
+    // Interpolate intensity at the left boundary.
+    let i_start = if left_idx == 0 {
+        data[0][1]
+    } else if left_idx >= data.len() {
+        data[data.len() - 1][1]
+    } else if data[left_idx - 1][0] < start_rt {
+        interpolate_intensity(data[left_idx - 1], data[left_idx], start_rt)
+    } else {
+        data[left_idx][1]
+    };
+
+    // Interpolate intensity at the right boundary.
+    let i_end = if right_idx == 0 {
+        data[0][1]
+    } else if right_idx >= data.len() {
+        data[data.len() - 1][1]
+    } else if data[right_idx - 1][0] < end_rt {
+        interpolate_intensity(data[right_idx - 1], data[right_idx], end_rt)
+    } else {
+        data[right_idx - 1][1]
+    };
+
+    // Build the window: interpolated left boundary + interior points + interpolated right boundary.
+    let mut window: Vec<[f64; 2]> = Vec::with_capacity(right_idx - left_idx + 2);
+    window.push([start_rt, i_start]);
+    window.extend_from_slice(&data[left_idx..right_idx]);
+    window.push([end_rt, i_end]);
+
+    // Remove consecutive points with the same RT (boundary may coincide with a data point).
+    window.dedup_by(|a, b| (a[0] - b[0]).abs() < 1e-9);
+
+    if window.len() < 2 {
+        return Err(ChromascopeError::InvalidIntegrationRange(format!(
+            "Fewer than 2 integration points between {:.4} and {:.4} min",
+            start_rt, end_rt
+        )));
+    }
+
+    let rt_span = end_rt - start_rt;
+
+    // Trapezoidal sum of raw intensities.
     let raw_area: f64 = window
         .windows(2)
         .map(|w| (w[1][0] - w[0][0]) * (w[0][1] + w[1][1]) / 2.0)
         .sum();
 
-    // Subtract the baseline trapezoid (straight line from i_start to i_end)
+    // Subtract chord baseline (straight line from i_start to i_end over rt_span).
     let baseline_area = rt_span * (i_start + i_end) / 2.0;
 
     Ok(raw_area - baseline_area)
@@ -743,9 +814,18 @@ mod tests {
     }
 
     #[test]
-    fn test_integrate_peak_no_points_in_window_fails() {
+    fn test_integrate_peak_no_interior_points_interpolates() {
+        // Both data points bracket the window — no interior data points but
+        // both boundaries can be interpolated from [0.0, 100.0] → [2.0, 100.0].
+        // Interpolated intensities: start=100, end=100 → flat line, area = 0.
         let data = vec![[0.0, 100.0], [2.0, 100.0]];
-        // Window [0.5, 1.5] contains 0 points → error
+        let area = integrate_peak(&data, 0.5, 1.5).unwrap();
+        assert!((area - 0.0).abs() < 1e-9, "got {}", area);
+    }
+
+    #[test]
+    fn test_integrate_peak_empty_data_fails() {
+        let data: Vec<[f64; 2]> = vec![];
         assert!(matches!(
             integrate_peak(&data, 0.5, 1.5),
             Err(ChromascopeError::InvalidIntegrationRange(_))
@@ -769,6 +849,62 @@ mod tests {
         // expected = 275 - 150 = 125
         let area = integrate_peak(&data, 0.0, 2.0).unwrap();
         assert!((area - 125.0).abs() < 1e-9, "got {}", area);
+    }
+
+    #[test]
+    fn test_integrate_peak_interpolated_boundary() {
+        // Data points at 0.0, 1.0, 2.0. Drag from 0.5 to 1.5 — boundaries fall between points.
+        let data = vec![[0.0, 0.0], [1.0, 100.0], [2.0, 0.0]];
+        // At rt=0.5, interp intensity = 50. At rt=1.5, interp intensity = 50.
+        // window = [[0.5, 50], [1.0, 100], [1.5, 50]]
+        // raw_area = 0.5*(50+100)/2 + 0.5*(100+50)/2 = 37.5 + 37.5 = 75
+        // baseline_area = 1.0 * (50+50)/2 = 50
+        // expected = 75 - 50 = 25
+        let area = integrate_peak(&data, 0.5, 1.5).unwrap();
+        assert!((area - 25.0).abs() < 1e-9, "got {}", area);
+    }
+
+    #[test]
+    fn test_integrate_peak_fronting_peak() {
+        // Steep rise, gradual fall — fronting peak
+        let data = vec![
+            [0.0, 10.0],
+            [0.5, 200.0],
+            [1.0, 150.0],
+            [1.5, 80.0],
+            [2.0, 20.0],
+        ];
+        // Should return a positive area above the chord from 10.0 to 20.0
+        let area = integrate_peak(&data, 0.0, 2.0).unwrap();
+        assert!(
+            area > 0.0,
+            "Fronting peak should have positive area, got {}",
+            area
+        );
+    }
+
+    #[test]
+    fn test_interpolate_at_midpoint() {
+        let data = vec![[0.0, 0.0], [1.0, 100.0], [2.0, 0.0]];
+        let val = interpolate_at(&data, 0.5);
+        assert!((val - 50.0).abs() < 1e-9, "got {}", val);
+    }
+
+    #[test]
+    fn test_interpolate_at_exact_point() {
+        let data = vec![[0.0, 0.0], [1.0, 100.0], [2.0, 0.0]];
+        assert!((interpolate_at(&data, 0.0) - 0.0).abs() < 1e-9);
+        assert!((interpolate_at(&data, 1.0) - 100.0).abs() < 1e-9);
+        assert!((interpolate_at(&data, 2.0) - 0.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_interpolate_at_clamping() {
+        let data = vec![[1.0, 50.0], [2.0, 100.0]];
+        // Before first point → clamp to first
+        assert!((interpolate_at(&data, 0.0) - 50.0).abs() < 1e-9);
+        // After last point → clamp to last
+        assert!((interpolate_at(&data, 3.0) - 100.0).abs() < 1e-9);
     }
 
     #[test]

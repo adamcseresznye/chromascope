@@ -66,6 +66,8 @@ pub fn handle_integration_drag(
         app.integration_start_rt = rt;
         app.integration_end_rt = None;
         app.integration_result = None;
+        app.integration_start_intensity = None;
+        app.integration_end_intensity = None;
         info!("Integration drag started at RT: {:?}", rt);
     } else if response.dragged_by(egui::PointerButton::Secondary) {
         app.integration_end_rt = rt;
@@ -102,6 +104,19 @@ pub fn compute_integration(app: &mut MzViewerApp) {
     match area_result {
         Some(Ok(area)) => {
             app.integration_result = Some(area);
+            // Cache the boundary intensities for the baseline chord rendering.
+            if let Some(active_id) = app.active_file_id {
+                if let Some(data) = app
+                    .files
+                    .get(&active_id)
+                    .and_then(|f| f.cached_plot_data.as_deref())
+                {
+                    app.integration_start_intensity =
+                        Some(crate::processing::interpolate_at(data, start));
+                    app.integration_end_intensity =
+                        Some(crate::processing::interpolate_at(data, end));
+                }
+            }
             info!("Peak area [{:.3}–{:.3} min] = {:.4e}", start, end, area);
         }
         Some(Err(e)) => {
