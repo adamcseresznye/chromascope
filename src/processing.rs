@@ -40,7 +40,7 @@ use std::path::PathBuf;
 ///     mz_range: None,
 /// };
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ProcessingParams {
     /// Type of chromatogram to extract (TIC, BPC, or XIC)
     pub plot_type: PlotType,
@@ -141,7 +141,9 @@ pub fn run_in_background(
     file_id: usize,
 ) -> ProcessingResult {
     let mut data = MzData::new();
-    if let Err(e) = data.open_msfile(&path) {
+    // open_reader_only skips extract_bounds — bounds were already collected
+    // during file load by open_file_in_background and stored on OpenFile.
+    if let Err(e) = data.open_reader_only(&path) {
         return ProcessingResult::Error {
             file_id,
             message: format!("{}", e),
@@ -294,6 +296,23 @@ pub fn prepare_chromatogram_for_plot(chrom: &ChromatogramData) -> Result<Vec<[f6
     }
 
     debug!("Prepared {} data points for plotting", data.len());
+
+    // Decimate to MAX_PLOT_POINTS to keep egui_plot responsive on long files.
+    // Uses max-intensity per chunk to preserve peak shapes visually.
+    const MAX_PLOT_POINTS: usize = 2000;
+    if data.len() > MAX_PLOT_POINTS {
+        let chunk_size = (data.len() as f64 / MAX_PLOT_POINTS as f64).ceil() as usize;
+        let decimated: Vec<[f64; 2]> = data
+            .chunks(chunk_size)
+            .map(|chunk| {
+                *chunk
+                    .iter()
+                    .max_by(|a, b| a[1].partial_cmp(&b[1]).unwrap_or(std::cmp::Ordering::Equal))
+                    .unwrap()
+            })
+            .collect();
+        return Ok(decimated);
+    }
 
     Ok(data)
 }
@@ -750,5 +769,21 @@ mod tests {
         // expected = 275 - 150 = 125
         let area = integrate_peak(&data, 0.0, 2.0).unwrap();
         assert!((area - 125.0).abs() < 1e-9, "got {}", area);
+    }
+
+    #[test]
+    fn test_decimation_caps_at_max_points() {
+        let chrom = ChromatogramData {
+            retention_time: (0..5000).map(|i| i as f32 * 0.01).collect(),
+            intensity: (0..5000).map(|i| i as f32).collect(),
+            mz: vec![],
+            index: (0..5000).collect(),
+        };
+        let result = prepare_chromatogram_for_plot(&chrom).unwrap();
+        assert!(
+            result.len() <= 2000,
+            "Expected ≤ 2000 points, got {}",
+            result.len()
+        );
     }
 }

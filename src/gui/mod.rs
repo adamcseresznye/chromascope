@@ -199,6 +199,19 @@ impl MzViewerApp {
             None => return,
         };
 
+        // SHORT-CIRCUIT: skip if params unchanged since last extraction
+        if self.files.get(&active_id)
+            .and_then(|f| f.last_processing_params.as_ref())
+            == Some(&params)
+        {
+            return;
+        }
+
+        // Store params before spawning
+        if let Some(file) = self.files.get_mut(&active_id) {
+            file.last_processing_params = Some(params.clone());
+        }
+
         let (tx, rx) = mpsc::channel();
         self.processing_rx = Some(rx);
         self.is_processing = true;
@@ -531,6 +544,7 @@ mod tests {
                 color: LineColor::Red,
                 visible: true,
                 is_loading: false,
+                last_processing_params: None,
             },
         );
         app.active_file_id = Some(file_id);
@@ -578,6 +592,7 @@ mod tests {
                 color: LineColor::Red,
                 visible: true,
                 is_loading: false,
+                last_processing_params: None,
             },
         );
         app.active_file_id = Some(file_id);
@@ -625,6 +640,7 @@ mod tests {
                 color: LineColor::Red,
                 visible: true,
                 is_loading: false,
+                last_processing_params: None,
             },
         );
         app.active_file_id = Some(file_id);
@@ -688,6 +704,7 @@ mod tests {
             color: LineColor::Blue,
             visible: true,
             is_loading: false,
+            last_processing_params: None,
         };
 
         let test_data: Vec<[f64; 2]> = vec![[1.0, 100.0], [2.0, 200.0], [3.0, 150.0]];
@@ -716,6 +733,7 @@ mod tests {
             color: LineColor::Red,
             visible: true,
             is_loading: false,
+            last_processing_params: None,
         };
         let file1_id = app.next_file_id;
         app.next_file_id += 1;
@@ -731,6 +749,7 @@ mod tests {
             color: LineColor::Green,
             visible: true,
             is_loading: false,
+            last_processing_params: None,
         };
         let file2_id = app.next_file_id;
         app.next_file_id += 1;
@@ -746,6 +765,7 @@ mod tests {
             color: LineColor::Blue,
             visible: true,
             is_loading: false,
+            last_processing_params: None,
         };
         let file3_id = app.next_file_id;
         app.next_file_id += 1;
@@ -791,6 +811,7 @@ mod tests {
                 color: next_color_for_index(i),
                 visible: true,
                 is_loading: false,
+                last_processing_params: None,
             };
             app.files.insert(i, file);
         }
@@ -838,6 +859,7 @@ mod tests {
                 color: LineColor::Red,
                 visible: true,
                 is_loading: false,
+                last_processing_params: None,
             },
         );
         app.active_file_id = Some(file_id);
@@ -874,6 +896,7 @@ mod tests {
                     color: *color,
                     visible: true,
                     is_loading: false,
+                    last_processing_params: None,
                 },
             );
         }
@@ -902,6 +925,64 @@ mod tests {
     #[test]
     fn test_is_processing_default_false() {
         let app = MzViewerApp::default();
+        assert!(!app.is_processing);
+    }
+
+    /// Verify that calling request_chromatogram_update with identical params
+    /// to the cached last_processing_params does NOT set is_processing.
+    #[test]
+    fn test_param_cache_prevents_redundant_extraction() {
+        let mut app = MzViewerApp::default();
+
+        // Set up a mock file with bounds so build_processing_params succeeds
+        let mut mock_data = parser::MzData::new();
+        mock_data.bounds = crate::validation::DataBounds {
+            min_mz: 100.0,
+            max_mz: 1000.0,
+            min_rt: 0.0,
+            max_rt: 60.0,
+            scan_count: 1000,
+        };
+
+        let file_id = 0;
+        app.active_file_id = Some(file_id);
+        app.user_input.plot_type = PlotType::Tic;
+        app.user_input.ms_level = 1;
+        app.user_input.polarity = mzdata::spectrum::ScanPolarity::Positive;
+        app.user_input.smoothing = 0;
+
+        // Pre-populate last_processing_params with the exact params that
+        // build_processing_params would return for the current user_input.
+        let cached_params = ProcessingParams {
+            plot_type: PlotType::Tic,
+            ms_level: 1,
+            polarity: mzdata::spectrum::ScanPolarity::Positive,
+            smoothing: 0,
+            xic_params: None,
+            mz_range: None,
+        };
+
+        app.files.insert(
+            file_id,
+            OpenFile {
+                id: file_id,
+                name: "test.mzML".to_string(),
+                path: "test.mzML".to_string(),
+                data: mock_data,
+                cached_plot_data: None,
+                cached_chromatogram: None,
+                cached_mass_spectrum: None,
+                color: LineColor::Red,
+                visible: true,
+                is_loading: false,
+                last_processing_params: Some(cached_params),
+            },
+        );
+
+        // request_chromatogram_update should short-circuit because params are identical.
+        app.request_chromatogram_update();
+
+        // The background thread must NOT have been spawned.
         assert!(!app.is_processing);
     }
 }

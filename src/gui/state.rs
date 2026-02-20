@@ -1,6 +1,7 @@
 ﻿use crate::{
     parser,
     plotting_parameters::{LineColor, LineType, PlotType},
+    processing::ProcessingParams,
 };
 use mzdata::spectrum::ScanPolarity;
 use std::collections::HashMap;
@@ -120,6 +121,9 @@ pub(crate) struct OpenFile {
     /// True while the background thread is still reading the file metadata.
     /// The file list shows a spinner when this is true.
     pub(crate) is_loading: bool,
+    /// The last set of processing params used for extraction. Used to skip
+    /// redundant background thread spawns when nothing extraction-relevant changed.
+    pub(crate) last_processing_params: Option<ProcessingParams>,
 }
 
 /// Returns the next color in the cycle based on the file index

@@ -21,6 +21,7 @@ use log::{debug, error, info, trace, warn};
 use mzdata::io::mzml::MzMLReaderType;
 use mzdata::spectrum::ScanPolarity;
 use mzdata::{prelude::*, MzMLReader};
+use rayon::prelude::*;
 use std::cmp::Ordering;
 use std::fs::File;
 use std::path::PathBuf;
@@ -200,29 +201,51 @@ impl MzData {
             .as_mut()
             .ok_or_else(|| ChromascopeError::FileNotOpened("No file opened".to_string()))?;
 
-        let mut min_rt = f32::MAX;
-        let mut max_rt = f32::MIN;
-        let mut scan_count = 0usize;
+        // ── O(1): scan count ─────────────────────────────────────────────────────
+        let scan_count = reader.len();
+        if scan_count == 0 {
+            return Err(ChromascopeError::FileNotOpened(
+                "File contains no spectra".into(),
+            ));
+        }
+
+        // ── O(1): RT bounds from first and last spectrum ──────────────────────────
+        // File is always sorted by RT, so index 0 == min_rt, last index == max_rt.
+        let min_rt = reader
+            .get_spectrum_by_index(0)
+            .map(|s| s.start_time() as f32)
+            .unwrap_or(0.0);
+        let max_rt = reader
+            .get_spectrum_by_index(scan_count - 1)
+            .map(|s| s.start_time() as f32)
+            .unwrap_or(0.0);
+
+        // ── O(20): scan filters from first 10 + last 10 spectra ──────────────────
+        // DDA files cycle MS1→MS2→…→MS1, so all unique (ms_level, polarity)
+        // pairs appear within the first few cycles. Sampling 20 spectra
+        // (first 10 + last 10, no overlap) is a safe upper bound.
+        const FILTER_SAMPLE: usize = 10;
+        let first_end = FILTER_SAMPLE.min(scan_count);
+        let last_start = scan_count.saturating_sub(FILTER_SAMPLE).max(first_end); // no overlap
+
         let mut scan_filters: Vec<(u8, ScanPolarity)> = Vec::new();
+        for idx in (0..first_end).chain(last_start..scan_count) {
+            if let Some(spectrum) = reader.get_spectrum_by_index(idx) {
+                let pair = (spectrum.description.ms_level, spectrum.description.polarity);
+                if !scan_filters.contains(&pair) {
+                    scan_filters.push(pair);
+                }
+            }
+        }
+
+        // ── O(n), zero peak decoding: m/z bounds from scan window metadata ────────
+        // ScanWindow::lower_bound / upper_bound are populated during XML tag
+        // parsing, before any base64/zlib binary array work is done.
+        // See mzdata scan_properties.rs
         let mut min_mz = f64::MAX;
         let mut max_mz = f64::MIN;
 
-        // ── Pass 1: description-only scan (always runs) ──────────────────────
-        // Collects RT range, scan count, scan filters, AND scan window m/z
-        // bounds in a single O(spectra) pass with zero peak decoding.
-        // ScanWindow::lower_bound / upper_bound are populated during XML
-        // parsing, before any binary array access. See mzdata scan_properties.rs
         for spectrum in reader.iter() {
-            let rt = spectrum.start_time() as f32;
-            min_rt = min_rt.min(rt);
-            max_rt = max_rt.max(rt);
-            scan_count += 1;
-
-            let pair = (spectrum.description.ms_level, spectrum.description.polarity);
-            if !scan_filters.contains(&pair) {
-                scan_filters.push(pair);
-            }
-
             for scan_event in spectrum.description.acquisition.scans.iter() {
                 for window in scan_event.scan_windows.iter() {
                     if !window.is_empty() {
@@ -233,15 +256,14 @@ impl MzData {
             }
         }
 
-        // ── Pass 2: peak sampling fallback (only if scan windows absent) ─────
+        // ── O(20): peak sampling fallback (only if scan windows absent) ───────────
         // Some converters omit <scanWindowList> in their mzML output.
-        // Samples first+last SAMPLE_SIZE spectra and decodes their peaks.
-        // Complexity: O(SAMPLE_SIZE × peaks_per_spectrum) — effectively O(1).
+        // Samples first 10 + last 10 spectra and decodes their peaks.
         if min_mz == f64::MAX || max_mz == f64::MIN {
             const SAMPLE_SIZE: usize = 10;
             warn!(
                 "No scan window metadata found in {:?} — falling back to peak sampling \
-                 (first+last {} spectra)",
+             (first+last {} spectra)",
                 &self.file_name, SAMPLE_SIZE
             );
 
@@ -280,12 +302,14 @@ impl MzData {
         self.available_scan_filters = scan_filters;
 
         info!(
-            "Extracted bounds: m/z [{:.2}-{:.2}], RT [{:.2}-{:.2}] min, {} scans, {} unique scan filters",
-            self.bounds.min_mz, self.bounds.max_mz, min_rt, max_rt, scan_count, self.available_scan_filters.len()
-        );
+        "Extracted bounds: m/z [{:.2}-{:.2}], RT [{:.2}-{:.2}] min, {} scans, {} unique scan filters",
+        self.bounds.min_mz, self.bounds.max_mz, min_rt, max_rt, scan_count,
+        self.available_scan_filters.len()
+    );
 
         Ok(())
     }
+
     /// Extract Base Peak Intensity Chromatogram (BIC).
     ///
     /// Returns owned `ChromatogramData` instead of mutating self.
@@ -495,13 +519,37 @@ impl MzData {
             )
         })?;
 
-        // into_centroid is the most expensive per-spectrum call.
-        let mut results: Vec<(f32, f32, usize)> = reader
+        // Step A: Sequential I/O — collect owned spectra (binary arrays stay compressed)
+        let spectra: Vec<_> = reader
             .iter()
             .filter(|s| s.description.ms_level == ms_level && s.description.polarity == polarity)
+            .collect();
+
+        // Step B: Parallel CPU processing
+        let tol_da = mass * (mass_tolerance / 1_000_000.0);
+        let mut results: Vec<(f32, f32, usize)> = spectra
+            .into_par_iter()
             .filter_map(|spectrum| {
                 let spectrum_rt = spectrum.description.acquisition.scans[0].start_time as f32;
                 let spectrum_idx = spectrum.index();
+
+                // Cheap pre-filter: decompress raw m/z array and bail early
+                // if no value falls within the target window. Avoids centroiding
+                // on the ~95% of DDA spectra that don't contain the target mass.
+                if let Some(arrays) = spectrum.arrays.as_ref() {
+                    if let Ok(mzs) = arrays.mzs() {
+                        if !mzs
+                            .iter()
+                            .any(|&mz| mz >= mass - tol_da && mz <= mass + tol_da)
+                        {
+                            return None;
+                        }
+                    }
+                }
+
+                // into_centroid() correctly handles both profile and already-centroided
+                // spectra — do NOT add a manual SignalContinuity branch check, as the
+                // two branches return different concrete types and will not compile.
                 let centroided = spectrum.into_centroid().ok()?;
                 let total_intensity: f32 = centroided
                     .peaks
@@ -509,6 +557,7 @@ impl MzData {
                     .iter()
                     .map(|p| p.intensity)
                     .sum();
+
                 if total_intensity > 0.0 {
                     Some((spectrum_rt, total_intensity, spectrum_idx))
                 } else {
