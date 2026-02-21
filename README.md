@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/icon_large.svg" alt="Chromascope logo" width="120" />
+<img src="assets/icon.png" alt="Chromascope logo" width="120" />
 
 # Chromascope
 

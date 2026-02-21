@@ -116,10 +116,12 @@ pub fn render_integration_overlay(app: &MzViewerApp, plot_ui: &mut egui_plot::Pl
     // Use cached interpolated boundary intensities when available; else fall back to
     // the nearest data-point intensities so the overlay renders during a drag.
     let i_start = app
-        .integration.start_intensity
+        .integration
+        .start_intensity
         .unwrap_or_else(|| interpolate_in_slice(data, s));
     let i_end = app
-        .integration.end_intensity
+        .integration
+        .end_intensity
         .unwrap_or_else(|| interpolate_in_slice(data, e));
 
     // Top edge: left interpolated boundary → interior curve points → right interpolated boundary.
