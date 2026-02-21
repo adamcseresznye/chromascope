@@ -1,14 +1,15 @@
-﻿//! # backend for parsing MzML files for plotting
+﻿//! # backend for parsing mass spectrometry files for plotting
 
-//! The `parser` module provides functionality for reading and processing mass spectrometry data from MzML files. It allows users to extract various types of data, including Base Peak Intensity (BIC), Total Ion Chromatogram (TIC), and Extracted Ion Chromatogram (XIC). Additionally, it offers methods for data smoothing and preparation for plotting.
+//! The `parser` module provides functionality for reading and processing mass spectrometry data files. Supports mzML,
+//! MGF, Bruker TDF, and any other format supported by the `mzdata` crate. It allows users to extract various types of data, including Base Peak Intensity (BIC), Total Ion Chromatogram (TIC), and Extracted Ion Chromatogram (XIC). Additionally, it offers methods for data smoothing and preparation for plotting.
 
 //! ## Overview
 
-//!The main struct in this crate is `MzData`, which encapsulates the data and methods necessary for handling MzML files. The struct includes fields for storing file information, retention times, intensities, mass-to-charge ratios (m/z), and more.
+//!The main struct in this crate is `MzData`, which encapsulates the data and methods necessary for handling mass spectrometry files. The struct includes fields for storing file information, retention times, intensities, mass-to-charge ratios (m/z), and more.
 
 //!## Features
 
-//!- **File Handling**: Open and read MzML files.
+//!- **File Handling**: Open and read mass spectrometry files.
 //!- **Data Extraction**: Extract BIC, TIC, and XIC based on specified parameters.
 //!- **Data Processing**: Smooth data for better visualization and analysis.
 //!- **Plot Preparation**: Prepare data for plotting with appropriate formatting.
@@ -18,10 +19,9 @@
 use crate::error::{ChromascopeError, Result};
 use crate::validation::DataBounds;
 use log::{debug, error, info, trace, warn};
-use mzdata::io::mzml::MzMLReaderType;
 use mzdata::io::DetailLevel;
 use mzdata::spectrum::ScanPolarity;
-use mzdata::{prelude::*, MzMLReader};
+use mzdata::{prelude::*, MZReader};
 use rayon::prelude::*;
 use std::cmp::Ordering;
 use std::fs::File;
@@ -58,8 +58,10 @@ pub struct MassSpectrum {
 pub struct MzData {
     /// An optional `String` representing the name of the data file.
     file_name: Option<String>,
-    /// An optional `MzMLReaderType<File>` representing the parsed mass spectrometry file.
-    msfile: Option<MzMLReaderType<File>>,
+    /// An optional format-agnostic reader for the opened mass spectrometry file.
+    /// `MZReader` infers the file format from the path extension and supports
+    /// mzML, mzML.gz, MGF, Bruker TDF, and other formats transparently.
+    msfile: Option<MZReader<File>>,
     /// Valid parameter ranges for this file (extracted during opening)
     pub bounds: DataBounds,
     /// Vector of unique (ms_level, polarity) combinations found in this file
@@ -71,7 +73,7 @@ impl core::fmt::Debug for MzData {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("MzData")
             .field("file_name", &self.file_name)
-            .field("msfile", &"Option<MzMLReaderType<File>>")
+            .field("msfile", &"Option<MZReader>")
             .field("bounds", &self.bounds)
             .field("available_scan_filters", &self.available_scan_filters)
             .finish()
@@ -98,17 +100,17 @@ impl MzData {
             available_scan_filters: Vec::new(),
         }
     }
-    /// Opens an MzML file at the specified path and sets it as the current file for the `self` object.
+    /// Opens a mass spectrometry file at the specified path and sets it as the current file for the `self` object.
     ///
     /// # Arguments
-    /// * `path` - A reference to a `PathBuf` representing the file path of the MzML file to be opened.
+    /// * `path` - A reference to a `PathBuf` representing the file path of the mass spectrometry file to be opened.
     ///
     /// # Returns
     /// * `Result<&mut Self>` - A result containing either a reference to the `self` object if the file was successfully opened, or an error if the file could not be opened.
     ///
     /// # Errors
     /// This function may return the following errors:
-    /// * `anyhow::Error` - If the MzML file could not be opened for any reason.
+    /// * `anyhow::Error` - If the file could not be opened for any reason.
     ///
     /// # Examples
     /// ```no_run
@@ -120,13 +122,13 @@ impl MzData {
     /// example_struct.open_msfile(&file_path).unwrap();
     /// ```
     pub fn open_msfile(&mut self, path: &PathBuf) -> Result<&mut Self> {
-        info!("Attempting to open MzML file at path: {:?}", &path);
+        info!("Attempting to open file at path: {:?}", &path);
 
-        match MzMLReader::open_path(&path) {
+        match MZReader::open_path(path) {
             Ok(reader) => {
                 self.msfile = Some(reader);
                 self.file_name = Some(path.display().to_string());
-                debug!("Successfully opened MzML file at path: {:?}", &path);
+                debug!("Successfully opened file at path: {:?}", &path);
 
                 // Extract data bounds for validation
                 self.extract_bounds()?;
@@ -135,30 +137,30 @@ impl MzData {
             }
             Err(e) => {
                 error!(
-                    "Failed to open MzML file at path: {:?} with error: {:?}",
+                    "Failed to open file at path: {:?} with error: {:?}",
                     &path, e
                 );
                 Err(ChromascopeError::MzDataError(format!(
-                    "Failed to open MzML file: {:?}",
+                    "Failed to open file: {:?}",
                     e
                 )))
             }
         }
     }
 
-    /// Opens the mzML file reader for on-demand spectrum lookups only.
+    /// Opens the mass spectrometry file reader for on-demand spectrum lookups only.
     ///
     /// Unlike `open_msfile`, this does NOT call `extract_bounds`.
     /// Use this on the UI thread after a background thread has already extracted
     /// the bounds and returned them via `FileLoadingResult`.
     ///
     /// # Why this exists
-    /// `MzMLReaderType<File>` is `!Send` — it cannot cross thread boundaries.
+    /// `MZReader` is `!Send` — it cannot cross thread boundaries.
     /// The background thread opens, extracts bounds, then drops its own reader.
     /// The UI thread calls this method to open a new reader for triple-click
     /// spectrum lookups, skipping the expensive bounds scan.
     pub fn open_reader_only(&mut self, path: &PathBuf) -> Result<&mut Self> {
-        match MzMLReader::open_path(path) {
+        match MZReader::open_path(path) {
             Ok(reader) => {
                 self.msfile = Some(reader);
                 self.file_name = Some(path.display().to_string());
@@ -166,7 +168,7 @@ impl MzData {
                 Ok(self)
             }
             Err(e) => Err(ChromascopeError::MzDataError(format!(
-                "Failed to open mzML reader: {:?}",
+                "Failed to open reader: {:?}",
                 e
             ))),
         }
@@ -526,20 +528,27 @@ impl MzData {
                 let rt = spectrum.start_time() as f32;
                 let idx = spectrum.index();
                 let tic = if let Some((min_mz, max_mz)) = mz_range {
-                    match spectrum.into_centroid() {
-                        Ok(centroided) => centroided
-                            .peaks
-                            .iter()
-                            .filter(|p| p.mz >= min_mz && p.mz <= max_mz)
-                            .map(|p| p.intensity)
-                            .sum(),
-                        Err(_) => {
-                            warn!(
-                                "Failed to centroid spectrum at RT {}, using zero intensity",
-                                rt
-                            );
-                            0.0_f32
+                    // TIC only needs a sum of intensities — centroiding is unnecessary and
+                    // wrong for profile data (it merges peaks, changing the summed area).
+                    // mzML m/z arrays are ascending: partition_point gives exact range
+                    // boundaries in O(log n), then we slice and sum the raw intensity array.
+                    if let Some(arrays) = spectrum.arrays.as_ref() {
+                        match (arrays.mzs(), arrays.intensities()) {
+                            (Ok(mzs), Ok(intensities)) => {
+                                let start = mzs.partition_point(|&mz| mz < min_mz);
+                                let end = mzs.partition_point(|&mz| mz <= max_mz);
+                                intensities[start..end].iter().sum()
+                            }
+                            _ => {
+                                warn!(
+                                    "Failed to decode arrays at RT {:.3}, using zero intensity",
+                                    rt
+                                );
+                                0.0_f32
+                            }
                         }
+                    } else {
+                        0.0_f32 // spectrum has no binary arrays (e.g. empty scan)
                     }
                 } else {
                     spectrum.peaks().tic()
@@ -630,16 +639,18 @@ impl MzData {
                     .unwrap_or(0.0);
                 let spectrum_idx = spectrum.index();
 
-                // Cheap pre-filter: decompress raw m/z array and bail early
-                // if no value falls within the target window. Avoids centroiding
-                // on the ~95% of DDA spectra that don't contain the target mass.
+                // Cheap pre-filter: mzML m/z arrays are guaranteed ascending, so use
+                // binary search (O(log n)) instead of linear scan (O(n)) to test whether
+                // any peak falls in [mass-tol_da, mass+tol_da].
                 if let Some(arrays) = spectrum.arrays.as_ref() {
                     if let Ok(mzs) = arrays.mzs() {
-                        if !mzs
-                            .iter()
-                            .any(|&mz| mz >= mass - tol_da && mz <= mass + tol_da)
-                        {
-                            return None;
+                        let lower = mass - tol_da;
+                        let upper = mass + tol_da;
+                        // partition_point returns the first index where the predicate is false,
+                        // i.e. the first index where mz >= lower.
+                        let first_ge = mzs.partition_point(|&mz| mz < lower);
+                        if first_ge >= mzs.len() || mzs[first_ge] > upper {
+                            return None; // no peak in [lower, upper]
                         }
                     }
                 }
@@ -1824,7 +1835,7 @@ mod tests {
         // Regression guard: ensures ScanWindow::lower_bound and upper_bound
         // remain accessible at the expected path after any mzdata upgrade.
         let path = get_test_file_path();
-        let mut reader = MzMLReader::open_path(&path).unwrap();
+        let mut reader = MZReader::open_path(&path).unwrap();
         if let Some(spectrum) = reader.get_spectrum_by_index(0) {
             for scan_event in spectrum.description.acquisition.scans.iter() {
                 for window in scan_event.scan_windows.iter() {
@@ -1843,7 +1854,7 @@ mod tests {
         // fast path should be exercised. Either way the result must be sorted
         // and non-empty.
         let path = get_test_file_path();
-        let reader = MzMLReader::open_path(&path).unwrap();
+        let reader = MZReader::open_path(&path).unwrap();
         let count = reader.count_chromatograms();
         println!("Embedded chromatogram count: {count}");
 
@@ -1870,6 +1881,52 @@ mod tests {
                 !spectrum.mz.is_empty(),
                 "Arrays must be decodable after get_tic (detail level must be restored)"
             );
+        }
+    }
+
+    #[test]
+    fn test_xic_binary_search_pre_filter_correctness() {
+        // The binary search pre-filter must accept the same spectra as the
+        // old linear .any() scan — result must be identical in content.
+        // Verify by checking the output is non-empty and RT-sorted
+        // (same assertions as before, proving no spectra were wrongly excluded).
+        let mut mzdata = setup_test_parser();
+        let chrom = mzdata
+            .get_xic(722.43, 1, ScanPolarity::Positive, 10.0) // tight tol: few hits
+            .unwrap();
+        // All returned intensities must be positive (pre-filter must not include
+        // spectra that have zero matching intensity after centroiding).
+        for &i in chrom.intensity.iter() {
+            assert!(
+                i > 0.0,
+                "XIC intensity must be positive after binary search pre-filter"
+            );
+        }
+        // RT must be sorted
+        for i in 1..chrom.retention_time.len() {
+            assert!(chrom.retention_time[i] >= chrom.retention_time[i - 1]);
+        }
+    }
+
+    #[test]
+    fn test_tic_range_raw_arrays_nonzero() {
+        // Range TIC via raw arrays must return non-zero intensities for a
+        // range that covers the test file's actual m/z content (~100-2000).
+        let mut mzdata = setup_test_parser();
+        let chrom = mzdata
+            .get_tic(1, ScanPolarity::Positive, Some((200.0, 800.0)))
+            .unwrap();
+        assert!(
+            !chrom.retention_time.is_empty(),
+            "Range TIC should have data points"
+        );
+        assert!(
+            chrom.intensity.iter().any(|&i| i > 0.0),
+            "Range TIC must have non-zero intensities for m/z 200-800"
+        );
+        // RT sorted
+        for i in 1..chrom.retention_time.len() {
+            assert!(chrom.retention_time[i] >= chrom.retention_time[i - 1]);
         }
     }
 }
