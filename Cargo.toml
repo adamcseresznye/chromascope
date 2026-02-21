@@ -22,7 +22,7 @@ eframe = { version = "0.27.0", default-features = false, features = [
     "persistence",   # Enable restoring app state when restarting the app.
 ] }
 log = "0.4"
-mzdata = "0.15.0"
+mzdata = "0.63"
 rayon = "1.10"
 libz-sys = "1.1.3"
 thiserror = "1.0"

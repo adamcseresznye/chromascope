@@ -19,6 +19,7 @@ use crate::error::{ChromascopeError, Result};
 use crate::validation::DataBounds;
 use log::{debug, error, info, trace, warn};
 use mzdata::io::mzml::MzMLReaderType;
+use mzdata::io::DetailLevel;
 use mzdata::spectrum::ScanPolarity;
 use mzdata::{prelude::*, MzMLReader};
 use rayon::prelude::*;
@@ -340,6 +341,28 @@ impl MzData {
             )
         })?;
 
+        // ── Tier 1: embedded chromatogram fast path ───────────────────────────
+        // Only valid when no m/z range filter is requested and ms_level == 1.
+        if mz_range.is_none() && ms_level == 1 {
+            let embedded = reader
+                .get_chromatogram_by_id("BPC")
+                .or_else(|| reader.get_chromatogram_by_id("MS:1000628"));
+
+            if let Some(chrom) = embedded {
+                info!("Fast path: embedded BPC chromatogram found");
+                return chrom_to_chromatogram_data(chrom, true);
+            }
+            info!("No embedded BPC found, falling back to spectrum iteration");
+        }
+
+        // ── Tier 2: spectrum iteration fallback ───────────────────────────────
+        // MetadataOnly is valid for full-file BPC: base peak intensity
+        // (MS:1000505) and base peak m/z (MS:1000504) are CV params on the
+        // spectrum description — no binary array decoding needed.
+        if mz_range.is_none() {
+            reader.set_detail_level(DetailLevel::MetadataOnly);
+        }
+
         let mut results: Vec<(f32, f32, f32, usize)> = reader
             .iter()
             .filter(|s| s.description.ms_level == ms_level && s.description.polarity == polarity)
@@ -373,12 +396,54 @@ impl MzData {
                         }
                     }
                 } else {
-                    let bp = spectrum.peaks().base_peak();
-                    (bp.intensity, bp.mz as f32)
+                    // Under MetadataOnly, peak arrays are not decoded.
+                    // Read MS:1000505 (base peak intensity) and MS:1000504
+                    // (base peak m/z) from the spectrum description CV params.
+                    let desc = &spectrum.description;
+                    let bp_intensity = desc
+                        .params()
+                        .iter()
+                        .find(|p| p.name == "base peak intensity")
+                        .and_then(|p| p.value.to_f64().ok())
+                        .unwrap_or(0.0) as f32;
+                    let bp_mz = desc
+                        .params()
+                        .iter()
+                        .find(|p| p.name == "base peak m/z")
+                        .and_then(|p| p.value.to_f64().ok())
+                        .unwrap_or(0.0) as f32;
+                    (bp_intensity, bp_mz)
                 };
                 (rt, intensity, mz, idx)
             })
             .collect();
+
+        // Always restore full detail level so subsequent calls decode arrays.
+        reader.set_detail_level(DetailLevel::Full);
+
+        // Sanity check: if the file doesn't populate base peak CV params
+        // (non-conformant mzML), every intensity will be 0. Re-run with
+        // full array decoding so we never silently return a flatline BPC.
+        if mz_range.is_none() && !results.is_empty() && results.iter().all(|(_, i, _, _)| *i == 0.0)
+        {
+            warn!(
+                "BPC: all base peak intensity CV params (MS:1000505) returned 0 for {:?} \
+                 — retrying with full array decoding",
+                &self.file_name
+            );
+            results = reader
+                .iter()
+                .filter(|s| {
+                    s.description.ms_level == ms_level && s.description.polarity == polarity
+                })
+                .map(|spectrum| {
+                    let rt = spectrum.start_time() as f32;
+                    let idx = spectrum.index();
+                    let bp = spectrum.peaks().base_peak();
+                    (rt, bp.intensity, bp.mz as f32, idx)
+                })
+                .collect();
+        }
 
         results.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
 
@@ -431,6 +496,29 @@ impl MzData {
             )
         })?;
 
+        // ── Tier 1: embedded chromatogram fast path ───────────────────────────
+        // Only valid when no m/z range filter is requested and ms_level == 1,
+        // because embedded TIC chromatograms represent all MS1 ions.
+        if mz_range.is_none() && ms_level == 1 {
+            let embedded = reader
+                .get_chromatogram_by_id("TIC")
+                .or_else(|| reader.get_chromatogram_by_id("MS:1000235"));
+
+            if let Some(chrom) = embedded {
+                info!("Fast path: embedded TIC chromatogram found");
+                return chrom_to_chromatogram_data(chrom, false);
+            }
+            info!("No embedded TIC found, falling back to spectrum iteration");
+        }
+
+        // ── Tier 2: spectrum iteration fallback ───────────────────────────────
+        // For no-range case: use MetadataOnly — TIC is stored as CV param
+        // MS:1000285 on each spectrum description; no binary decoding needed.
+        // For range case: Full detail is required to decode peaks for m/z filter.
+        if mz_range.is_none() {
+            reader.set_detail_level(DetailLevel::MetadataOnly);
+        }
+
         let mut results: Vec<(f32, f32, usize)> = reader
             .iter()
             .filter(|s| s.description.ms_level == ms_level && s.description.polarity == polarity)
@@ -459,6 +547,9 @@ impl MzData {
                 (rt, tic, idx)
             })
             .collect();
+
+        // Always restore full detail level so subsequent calls decode arrays.
+        reader.set_detail_level(DetailLevel::Full);
 
         results.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
 
@@ -530,7 +621,13 @@ impl MzData {
         let mut results: Vec<(f32, f32, usize)> = spectra
             .into_par_iter()
             .filter_map(|spectrum| {
-                let spectrum_rt = spectrum.description.acquisition.scans[0].start_time as f32;
+                let spectrum_rt = spectrum
+                    .description
+                    .acquisition
+                    .scans
+                    .first()
+                    .map(|s| s.start_time as f32)
+                    .unwrap_or(0.0);
                 let spectrum_idx = spectrum.index();
 
                 // Cheap pre-filter: decompress raw m/z array and bail early
@@ -657,6 +754,39 @@ impl MzData {
     pub fn is_open(&self) -> bool {
         self.msfile.is_some()
     }
+}
+
+/// Convert an mzdata embedded [`mzdata::spectrum::Chromatogram`] into [`ChromatogramData`].
+///
+/// `include_mz` should be `true` for BPC (has base-peak m/z array),
+/// `false` for TIC (no m/z data).
+///
+/// Embedded chromatograms have no spectrum index mapping — sequential indices
+/// (`0..len`) are used.
+fn chrom_to_chromatogram_data(
+    chrom: mzdata::spectrum::Chromatogram,
+    _include_mz: bool,
+) -> Result<ChromatogramData> {
+    let retention_time: Vec<f32> = chrom
+        .time()
+        .map_err(|e| ChromascopeError::MzDataError(format!("Failed to read RT array: {e:?}")))
+        .map(|t| t.iter().map(|&v| v as f32).collect())?;
+
+    let intensity: Vec<f32> = chrom
+        .intensity()
+        .map_err(|e| {
+            ChromascopeError::MzDataError(format!("Failed to read intensity array: {e:?}"))
+        })
+        .map(|i| i.iter().copied().collect())?;
+
+    let index: Vec<usize> = (0..retention_time.len()).collect();
+
+    Ok(ChromatogramData {
+        retention_time,
+        intensity,
+        mz: Vec::new(),
+        index,
+    })
 }
 
 #[cfg(test)]
@@ -973,6 +1103,24 @@ mod tests {
         // Unknown polarity should succeed but may return empty data if file has no such spectra
         let result = mzdata.get_bpic(1, ScanPolarity::Unknown, None);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_bpc_intensities_are_nonzero() {
+        // Regression guard: BPC must not return a flatline of all-zero intensities.
+        // Flatline would indicate that base_peak() is being called on empty decoded
+        // arrays (MetadataOnly bug) instead of reading the MS:1000505 CV param.
+        let mut mzdata = setup_test_parser();
+        let chrom = mzdata.get_bpic(1, ScanPolarity::Positive, None).unwrap();
+        assert!(
+            chrom.intensity.iter().any(|&i| i > 0.0),
+            "BPC must have at least some non-zero intensities — got flatline \
+             (base peak CV params missing or MetadataOnly bug)"
+        );
+        assert!(
+            chrom.mz.iter().any(|&m| m > 50.0),
+            "BPC m/z values look wrong — all near zero (MS:1000504 CV param not read)"
+        );
     }
 
     // ========== Tests for ChromatogramData::prepare_for_plot() ==========
@@ -1686,6 +1834,42 @@ mod tests {
                     let _ = window.is_empty();
                 }
             }
+        }
+    }
+
+    #[test]
+    fn test_tic_uses_embedded_chromatogram_when_available() {
+        // Check whether the test file has embedded chromatograms; if so the
+        // fast path should be exercised. Either way the result must be sorted
+        // and non-empty.
+        let path = get_test_file_path();
+        let reader = MzMLReader::open_path(&path).unwrap();
+        let count = reader.count_chromatograms();
+        println!("Embedded chromatogram count: {count}");
+
+        let mut data = setup_test_parser();
+        let result = data.get_tic(1, ScanPolarity::Positive, None).unwrap();
+        assert!(!result.retention_time.is_empty());
+        for i in 1..result.retention_time.len() {
+            assert!(
+                result.retention_time[i] >= result.retention_time[i - 1],
+                "TIC retention times must be non-decreasing"
+            );
+        }
+    }
+
+    #[test]
+    fn test_detail_level_restored_after_tic() {
+        // After get_tic(), get_mass_spectrum_by_index() must still decode arrays.
+        // If detail level was not restored, this would return empty arrays.
+        let mut data = setup_test_parser();
+        let chrom = data.get_tic(1, ScanPolarity::Positive, None).unwrap();
+        if !chrom.index.is_empty() {
+            let spectrum = data.get_mass_spectrum_by_index(chrom.index[0]).unwrap();
+            assert!(
+                !spectrum.mz.is_empty(),
+                "Arrays must be decodable after get_tic (detail level must be restored)"
+            );
         }
     }
 }
