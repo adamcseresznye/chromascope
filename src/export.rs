@@ -54,6 +54,35 @@ pub fn export_chromatogram_csv(data: &[[f64; 2]], path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Exports a single mass spectrum to CSV format.
+///
+/// # Format
+/// ```text
+/// m/z,Intensity
+/// 100.123,456.78
+/// ```
+///
+/// # Arguments
+/// * `spectrum` - Mass spectrum with equal-length mz and intensity vectors
+/// * `path` - Destination file path
+///
+/// # Errors
+/// * `ChromascopeError::NoPlotData` — spectrum has no data points
+/// * `ChromascopeError::IoError` — file write failed
+pub fn export_spectrum_csv(spectrum: &crate::parser::MassSpectrum, path: &Path) -> Result<()> {
+    if spectrum.mz.is_empty() {
+        return Err(ChromascopeError::NoPlotData);
+    }
+
+    let mut csv_content = String::from("m/z,Intensity\n");
+    for (mz, intensity) in spectrum.mz.iter().zip(spectrum.intensity.iter()) {
+        csv_content.push_str(&format!("{},{}\n", mz, intensity));
+    }
+
+    std::fs::write(path, csv_content).map_err(ChromascopeError::IoError)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,6 +170,51 @@ mod tests {
         let result = export_chromatogram_csv(&test_data, invalid_path);
 
         assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), ChromascopeError::IoError(_)));
+    }
+
+    #[test]
+    fn test_export_spectrum_csv_correct_format() {
+        use crate::parser::MassSpectrum;
+        let spectrum = MassSpectrum {
+            mz: vec![100.0, 200.0],
+            intensity: vec![1000.0, 500.0],
+            index: 0,
+            retention_time: 1.5,
+        };
+        let path = std::env::temp_dir().join("test_spectrum_format.csv");
+        export_spectrum_csv(&spectrum, &path).unwrap();
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(contents.starts_with("m/z,Intensity\n"));
+        assert!(contents.contains("100"));
+        assert!(contents.contains("1000"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_export_spectrum_csv_empty_returns_no_plot_data() {
+        use crate::parser::MassSpectrum;
+        let spectrum = MassSpectrum {
+            mz: vec![],
+            intensity: vec![],
+            index: 0,
+            retention_time: 0.0,
+        };
+        let path = std::env::temp_dir().join("test_spectrum_empty.csv");
+        let result = export_spectrum_csv(&spectrum, &path);
+        assert!(matches!(result.unwrap_err(), ChromascopeError::NoPlotData));
+    }
+
+    #[test]
+    fn test_export_spectrum_csv_invalid_path() {
+        use crate::parser::MassSpectrum;
+        let spectrum = MassSpectrum {
+            mz: vec![100.0],
+            intensity: vec![500.0],
+            index: 0,
+            retention_time: 1.0,
+        };
+        let result = export_spectrum_csv(&spectrum, Path::new("/no_such_dir/out.csv"));
         assert!(matches!(result.unwrap_err(), ChromascopeError::IoError(_)));
     }
 }
