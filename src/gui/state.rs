@@ -84,7 +84,7 @@ pub struct UserInput {
     pub smoothing: u8,
     /// The width of the line to be used in the plot
     pub line_width: f32,
-    /// The retention time of a given scan. Needed for mass spectrum extraction when the user triple clicks the chromatogram
+    /// The retention time of a given scan. Needed for mass spectrum extraction when the user double clicks the chromatogram
     pub retention_time_ms_spectrum: Option<f32>,
     /// Whether to use range filtering for TIC/BPC plots
     pub range_enabled: bool,
@@ -168,9 +168,9 @@ pub(crate) struct FileDisplaySettings {
 pub(crate) struct FileCache {
     /// The processed plot data for this file
     pub(crate) plot_data: Option<Vec<[f64; 2]>>,
-    /// The last extracted chromatogram (used for triple-click spectrum lookup)
+    /// The last extracted chromatogram (used for double-click spectrum lookup)
     pub(crate) chromatogram: Option<parser::ChromatogramData>,
-    /// The last retrieved mass spectrum (populated on triple-click)
+    /// The last retrieved mass spectrum (populated on double-click)
     pub(crate) mass_spectrum: Option<parser::MassSpectrum>,
     /// The last set of processing params used for extraction. Used to skip
     /// redundant background thread spawns when nothing extraction-relevant changed.
@@ -205,8 +205,12 @@ pub(crate) fn next_color_for_index(index: usize) -> LineColor {
         LineColor::Green,
         LineColor::Blue,
         LineColor::Yellow,
-        LineColor::Black,
         LineColor::White,
+        LineColor::Gray,
+        LineColor::Cyan,
+        LineColor::Orange,
+        LineColor::Magenta,
+        LineColor::Gold,
     ];
     colors[index % colors.len()]
 }

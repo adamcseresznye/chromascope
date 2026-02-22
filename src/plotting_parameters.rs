@@ -54,9 +54,13 @@ pub enum LineColor {
     Red,
     Green,
     Blue,
-    Black,
     Yellow,
     White,
+    Gray,
+    Cyan,
+    Orange,
+    Magenta,
+    Gold,
 }
 
 impl LineColor {
@@ -65,9 +69,13 @@ impl LineColor {
             Self::Red => egui::ecolor::Color32::RED,
             Self::Green => egui::ecolor::Color32::GREEN,
             Self::Blue => egui::ecolor::Color32::BLUE,
-            Self::Black => egui::ecolor::Color32::BLACK,
             Self::Yellow => egui::ecolor::Color32::YELLOW,
             Self::White => egui::ecolor::Color32::WHITE,
+            Self::Gray => egui::ecolor::Color32::GRAY,
+            Self::Cyan => egui::ecolor::Color32::CYAN,
+            Self::Orange => egui::ecolor::Color32::ORANGE,
+            Self::Magenta => egui::ecolor::Color32::MAGENTA,
+            Self::Gold => egui::ecolor::Color32::GOLD,
         }
     }
 }

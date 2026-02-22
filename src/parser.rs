@@ -157,7 +157,7 @@ impl MzData {
     /// # Why this exists
     /// `MZReader` is `!Send` — it cannot cross thread boundaries.
     /// The background thread opens, extracts bounds, then drops its own reader.
-    /// The UI thread calls this method to open a new reader for triple-click
+    /// The UI thread calls this method to open a new reader for double-click
     /// spectrum lookups, skipping the expensive bounds scan.
     pub fn open_reader_only(&mut self, path: &PathBuf) -> Result<&mut Self> {
         match MZReader::open_path(path) {
@@ -1715,7 +1715,7 @@ mod tests {
     }
 
     #[test]
-    fn test_xic_triple_click_finds_correct_spectrum() {
+    fn test_xic_double_click_finds_correct_spectrum() {
         let mut mzdata = setup_test_parser();
 
         let chrom = mzdata

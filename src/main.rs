@@ -1,10 +1,4 @@
 //! Chromascope is a lightweight and easy-to-use GUI application designed to read mzML mass spectrometry data.
-//!
-//! The crate consists of three main modules:
-//!
-//! 1. `gui.rs`: This module contains the implementation of the graphical user interface (GUI) using the `egui` library.
-//! 2. `parser.rs`: This module handles the parsing and processing of the mzML data files.
-//! 3. `plotting_parameters.rs`: This module defines the parameters and settings for the data plotting functionality.
 
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
@@ -37,7 +31,7 @@ fn main() {
     match eframe::run_native(
         "Chromascope",
         native_options,
-        Box::new(|cc| Box::new(MzViewerApp::new(cc))),
+        Box::new(|cc| Ok(Box::new(MzViewerApp::new(cc)))),
     ) {
         Ok(_) => {
             info!("Application exited succesfully.");

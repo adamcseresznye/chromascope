@@ -35,7 +35,7 @@ pub fn update_data_selection_panel(app: &mut MzViewerApp, ctx: &Context) {
                     app.reset_state();
                     handle_file_selection(app);
                     info!("File selection handled.");
-                    ui.close_menu();
+                    ui.close();
                 }
 
                 if ui
@@ -45,7 +45,7 @@ pub fn update_data_selection_panel(app: &mut MzViewerApp, ctx: &Context) {
                 {
                     debug!("Export to CSV button clicked.");
                     handle_csv_export(app);
-                    ui.close_menu();
+                    ui.close();
                 }
             });
 
@@ -55,15 +55,20 @@ pub fn update_data_selection_panel(app: &mut MzViewerApp, ctx: &Context) {
                 info!("Display options added.");
             });
 
-            if let Some(new_visuals) = ui
-                .style()
-                .visuals
-                .clone()
-                .light_dark_small_toggle_button(ui)
             {
-                debug!("Visuals toggle button clicked.");
-                ctx.set_visuals(new_visuals);
-                info!("Visuals updated.");
+                let is_dark = ui.visuals().dark_mode;
+                if ui
+                    .button(if is_dark { "☀ Light" } else { "🌙 Dark" })
+                    .clicked()
+                {
+                    debug!("Visuals toggle button clicked.");
+                    ctx.set_visuals(if is_dark {
+                        egui::Visuals::light()
+                    } else {
+                        egui::Visuals::dark()
+                    });
+                    info!("Visuals updated.");
+                }
             }
         });
     });
@@ -153,8 +158,16 @@ pub fn add_line_color_options(app: &mut MzViewerApp, ui: &mut Ui) {
         ui.radio_value(&mut app.user_input.line_color, LineColor::Blue, "Blue");
         ui.radio_value(&mut app.user_input.line_color, LineColor::Green, "Green");
         ui.radio_value(&mut app.user_input.line_color, LineColor::Yellow, "Yellow");
-        ui.radio_value(&mut app.user_input.line_color, LineColor::Black, "Black");
         ui.radio_value(&mut app.user_input.line_color, LineColor::White, "White");
+        ui.radio_value(&mut app.user_input.line_color, LineColor::Gray, "Gray");
+        ui.radio_value(&mut app.user_input.line_color, LineColor::Cyan, "Cyan");
+        ui.radio_value(&mut app.user_input.line_color, LineColor::Orange, "Orange");
+        ui.radio_value(
+            &mut app.user_input.line_color,
+            LineColor::Magenta,
+            "Magenta",
+        );
+        ui.radio_value(&mut app.user_input.line_color, LineColor::Gold, "Gold");
     });
 
     // Propagate new color to the active file's chromatogram line
@@ -245,7 +258,10 @@ pub fn handle_file_selection(app: &mut MzViewerApp) {
                     name,
                     path: path_str,
                     data: parser::MzData::new(),
-                    display: FileDisplaySettings { color, visible: true },
+                    display: FileDisplaySettings {
+                        color,
+                        visible: true,
+                    },
                     cache: FileCache::default(),
                     is_loading: true,
                 },
@@ -409,7 +425,7 @@ pub fn update_file_information_panel(app: &mut MzViewerApp, ctx: &egui::Context)
                         if is_active {
                             let frame = egui::Frame::default()
                                 .fill(ui.visuals().selection.bg_fill)
-                                .inner_margin(egui::Margin::same(4.0));
+                                .inner_margin(egui::Margin::same(4));
                             frame.show(ui, |ui| {
                                 // Visibility checkbox
                                 if ui.checkbox(&mut file.display.visible, "").changed() {
@@ -564,7 +580,7 @@ pub fn update_central_panel(app: &mut MzViewerApp, ctx: &Context) {
                             ui.horizontal(|ui| {
                                 ui.colored_label(
                                     egui::Color32::from_rgb(60, 200, 60),
-                                    format!("∫ Area [{:.3} – {:.3} min] = {:.4e}", s, e, area),
+                                    format!("Peak Area [{:.3} – {:.3} min] = {:.4e}", s, e, area),
                                 );
                                 if ui.small_button("✕ Clear").clicked() {
                                     app.integration.start_rt = None;
@@ -788,8 +804,7 @@ pub fn add_range_options(app: &mut MzViewerApp, ui: &mut Ui) {
                         info!("Range max set to: {}", app.user_input.range_max.value);
                     }
                     Err(_) if !app.user_input.range_max.text.is_empty() => {
-                        app
-                            .show_error_dialog("Max m/z must be greater than min m/z".to_string());
+                        app.show_error_dialog("Max m/z must be greater than min m/z".to_string());
                     }
                     _ => {}
                 }
