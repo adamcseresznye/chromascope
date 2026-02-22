@@ -38,15 +38,37 @@ pub fn update_data_selection_panel(app: &mut MzViewerApp, ctx: &Context) {
                     ui.close();
                 }
 
-                if ui
-                    .button("Export to CSV")
-                    .on_hover_text("Export plot data to CSV")
-                    .clicked()
-                {
-                    debug!("Export to CSV button clicked.");
-                    handle_csv_export(app);
-                    ui.close();
-                }
+                ui.menu_button("Export", |ui| {
+                    if ui
+                        .button("Chromatogram")
+                        .on_hover_text("Export the active chromatogram to CSV")
+                        .clicked()
+                    {
+                        debug!("Export Chromatogram clicked.");
+                        handle_csv_export(app);
+                        ui.close();
+                    }
+
+                    // Greyed out with tooltip if no spectrum is loaded yet
+                    let has_spectrum = app
+                        .active_file_id
+                        .and_then(|id| app.files.get(&id))
+                        .and_then(|f| f.cache.mass_spectrum.as_ref())
+                        .is_some();
+
+                    ui.add_enabled_ui(has_spectrum, |ui| {
+                        let btn = ui.button("Mass Spectrum").on_hover_text(if has_spectrum {
+                            "Export the mass spectrum at the current retention time to CSV"
+                        } else {
+                            "Double-click the chromatogram first to load a spectrum"
+                        });
+                        if btn.clicked() {
+                            debug!("Export Mass Spectrum clicked.");
+                            handle_spectrum_csv_export(app);
+                            ui.close();
+                        }
+                    });
+                });
             });
 
             ui.menu_button("Display", |ui| {
@@ -371,6 +393,67 @@ pub fn handle_csv_export(app: &mut MzViewerApp) {
         }
     } else {
         warn!("No file path selected for CSV export.");
+    }
+}
+
+/// Handles exporting the cached mass spectrum of the active file to a CSV file.
+///
+/// Requires a spectrum to have been loaded via double-click on the chromatogram.
+/// Default filename includes the source file stem and the current retention time.
+pub fn handle_spectrum_csv_export(app: &mut MzViewerApp) {
+    let active_id = match app.active_file_id {
+        Some(id) => id,
+        None => {
+            warn!("No active file for spectrum export");
+            return;
+        }
+    };
+
+    let active_file = match app.files.get(&active_id) {
+        Some(f) => f,
+        None => {
+            warn!("Active file ID {} not found", active_id);
+            return;
+        }
+    };
+
+    let spectrum = match &active_file.cache.mass_spectrum {
+        Some(s) => s,
+        None => {
+            // Should not reach here because the button is disabled when no spectrum
+            // is cached, but guard defensively.
+            warn!("No mass spectrum cached — button should have been disabled");
+            app.show_error_dialog(
+                "No spectrum loaded. Double-click the chromatogram at the desired RT first."
+                    .to_string(),
+            );
+            return;
+        }
+    };
+
+    let rt_label = app
+        .user_input
+        .retention_time_ms_spectrum
+        .map(|rt| format!("{:.3}min", rt))
+        .unwrap_or_else(|| "unknown_rt".to_string());
+
+    let default_name = active_file
+        .name
+        .replace(".mzML", &format!("_spectrum_{}.csv", rt_label));
+
+    let dialog = rfd::FileDialog::new()
+        .add_filter("CSV", &["csv"])
+        .set_file_name(&default_name);
+
+    if let Some(path) = dialog.save_file() {
+        info!("Spectrum export path: {:?}", path);
+        match crate::export::export_spectrum_csv(spectrum, &path) {
+            Ok(_) => info!("Spectrum CSV exported to {:?}", path),
+            Err(e) => {
+                error!("Spectrum export failed: {}", e);
+                app.show_error_dialog(format!("Spectrum export failed: {}", e));
+            }
+        }
     }
 }
 
