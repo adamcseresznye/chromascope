@@ -524,6 +524,7 @@ pub fn update_file_information_panel(app: &mut MzViewerApp, ctx: &egui::Context)
                     if app.files.is_empty() {
                         app.invalid_file = FileValidity::Invalid;
                     }
+                    app.integration = crate::gui::state::IntegrationState::default();
                 }
             }
         }
@@ -638,12 +639,45 @@ pub fn add_plot_properties(app: &mut MzViewerApp, ui: &mut Ui) {
             add_plot_type_options(app, ui);
             ui.end_row();
 
-            // Row 3: Range (only for TIC/BPC)
+            // Row 3: Range (only for TIC/BPC) — inline, no separate window
             if app.user_input.plot_type != PlotType::Xic {
+                ui.label("Range (m/z):");
                 add_range_options(app, ui);
                 ui.end_row();
             }
         });
+}
+
+/// Shows the range enable checkbox and a “Set Range…” button inline in the
+/// Plot Properties grid. The actual TextEdit inputs live in a separate
+/// persistent window (`render_range_window`) because egui context menus close
+/// on any click, making TextEdit unusable inside them.
+pub fn add_range_options(app: &mut MzViewerApp, ui: &mut Ui) {
+    ui.horizontal(|ui| {
+        if ui.checkbox(&mut app.user_input.range_enabled, "").changed() {
+            app.state_changed = StateChange::Changed;
+            info!("Range filtering toggled: {}", app.user_input.range_enabled);
+        }
+
+        if app.user_input.range_enabled {
+            // Show current committed values as a read-only label
+            ui.label(
+                egui::RichText::new(format!(
+                    "{:.0} \u{2013} {:.0} m/z",
+                    app.user_input.range_min.value, app.user_input.range_max.value
+                ))
+                .color(egui::Color32::from_rgb(100, 149, 237)),
+            );
+            if ui.small_button("Set Range\u{2026}").clicked() {
+                app.user_input.range_window_open = true;
+            }
+        } else {
+            ui.colored_label(egui::Color32::GRAY, "Full range");
+            if ui.small_button("Set Range\u{2026}").clicked() {
+                app.user_input.range_window_open = true;
+            }
+        }
+    });
 }
 
 /// Displays scan filter information from the active file.
@@ -741,91 +775,6 @@ pub fn add_plot_type_options(app: &mut MzViewerApp, ui: &mut Ui) {
         {
             app.user_input.plot_type = PlotType::Xic;
             app.options_window_open = true;
-        }
-    });
-}
-
-/// Adds m/z range filtering options for TIC/BPC plots.
-///
-/// Allows users to restrict the mass range used for chromatogram calculation.
-/// Only available for TIC and Base Peak plots (not XIC).
-pub fn add_range_options(app: &mut MzViewerApp, ui: &mut Ui) {
-    ui.label("Range (m/z):");
-
-    ui.horizontal(|ui| {
-        // Checkbox to enable/disable range filtering
-        if ui.checkbox(&mut app.user_input.range_enabled, "").changed() {
-            app.state_changed = StateChange::Changed;
-            info!("Range filtering toggled: {}", app.user_input.range_enabled);
-        }
-
-        if app.user_input.range_enabled {
-            // Min m/z input
-            ui.label("Min:");
-            let min_response = ui.add(
-                egui::TextEdit::singleline(&mut app.user_input.range_min.text)
-                    .desired_width(70.0)
-                    .hint_text("0.0"),
-            );
-
-            if min_response.lost_focus() {
-                let result = app.user_input.range_min.sync_on_focus_lost(|v| *v >= 0.0);
-                match result {
-                    Ok(()) => {
-                        app.state_changed = StateChange::Changed;
-                        info!("Range min set to: {}", app.user_input.range_min.value);
-                    }
-                    Err(_) if !app.user_input.range_min.text.is_empty() => {
-                        app.show_error_dialog("Min m/z must be non-negative".to_string());
-                    }
-                    _ => {}
-                }
-            }
-
-            ui.label("-");
-
-            // Max m/z input
-            ui.label("Max:");
-            let max_response = ui.add(
-                egui::TextEdit::singleline(&mut app.user_input.range_max.text)
-                    .desired_width(70.0)
-                    .hint_text("2000.0"),
-            );
-
-            if max_response.lost_focus() {
-                let range_min_value = app.user_input.range_min.value;
-                let result = app
-                    .user_input
-                    .range_max
-                    .sync_on_focus_lost(|v| *v > range_min_value);
-                match result {
-                    Ok(()) => {
-                        app.state_changed = StateChange::Changed;
-                        info!("Range max set to: {}", app.user_input.range_max.value);
-                    }
-                    Err(_) if !app.user_input.range_max.text.is_empty() => {
-                        app.show_error_dialog("Max m/z must be greater than min m/z".to_string());
-                    }
-                    _ => {}
-                }
-            }
-
-            // Show current file's full range for reference
-            if let Some(active_id) = app.active_file_id {
-                if let Some(file) = app.files.get(&active_id) {
-                    let bounds = &file.data.bounds;
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "(File: {:.0}-{:.0})",
-                            bounds.min_mz, bounds.max_mz
-                        ))
-                        .small()
-                        .color(egui::Color32::GRAY),
-                    );
-                }
-            }
-        } else {
-            ui.colored_label(egui::Color32::GRAY, "Full range (all m/z values)");
         }
     });
 }
