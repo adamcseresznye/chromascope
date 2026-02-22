@@ -151,6 +151,7 @@ impl MzViewerApp {
     pub fn reset_state(&mut self) {
         self.files.clear();
         self.active_file_id = None;
+        self.integration = IntegrationState::default();
     }
 
     /// Displays an error message to the user via a modal dialog.
@@ -429,6 +430,7 @@ impl eframe::App for MzViewerApp {
         panels::update_file_information_panel(self, ctx);
         panels::update_central_panel(self, ctx);
         dialogs::render_xic_settings_window(self, ctx);
+        dialogs::render_range_window(self, ctx);
         dialogs::render_error_dialog(self, ctx);
     }
 }

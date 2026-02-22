@@ -92,6 +92,8 @@ pub struct UserInput {
     pub range_min: ValidatedInput<f64>,
     /// Maximum m/z range — text for the TextEdit, value for processing.
     pub range_max: ValidatedInput<f64>,
+    /// Whether the m/z range filter window is open
+    pub range_window_open: bool,
 }
 
 impl Default for UserInput {
@@ -111,6 +113,7 @@ impl Default for UserInput {
             range_enabled: bool::default(),
             range_min: ValidatedInput::default(),
             range_max: ValidatedInput::default(),
+            range_window_open: false,
         }
     }
 }

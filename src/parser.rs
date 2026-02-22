@@ -499,8 +499,6 @@ impl MzData {
         })?;
 
         // ── Tier 1: embedded chromatogram fast path ───────────────────────────
-        // Only valid when no m/z range filter is requested and ms_level == 1,
-        // because embedded TIC chromatograms represent all MS1 ions.
         if mz_range.is_none() && ms_level == 1 {
             let embedded = reader
                 .get_chromatogram_by_id("TIC")
@@ -514,9 +512,6 @@ impl MzData {
         }
 
         // ── Tier 2: spectrum iteration fallback ───────────────────────────────
-        // For no-range case: use MetadataOnly — TIC is stored as CV param
-        // MS:1000285 on each spectrum description; no binary decoding needed.
-        // For range case: Full detail is required to decode peaks for m/z filter.
         if mz_range.is_none() {
             reader.set_detail_level(DetailLevel::MetadataOnly);
         }
@@ -528,10 +523,6 @@ impl MzData {
                 let rt = spectrum.start_time() as f32;
                 let idx = spectrum.index();
                 let tic = if let Some((min_mz, max_mz)) = mz_range {
-                    // TIC only needs a sum of intensities — centroiding is unnecessary and
-                    // wrong for profile data (it merges peaks, changing the summed area).
-                    // mzML m/z arrays are ascending: partition_point gives exact range
-                    // boundaries in O(log n), then we slice and sum the raw intensity array.
                     if let Some(arrays) = spectrum.arrays.as_ref() {
                         match (arrays.mzs(), arrays.intensities()) {
                             (Ok(mzs), Ok(intensities)) => {
@@ -548,10 +539,17 @@ impl MzData {
                             }
                         }
                     } else {
-                        0.0_f32 // spectrum has no binary arrays (e.g. empty scan)
+                        0.0_f32
                     }
                 } else {
-                    spectrum.peaks().tic()
+                    // Read MS:1000285 CV param — no binary decoding under MetadataOnly
+                    spectrum
+                        .description
+                        .params()
+                        .iter()
+                        .find(|p| p.name == "total ion current")
+                        .and_then(|p| p.value.to_f64().ok())
+                        .unwrap_or(0.0) as f32
                 };
                 (rt, tic, idx)
             })
@@ -559,6 +557,29 @@ impl MzData {
 
         // Always restore full detail level so subsequent calls decode arrays.
         reader.set_detail_level(DetailLevel::Full);
+
+        // ── Sanity check: all-zeros retry ────────────────────────────────────────
+        // Some converters omit MS:1000285 entirely. If every intensity is 0,
+        // fall back to full peak decoding rather than returning a silent flatline.
+        if mz_range.is_none() && !results.is_empty() && results.iter().all(|(_, i, _)| *i == 0.0) {
+            warn!(
+                "TIC: all TIC CV params (MS:1000285) returned 0 for {:?} \
+             — retrying with full array decoding",
+                &self.file_name
+            );
+            results = reader
+                .iter()
+                .filter(|s| {
+                    s.description.ms_level == ms_level && s.description.polarity == polarity
+                })
+                .map(|spectrum| {
+                    let rt = spectrum.start_time() as f32;
+                    let idx = spectrum.index();
+                    let tic = spectrum.peaks().tic();
+                    (rt, tic, idx)
+                })
+                .collect();
+        }
 
         results.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
 

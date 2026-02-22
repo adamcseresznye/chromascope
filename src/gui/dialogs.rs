@@ -100,7 +100,8 @@ pub fn render_xic_settings_window(app: &mut MzViewerApp, ctx: &egui::Context) {
                     // Validate: mass must be positive and pass XicParams validation
                     let valid = app.user_input.mass.sync_on_focus_lost(|m| {
                         let temp_bounds = crate::validation::DataBounds::unrestricted();
-                        XicParams::new(*m, app.user_input.polarity, current_tolerance, &temp_bounds).is_ok()
+                        XicParams::new(*m, app.user_input.polarity, current_tolerance, &temp_bounds)
+                            .is_ok()
                     });
                     match valid {
                         Ok(()) => {
@@ -123,14 +124,18 @@ pub fn render_xic_settings_window(app: &mut MzViewerApp, ctx: &egui::Context) {
                     // Validate: tolerance must be in range for XicParams
                     let valid = app.user_input.mass_tolerance.sync_on_focus_lost(|t| {
                         let temp_bounds = crate::validation::DataBounds::unrestricted();
-                        XicParams::new(current_mass, app.user_input.polarity, *t, &temp_bounds).is_ok()
+                        XicParams::new(current_mass, app.user_input.polarity, *t, &temp_bounds)
+                            .is_ok()
                     });
                     match valid {
                         Ok(()) => {
                             app.state_changed = StateChange::Changed;
                         }
                         Err(_) => {
-                            error!("Invalid mass tolerance: {}", app.user_input.mass_tolerance.text);
+                            error!(
+                                "Invalid mass tolerance: {}",
+                                app.user_input.mass_tolerance.text
+                            );
                             error_message = Some(format!(
                                 "Invalid mass tolerance: '{}'",
                                 app.user_input.mass_tolerance.text
@@ -144,5 +149,101 @@ pub fn render_xic_settings_window(app: &mut MzViewerApp, ctx: &egui::Context) {
         if let Some(msg) = error_message {
             app.error_message = Some(msg);
         }
+    }
+}
+
+/// Renders the m/z range filter window when open.
+///
+/// This is a persistent `egui::Window` (not a context-menu popup) so that
+/// `TextEdit` widgets can receive keyboard input without the container closing.
+pub fn render_range_window(app: &mut MzViewerApp, ctx: &egui::Context) {
+    if !app.user_input.range_window_open {
+        return;
+    }
+
+    let mut error_message: Option<String> = None;
+
+    egui::Window::new("m/z Range Filter")
+        .open(&mut app.user_input.range_window_open)
+        .resizable(false)
+        .collapsible(false)
+        .show(ctx, |ui| {
+            // Enable checkbox
+            if ui
+                .checkbox(&mut app.user_input.range_enabled, "Enable range filtering")
+                .changed()
+            {
+                app.state_changed = StateChange::Changed;
+            }
+
+            if app.user_input.range_enabled {
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.label("Min:");
+                    let min_resp = ui.add(
+                        egui::TextEdit::singleline(&mut app.user_input.range_min.text)
+                            .desired_width(80.0)
+                            .hint_text("0.0"),
+                    );
+                    if min_resp.lost_focus() {
+                        match app.user_input.range_min.sync_on_focus_lost(|v| *v >= 0.0) {
+                            Ok(()) => {
+                                app.state_changed = StateChange::Changed;
+                                log::info!("Range min set to: {}", app.user_input.range_min.value);
+                            }
+                            Err(_) if !app.user_input.range_min.text.is_empty() => {
+                                error_message = Some("Min m/z must be non-negative".to_string());
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    ui.label("- Max:");
+                    let max_resp = ui.add(
+                        egui::TextEdit::singleline(&mut app.user_input.range_max.text)
+                            .desired_width(80.0)
+                            .hint_text("2000.0"),
+                    );
+                    if max_resp.lost_focus() {
+                        let min_val = app.user_input.range_min.value;
+                        match app
+                            .user_input
+                            .range_max
+                            .sync_on_focus_lost(|v| *v > min_val)
+                        {
+                            Ok(()) => {
+                                app.state_changed = StateChange::Changed;
+                                log::info!("Range max set to: {}", app.user_input.range_max.value);
+                            }
+                            Err(_) if !app.user_input.range_max.text.is_empty() => {
+                                error_message =
+                                    Some("Max m/z must be greater than min m/z".to_string());
+                            }
+                            _ => {}
+                        }
+                    }
+                });
+
+                // Show file's actual m/z range as a hint
+                if let Some(active_id) = app.active_file_id {
+                    if let Some(file) = app.files.get(&active_id) {
+                        let b = &file.data.bounds;
+                        ui.add_space(2.0);
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "File range: {:.0} \u{2013} {:.0} m/z",
+                                b.min_mz, b.max_mz
+                            ))
+                            .small()
+                            .color(egui::Color32::GRAY),
+                        );
+                    }
+                }
+            }
+        });
+
+    // Deferred error display — avoids borrow conflict inside the window closure
+    if let Some(msg) = error_message {
+        app.show_error_dialog(msg);
     }
 }
