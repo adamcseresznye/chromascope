@@ -771,7 +771,7 @@ mod tests {
         // plot_data is smoothed [f64; 2] pairs — used for rendering
         assert!(!plot_data.is_empty(), "plot_data must be non-empty");
 
-        // chromatogram is the raw extraction — used for triple-click spectrum lookup
+        // chromatogram is the raw extraction — used for double-click spectrum lookup
         assert!(
             !chromatogram.retention_time.is_empty(),
             "raw chromatogram must be non-empty"

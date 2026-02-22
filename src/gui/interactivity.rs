@@ -3,13 +3,13 @@ use eframe::egui;
 use egui_plot::PlotPoint;
 use log::{error, info, warn};
 
-/// Handles triple-click events on the chromatogram to extract a mass spectrum.
+/// Handles double-click events on the chromatogram to extract a mass spectrum.
 pub fn handle_chromatogram_click(
     app: &mut MzViewerApp,
     response: egui::Response,
     plot_bounds: Option<egui_plot::PlotBounds>,
 ) {
-    if !response.triple_clicked() {
+    if !response.double_clicked() {
         return;
     }
 
@@ -26,7 +26,7 @@ pub fn handle_chromatogram_click(
     };
 
     info!(
-        "Triple click detected on plot at {:?} for file: {}",
+        "Double click detected on plot at {:?} for file: {}",
         &rt_clicked, file.name
     );
 

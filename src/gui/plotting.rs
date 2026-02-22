@@ -30,8 +30,9 @@ pub fn render_chromatogram(
         .height(ui.available_height() * 0.6)
         .legend(Legend::default())
         .label_formatter(|_name, value| {
-            format!("Rt = {:.2} min\nIntensity = {:.0}", value.x, value.y)
+            format!("Rt = {:.2} min\nIntensity = {:.2e}", value.x, value.y) // ← CHANGED
         })
+        .y_axis_formatter(format_intensity_axis) // ← ADDED
         .boxed_zoom_pointer_button(egui::PointerButton::Middle)
         .show(ui, |plot_ui| {
             for file in app.files.values() {
@@ -58,12 +59,15 @@ pub fn render_chromatogram(
 }
 
 /// Creates a styled Line widget for a file's chromatogram data.
-pub fn create_line_for_file(app: &MzViewerApp, file: &OpenFile, data: &[[f64; 2]]) -> Line {
-    Line::new(PlotPoints::from(data.to_vec()))
+pub fn create_line_for_file(
+    app: &MzViewerApp,
+    file: &OpenFile,
+    data: &[[f64; 2]],
+) -> Line<'static> {
+    Line::new(file.name.clone(), PlotPoints::from(data.to_vec()))
         .width(app.user_input.line_width)
         .style(app.user_input.line_type.to_egui())
         .color(file.display.color.to_egui())
-        .name(&file.name)
 }
 
 /// Draws the integration region shading and boundary lines on the chromatogram plot.
@@ -74,11 +78,10 @@ pub fn render_integration_overlay(app: &MzViewerApp, plot_ui: &mut egui_plot::Pl
     };
 
     plot_ui.vline(
-        VLine::new(start)
+        VLine::new("Integration start", start)
             .color(egui::Color32::from_rgb(0, 180, 0))
             .width(2.0)
-            .style(egui_plot::LineStyle::Dashed { length: 6.0 })
-            .name("Integration start"),
+            .style(egui_plot::LineStyle::Dashed { length: 6.0 }),
     );
 
     let end = match app.integration.end_rt {
@@ -87,11 +90,10 @@ pub fn render_integration_overlay(app: &MzViewerApp, plot_ui: &mut egui_plot::Pl
     };
 
     plot_ui.vline(
-        VLine::new(end)
+        VLine::new("Integration end", end)
             .color(egui::Color32::from_rgb(0, 180, 0))
             .width(2.0)
-            .style(egui_plot::LineStyle::Dashed { length: 6.0 })
-            .name("Integration end"),
+            .style(egui_plot::LineStyle::Dashed { length: 6.0 }),
     );
 
     let active_id = match app.active_file_id {
@@ -150,20 +152,18 @@ pub fn render_integration_overlay(app: &MzViewerApp, plot_ui: &mut egui_plot::Pl
             [x0, chord_y(x0, s, i_start, e, i_end)],
         ];
         plot_ui.polygon(
-            Polygon::new(PlotPoints::from(quad))
+            Polygon::new("", PlotPoints::from(quad))
                 .fill_color(fill_color)
-                .stroke(egui::Stroke::NONE)
-                .name(""),
+                .stroke(egui::Stroke::NONE),
         );
     }
 
     // Draw the baseline chord as a dashed yellow line so the user can see
     // exactly where the integration baseline sits.
-    let baseline = egui_plot::Line::new(vec![[s, i_start], [e, i_end]])
+    let baseline = egui_plot::Line::new("Baseline chord", vec![[s, i_start], [e, i_end]])
         .color(egui::Color32::YELLOW)
         .width(1.5)
-        .style(egui_plot::LineStyle::Dashed { length: 6.0 })
-        .name("Baseline chord");
+        .style(egui_plot::LineStyle::Dashed { length: 6.0 });
     plot_ui.line(baseline);
 }
 
@@ -235,11 +235,13 @@ pub fn plot_mass_spectrum(app: &mut MzViewerApp, ui: &mut egui::Ui) -> egui::Res
                     .height(ui.available_height())
                     .label_formatter(|name, value| {
                         if name.is_empty() {
-                            format!("m/z = {:.4}\nIntensity = {:.0}", value.x, value.y)
+                            format!("m/z = {:.4}\nIntensity = {:.2e}", value.x, value.y)
+                        // ← CHANGED
                         } else {
-                            format!("{}\nIntensity = {:.0}", name, value.y)
+                            format!("{}\nIntensity = {:.2e}", name, value.y) // ← CHANGED
                         }
                     })
+                    .y_axis_formatter(format_intensity_axis) // ← ADDED
                     .show(ui, |plot_ui| {
                         let bounds = plot_ui.plot_bounds();
                         let zoom_level = (bounds.max()[0] - bounds.min()[0]).abs();
@@ -257,7 +259,7 @@ pub fn plot_mass_spectrum(app: &mut MzViewerApp, ui: &mut egui::Ui) -> egui::Res
                             })
                             .collect();
 
-                        plot_ui.bar_chart(egui_plot::BarChart::new(adjusted_bars));
+                        plot_ui.bar_chart(egui_plot::BarChart::new("Mass Spectrum", adjusted_bars));
                     })
                     .response;
                 return response;
@@ -267,4 +269,22 @@ pub fn plot_mass_spectrum(app: &mut MzViewerApp, ui: &mut egui::Ui) -> egui::Res
 
     warn!("No mass spectrum data available or no active file selected");
     ui.label("No mass spectrum data available")
+}
+
+/// Formats intensity axis labels in scientific notation for better readability at high zoom levels.
+pub fn format_intensity_axis(
+    mark: egui_plot::GridMark,
+    _range: &std::ops::RangeInclusive<f64>,
+) -> String {
+    let v = mark.value;
+    if v == 0.0 {
+        return "0".to_string();
+    }
+    let exp = v.abs().log10().floor() as i32;
+    let mantissa = v / 10f64.powi(exp);
+    if (mantissa - mantissa.round()).abs() < 0.05 {
+        format!("{:.2}e{}", mantissa, exp)
+    } else {
+        format!("{:.3}e{}", mantissa, exp)
+    }
 }

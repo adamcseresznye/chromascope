@@ -26,7 +26,7 @@ mzML is an open, XML-based format widely used for storing and processing mass sp
 
 
 - **mzML File Support**: Chromascope supports the mzML format, a widely used open standard for mass spectrometry data.
-- **User-Friendly Interface**: Easily plot TIC, BPC, or XIC by clicking on the chromatogram, with a triple-click revealing the mass spectrum at any selected retention time.
+- **User-Friendly Interface**: Easily plot TIC, BPC, or XIC by clicking on the chromatogram, with a double-click revealing the mass spectrum at any selected retention time.
 - **Customizable Display**: Adjust visual settings like smoothing, line color, and line style.
 - **Dark Theme Support**: Enjoy an out-of-the-box dark theme for a comfortable viewing experience.
 - **Cross-Platform**: The application is built to run smoothly on multiple operating systems, including Windows, macOS, and Linux.
@@ -40,7 +40,7 @@ mzML is an open, XML-based format widely used for storing and processing mass sp
    - Use the `File` menu to load an mzML file into Chromascope.
 
 3. **Explore Data**:
-   - Once the mzML file is loaded, you can use the provided visualization tools to explore the mass spectrometry data. Click on the chromatogram to access options like TIC, BPC, and XIC. To view the mass spectrum at a specific retention time, simply triple-click on the chromatogram at that point.
+   - Once the mzML file is loaded, you can use the provided visualization tools to explore the mass spectrometry data. Click on the chromatogram to access options like TIC, BPC, and XIC. To view the mass spectrum at a specific retention time, simply double-click on the chromatogram at that point.
 
 4. **Customizing Views**:
    - Adjust the display settings via the `Display` menu to customize how your data is presented.
