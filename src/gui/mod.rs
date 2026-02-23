@@ -152,6 +152,8 @@ impl MzViewerApp {
         self.files.clear();
         self.active_file_id = None;
         self.integration = IntegrationState::default();
+        self.user_input.line_color = crate::plotting_parameters::LineColor::default();
+        self.user_input.retention_time_ms_spectrum = None;
     }
 
     /// Displays an error message to the user via a modal dialog.
@@ -975,5 +977,79 @@ mod tests {
 
         // The background thread must NOT have been spawned.
         assert!(!app.async_state.is_processing);
+    }
+
+    #[test]
+    fn test_mass_spectrum_color_uses_file_display_color() {
+        // Verifies that when file.display.color differs from user_input.line_color,
+        // the file's color is authoritative for the mass spectrum.
+        let mut app = MzViewerApp::default();
+        let file_id = 0;
+        app.files.insert(
+            file_id,
+            OpenFile {
+                id: file_id,
+                name: "test.mzML".to_string(),
+                path: "test.mzML".to_string(),
+                data: parser::MzData::new(),
+                display: FileDisplaySettings {
+                    color: LineColor::Blue, // file has Blue
+                    visible: true,
+                },
+                cache: FileCache::default(),
+                is_loading: false,
+            },
+        );
+        app.active_file_id = Some(file_id);
+        app.user_input.line_color = LineColor::Red; // picker still shows old Red
+
+        // After the fix, plotting uses file.display.color (Blue), not user_input (Red).
+        let file = app.files.get(&file_id).unwrap();
+        assert_eq!(file.display.color, LineColor::Blue);
+        assert_ne!(file.display.color, app.user_input.line_color);
+    }
+
+    #[test]
+    fn test_reset_state_clears_line_color() {
+        let mut app = MzViewerApp::default();
+        app.user_input.line_color = LineColor::Magenta;
+        app.user_input.retention_time_ms_spectrum = Some(5.0);
+
+        app.reset_state();
+
+        assert_eq!(app.user_input.line_color, LineColor::default());
+        assert!(app.user_input.retention_time_ms_spectrum.is_none());
+    }
+
+    #[test]
+    fn test_close_last_file_resets_color_picker() {
+        let mut app = MzViewerApp::default();
+        let file_id = 0;
+        app.files.insert(
+            file_id,
+            OpenFile {
+                id: file_id,
+                name: "test.mzML".to_string(),
+                path: "test.mzML".to_string(),
+                data: parser::MzData::new(),
+                display: FileDisplaySettings {
+                    color: LineColor::Orange,
+                    visible: true,
+                },
+                cache: FileCache::default(),
+                is_loading: false,
+            },
+        );
+        app.active_file_id = Some(file_id);
+        app.user_input.line_color = LineColor::Orange;
+
+        // Simulate close
+        app.files.remove(&file_id);
+        app.active_file_id = None;
+        app.user_input.line_color = LineColor::default();
+        app.user_input.retention_time_ms_spectrum = None;
+
+        assert_eq!(app.user_input.line_color, LineColor::default());
+        assert!(app.active_file_id.is_none());
     }
 }

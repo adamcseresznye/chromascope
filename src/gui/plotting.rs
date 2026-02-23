@@ -229,7 +229,7 @@ pub fn plot_mass_spectrum(app: &mut MzViewerApp, ui: &mut egui::Ui) -> egui::Res
                     file.name, active_id
                 );
 
-                let line_color = app.user_input.line_color;
+                let line_color = file.display.color;
                 let response = egui_plot::Plot::new("mass_spectrum")
                     .width(ui.available_width() * 0.99)
                     .height(ui.available_height())
