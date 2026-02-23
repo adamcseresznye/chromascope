@@ -143,6 +143,7 @@ impl MzViewerApp {
             error_message: None,
             integration: IntegrationState::default(),
             async_state: AsyncState::new(),
+            plot_properties_open: false,
         }
     }
     /// Resets the internal state of the instance.
@@ -312,14 +313,16 @@ impl MzViewerApp {
                         .all(|f| f.is_loading);
 
                     if no_other_file_loaded {
-                        if scan_filters.iter().any(|(ms, pol)| {
+                        if scan_filters.iter().any(|(ms, pol, _, _, _)| {
                             *ms == 1 && *pol == mzdata::spectrum::ScanPolarity::Positive
                         }) {
                             self.user_input.ms_level = 1;
                             self.user_input.polarity = mzdata::spectrum::ScanPolarity::Positive;
-                        } else if let Some((ms, pol)) = scan_filters.first() {
+                            self.user_input.precursor_mz = None;
+                        } else if let Some((ms, pol, pre, _, _)) = scan_filters.first() {
                             self.user_input.ms_level = *ms;
                             self.user_input.polarity = *pol;
+                            self.user_input.precursor_mz = *pre;
                         }
                     }
 
@@ -403,6 +406,7 @@ impl MzViewerApp {
             smoothing: self.user_input.smoothing,
             xic_params,
             mz_range,
+            precursor_mz: self.user_input.precursor_mz,
         })
     }
 }
@@ -433,6 +437,7 @@ impl eframe::App for MzViewerApp {
         panels::update_central_panel(self, ctx);
         dialogs::render_xic_settings_window(self, ctx);
         dialogs::render_range_window(self, ctx);
+        dialogs::render_plot_properties_window(self, ctx);
         dialogs::render_error_dialog(self, ctx);
     }
 }
@@ -951,6 +956,7 @@ mod tests {
             smoothing: 0,
             xic_params: None,
             mz_range: None,
+            precursor_mz: None,
         };
 
         app.files.insert(

@@ -247,3 +247,26 @@ pub fn render_range_window(app: &mut MzViewerApp, ctx: &egui::Context) {
         app.show_error_dialog(msg);
     }
 }
+
+/// Renders the Plot Properties window when open.
+///
+/// Uses a persistent `egui::Window` so that `ComboBox` dropdowns inside it
+/// don't close when clicked (unlike `context_menu` which closes on any click).
+pub fn render_plot_properties_window(app: &mut MzViewerApp, ctx: &egui::Context) {
+    if !app.plot_properties_open {
+        return;
+    }
+    // Use a local copy for `.open()` to avoid a simultaneous mutable borrow
+    // of `app` inside the closure (needed for `add_plot_properties`).
+    let mut open = true;
+    egui::Window::new("Plot Properties")
+        .open(&mut open)
+        .resizable(false)
+        .collapsible(false)
+        .show(ctx, |ui| {
+            ui.separator();
+            super::panels::add_plot_properties(app, ui);
+            ui.separator();
+        });
+    app.plot_properties_open = open;
+}

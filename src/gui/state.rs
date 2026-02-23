@@ -94,6 +94,8 @@ pub struct UserInput {
     pub range_max: ValidatedInput<f64>,
     /// Whether the m/z range filter window is open
     pub range_window_open: bool,
+    /// Precursor m/z filter. None for MS1 or unfiltered MS2; Some(mz) for a specific precursor.
+    pub precursor_mz: Option<f64>,
 }
 
 impl Default for UserInput {
@@ -114,6 +116,7 @@ impl Default for UserInput {
             range_min: ValidatedInput::default(),
             range_max: ValidatedInput::default(),
             range_window_open: false,
+            precursor_mz: None,
         }
     }
 }
@@ -264,6 +267,8 @@ pub struct MzViewerApp {
     pub(crate) integration: IntegrationState,
     /// Async machinery (background threads, channels)
     pub(crate) async_state: AsyncState,
+    /// Whether the Plot Properties window is open
+    pub(crate) plot_properties_open: bool,
 }
 
 impl Default for MzViewerApp {
@@ -279,6 +284,7 @@ impl Default for MzViewerApp {
             error_message: None,
             integration: IntegrationState::default(),
             async_state: AsyncState::new(),
+            plot_properties_open: false,
         }
     }
 }

@@ -38,6 +38,7 @@ use std::path::PathBuf;
 ///     smoothing: 2,
 ///     xic_params: None,
 ///     mz_range: None,
+///     precursor_mz: None,
 /// };
 /// ```
 #[derive(Debug, Clone, PartialEq)]
@@ -54,6 +55,10 @@ pub struct ProcessingParams {
     pub xic_params: Option<XicParams>,
     /// Optional m/z range filter for TIC/BPC (min_mz, max_mz)
     pub mz_range: Option<(f64, f64)>,
+    /// Optional precursor m/z filter. None means no precursor filtering (MS1 or all MS2).
+    /// Some(mz) restricts extraction to spectra whose precursor isolation target is
+    /// within 0.01 Da of `mz` — used to render per-precursor MS2 chromatograms.
+    pub precursor_mz: Option<f64>,
 }
 
 /// Result of a background chromatogram processing task.
@@ -83,7 +88,7 @@ pub enum FileLoadingResult {
         path: String,
         color: LineColor,
         bounds: DataBounds,
-        scan_filters: Vec<(u8, ScanPolarity)>,
+        scan_filters: Vec<(u8, ScanPolarity, Option<f64>, f64, f64)>,
     },
     Error {
         file_id: usize,
@@ -215,6 +220,7 @@ pub fn run_in_background(
 ///     smoothing: 2,
 ///     xic_params: None,
 ///     mz_range: None,
+///     precursor_mz: None,
 /// };
 ///
 /// let (plot_data, chromatogram) = process_chromatogram(&mut data, &params)?;
@@ -228,8 +234,18 @@ pub fn process_chromatogram(
 ) -> Result<(Vec<[f64; 2]>, ChromatogramData)> {
     // Step 1: Extract raw chromatogram based on type, returning owned ChromatogramData
     let chromatogram = match params.plot_type {
-        PlotType::Tic => data.get_tic(params.ms_level, params.polarity, params.mz_range)?,
-        PlotType::Bpc => data.get_bpic(params.ms_level, params.polarity, params.mz_range)?,
+        PlotType::Tic => data.get_tic(
+            params.ms_level,
+            params.polarity,
+            params.mz_range,
+            params.precursor_mz,
+        )?,
+        PlotType::Bpc => data.get_bpic(
+            params.ms_level,
+            params.polarity,
+            params.mz_range,
+            params.precursor_mz,
+        )?,
         PlotType::Xic => {
             let xic_params = params
                 .xic_params
@@ -241,6 +257,7 @@ pub fn process_chromatogram(
                 params.ms_level,
                 xic_params.polarity(),
                 xic_params.mass_tolerance(),
+                params.precursor_mz,
             )?
         }
     };
@@ -562,6 +579,7 @@ mod tests {
             xic_params: None,
             ms_level: 1,
             mz_range: None,
+            precursor_mz: None,
         };
 
         // Act
@@ -592,6 +610,7 @@ mod tests {
             xic_params: None,
             ms_level: 1,
             mz_range: None,
+            precursor_mz: None,
         };
 
         // Act
@@ -618,6 +637,7 @@ mod tests {
             xic_params: None, // Missing required XIC params
             ms_level: 1,
             mz_range: None,
+            precursor_mz: None,
         };
 
         // Act
@@ -652,6 +672,7 @@ mod tests {
             xic_params: Some(xic_params),
             ms_level: 1,
             mz_range: None,
+            precursor_mz: None,
         };
 
         // Act
@@ -679,6 +700,7 @@ mod tests {
             xic_params: None,
             ms_level: 1,
             mz_range: None,
+            precursor_mz: None,
         };
 
         // Act
@@ -708,6 +730,7 @@ mod tests {
             xic_params: None,
             ms_level: 1,
             mz_range: None,
+            precursor_mz: None,
         };
 
         // Act
@@ -733,6 +756,7 @@ mod tests {
             xic_params: None,
             ms_level: 1,
             mz_range: None,
+            precursor_mz: None,
         };
 
         // Act
@@ -763,6 +787,7 @@ mod tests {
             xic_params: None,
             ms_level: 1,
             mz_range: None,
+            precursor_mz: None,
         };
 
         let (plot_data, chromatogram) =

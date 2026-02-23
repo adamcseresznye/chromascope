@@ -64,9 +64,10 @@ pub struct MzData {
     msfile: Option<MZReader<File>>,
     /// Valid parameter ranges for this file (extracted during opening)
     pub bounds: DataBounds,
-    /// Vector of unique (ms_level, polarity) combinations found in this file
-    /// Extracted during file opening for populating UI dropdowns
-    pub available_scan_filters: Vec<(u8, ScanPolarity)>,
+    /// Vector of unique (ms_level, polarity, precursor_mz, min_mz, max_mz) combinations found
+    /// in this file. For MS1 entries precursor_mz is None; for MS2+ entries it holds the
+    /// isolation target m/z so each precursor gets its own dropdown entry.
+    pub available_scan_filters: Vec<(u8, ScanPolarity, Option<f64>, f64, f64)>,
 }
 
 impl core::fmt::Debug for MzData {
@@ -204,7 +205,7 @@ impl MzData {
             .as_mut()
             .ok_or_else(|| ChromascopeError::FileNotOpened("No file opened".to_string()))?;
 
-        // ── O(1): scan count ─────────────────────────────────────────────────────
+        // -- O(1): scan count -----------------------------------------------------
         let scan_count = reader.len();
         if scan_count == 0 {
             return Err(ChromascopeError::FileNotOpened(
@@ -212,7 +213,7 @@ impl MzData {
             ));
         }
 
-        // ── O(1): RT bounds from first and last spectrum ──────────────────────────
+        // -- O(1): RT bounds from first and last spectrum --------------------------
         // File is always sorted by RT, so index 0 == min_rt, last index == max_rt.
         let min_rt = reader
             .get_spectrum_by_index(0)
@@ -223,43 +224,54 @@ impl MzData {
             .map(|s| s.start_time() as f32)
             .unwrap_or(0.0);
 
-        // ── O(20): scan filters from first 10 + last 10 spectra ──────────────────
-        // DDA files cycle MS1→MS2→…→MS1, so all unique (ms_level, polarity)
-        // pairs appear within the first few cycles. Sampling 20 spectra
-        // (first 10 + last 10, no overlap) is a safe upper bound.
-        const FILTER_SAMPLE: usize = 10;
-        let first_end = FILTER_SAMPLE.min(scan_count);
-        let last_start = scan_count.saturating_sub(FILTER_SAMPLE).max(first_end); // no overlap
-
-        let mut scan_filters: Vec<(u8, ScanPolarity)> = Vec::new();
-        for idx in (0..first_end).chain(last_start..scan_count) {
-            if let Some(spectrum) = reader.get_spectrum_by_index(idx) {
-                let pair = (spectrum.description.ms_level, spectrum.description.polarity);
-                if !scan_filters.contains(&pair) {
-                    scan_filters.push(pair);
-                }
-            }
-        }
-
-        // ── O(n), zero peak decoding: m/z bounds from scan window metadata ────────
-        // ScanWindow::lower_bound / upper_bound are populated during XML tag
-        // parsing, before any base64/zlib binary array work is done.
-        // See mzdata scan_properties.rs
+        // -- O(n): per-filter m/z ranges + global m/z bounds ---------------------
+        // Iterates all spectra reading only scan-window metadata (zero peak decoding).
+        // MS1 entries are keyed by (ms_level, polarity, None).
+        // MS2+ entries are keyed by (ms_level, polarity, Some(precursor_mz)) so every
+        // isolation target gets its own dropdown row.
+        // Uses Vec instead of HashMap because ScanPolarity does not implement Hash.
+        let mut filter_ranges: Vec<(u8, ScanPolarity, Option<f64>, f64, f64)> = Vec::new();
         let mut min_mz = f64::MAX;
         let mut max_mz = f64::MIN;
 
         for spectrum in reader.iter() {
+            let ms_level = spectrum.description.ms_level;
+            let polarity = spectrum.description.polarity;
+            // For MS2+ spectra key by the precursor isolation target m/z.
+            let precursor_key: Option<f64> = if ms_level > 1 {
+                spectrum
+                    .description
+                    .precursor
+                    .first()
+                    .and_then(|p| p.ions.first())
+                    .map(|ion| ion.mz)
+            } else {
+                None
+            };
+            // Find-or-insert the entry for this (ms_level, polarity, precursor_key) triplet.
+            let entry = if let Some(idx) = filter_ranges.iter().position(|(ms, pol, pre, _, _)| {
+                *ms == ms_level && *pol == polarity && *pre == precursor_key
+            }) {
+                &mut filter_ranges[idx]
+            } else {
+                filter_ranges.push((ms_level, polarity, precursor_key, f64::MAX, f64::MIN));
+                filter_ranges.last_mut().unwrap()
+            };
             for scan_event in spectrum.description.acquisition.scans.iter() {
                 for window in scan_event.scan_windows.iter() {
                     if !window.is_empty() {
-                        min_mz = min_mz.min(window.lower_bound as f64);
-                        max_mz = max_mz.max(window.upper_bound as f64);
+                        let lo = window.lower_bound as f64;
+                        let hi = window.upper_bound as f64;
+                        min_mz = min_mz.min(lo);
+                        max_mz = max_mz.max(hi);
+                        entry.3 = entry.3.min(lo);
+                        entry.4 = entry.4.max(hi);
                     }
                 }
             }
         }
 
-        // ── O(20): peak sampling fallback (only if scan windows absent) ───────────
+        // -- O(20): peak sampling fallback (only if scan windows absent) -----------
         // Some converters omit <scanWindowList> in their mzML output.
         // Samples first 10 + last 10 spectra and decodes their peaks.
         if min_mz == f64::MAX || max_mz == f64::MIN {
@@ -275,11 +287,34 @@ impl MzData {
 
             for idx in (0..first_end).chain(last_start..scan_count) {
                 if let Some(spectrum) = reader.get_spectrum_by_index(idx) {
+                    let ms_level = spectrum.description.ms_level;
+                    let polarity = spectrum.description.polarity;
+                    let precursor_key: Option<f64> = if ms_level > 1 {
+                        spectrum
+                            .description
+                            .precursor
+                            .first()
+                            .and_then(|p| p.ions.first())
+                            .map(|ion| ion.mz)
+                    } else {
+                        None
+                    };
+                    let entry = if let Some(pos) =
+                        filter_ranges.iter().position(|(ms, pol, pre, _, _)| {
+                            *ms == ms_level && *pol == polarity && *pre == precursor_key
+                        }) {
+                        &mut filter_ranges[pos]
+                    } else {
+                        filter_ranges.push((ms_level, polarity, precursor_key, f64::MAX, f64::MIN));
+                        filter_ranges.last_mut().unwrap()
+                    };
                     if let Some(arrays) = spectrum.arrays.as_ref() {
                         if let Ok(mzs) = arrays.mzs() {
                             for &mz in mzs.iter() {
                                 min_mz = min_mz.min(mz);
                                 max_mz = max_mz.max(mz);
+                                entry.3 = entry.3.min(mz);
+                                entry.4 = entry.4.max(mz);
                             }
                         }
                     }
@@ -302,7 +337,28 @@ impl MzData {
             max_rt,
             scan_count,
         };
-        self.available_scan_filters = scan_filters;
+
+        // Normalise per-filter bounds: fill any sentinel values with the global bounds,
+        // then sort MS1 < MS2 < …, within each level sort by polarity then precursor m/z.
+        for (_, _, _, lo, hi) in &mut filter_ranges {
+            if *lo == f64::MAX {
+                *lo = min_mz;
+            }
+            if *hi == f64::MIN {
+                *hi = max_mz;
+            }
+        }
+        filter_ranges.sort_by(|a, b| {
+            a.0.cmp(&b.0)
+                .then_with(|| format!("{:?}", a.1).cmp(&format!("{:?}", b.1)))
+                .then_with(|| match (a.2, b.2) {
+                    (None, None) => std::cmp::Ordering::Equal,
+                    (None, Some(_)) => std::cmp::Ordering::Less,
+                    (Some(_), None) => std::cmp::Ordering::Greater,
+                    (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal),
+                })
+        });
+        self.available_scan_filters = filter_ranges;
 
         info!(
         "Extracted bounds: m/z [{:.2}-{:.2}], RT [{:.2}-{:.2}] min, {} scans, {} unique scan filters",
@@ -331,6 +387,7 @@ impl MzData {
         ms_level: u8,
         polarity: ScanPolarity,
         mz_range: Option<(f64, f64)>,
+        precursor_mz: Option<f64>,
     ) -> Result<ChromatogramData> {
         info!(
             "Attempting to read BIC of {:?} at MS{} {:?}",
@@ -343,7 +400,7 @@ impl MzData {
             )
         })?;
 
-        // ── Tier 1: embedded chromatogram fast path ───────────────────────────
+        // -- Tier 1: embedded chromatogram fast path ---------------------------
         // Only valid when no m/z range filter is requested and ms_level == 1.
         if mz_range.is_none() && ms_level == 1 {
             let embedded = reader
@@ -357,7 +414,7 @@ impl MzData {
             info!("No embedded BPC found, falling back to spectrum iteration");
         }
 
-        // ── Tier 2: spectrum iteration fallback ───────────────────────────────
+        // -- Tier 2: spectrum iteration fallback -------------------------------
         // MetadataOnly is valid for full-file BPC: base peak intensity
         // (MS:1000505) and base peak m/z (MS:1000504) are CV params on the
         // spectrum description — no binary array decoding needed.
@@ -367,7 +424,18 @@ impl MzData {
 
         let mut results: Vec<(f32, f32, f32, usize)> = reader
             .iter()
-            .filter(|s| s.description.ms_level == ms_level && s.description.polarity == polarity)
+            .filter(|s| {
+                s.description.ms_level == ms_level
+                    && s.description.polarity == polarity
+                    && precursor_mz.map_or(true, |target| {
+                        s.description
+                            .precursor
+                            .first()
+                            .and_then(|p| p.ions.first())
+                            .map(|ion| (ion.mz - target).abs() < 0.01)
+                            .unwrap_or(false)
+                    })
+            })
             .map(|spectrum| {
                 let rt = spectrum.start_time() as f32;
                 let idx = spectrum.index();
@@ -436,7 +504,16 @@ impl MzData {
             results = reader
                 .iter()
                 .filter(|s| {
-                    s.description.ms_level == ms_level && s.description.polarity == polarity
+                    s.description.ms_level == ms_level
+                        && s.description.polarity == polarity
+                        && precursor_mz.map_or(true, |target| {
+                            s.description
+                                .precursor
+                                .first()
+                                .and_then(|p| p.ions.first())
+                                .map(|ion| (ion.mz - target).abs() < 0.01)
+                                .unwrap_or(false)
+                        })
                 })
                 .map(|spectrum| {
                     let rt = spectrum.start_time() as f32;
@@ -486,6 +563,7 @@ impl MzData {
         ms_level: u8,
         polarity: ScanPolarity,
         mz_range: Option<(f64, f64)>,
+        precursor_mz: Option<f64>,
     ) -> Result<ChromatogramData> {
         info!(
             "Attempting to read TIC of {:?} at MS{} {:?}",
@@ -498,7 +576,7 @@ impl MzData {
             )
         })?;
 
-        // ── Tier 1: embedded chromatogram fast path ───────────────────────────
+        // -- Tier 1: embedded chromatogram fast path ---------------------------
         if mz_range.is_none() && ms_level == 1 {
             let embedded = reader
                 .get_chromatogram_by_id("TIC")
@@ -511,14 +589,25 @@ impl MzData {
             info!("No embedded TIC found, falling back to spectrum iteration");
         }
 
-        // ── Tier 2: spectrum iteration fallback ───────────────────────────────
+        // -- Tier 2: spectrum iteration fallback -------------------------------
         if mz_range.is_none() {
             reader.set_detail_level(DetailLevel::MetadataOnly);
         }
 
         let mut results: Vec<(f32, f32, usize)> = reader
             .iter()
-            .filter(|s| s.description.ms_level == ms_level && s.description.polarity == polarity)
+            .filter(|s| {
+                s.description.ms_level == ms_level
+                    && s.description.polarity == polarity
+                    && precursor_mz.map_or(true, |target| {
+                        s.description
+                            .precursor
+                            .first()
+                            .and_then(|p| p.ions.first())
+                            .map(|ion| (ion.mz - target).abs() < 0.01)
+                            .unwrap_or(false)
+                    })
+            })
             .map(|spectrum| {
                 let rt = spectrum.start_time() as f32;
                 let idx = spectrum.index();
@@ -558,7 +647,7 @@ impl MzData {
         // Always restore full detail level so subsequent calls decode arrays.
         reader.set_detail_level(DetailLevel::Full);
 
-        // ── Sanity check: all-zeros retry ────────────────────────────────────────
+        // -- Sanity check: all-zeros retry ----------------------------------------
         // Some converters omit MS:1000285 entirely. If every intensity is 0,
         // fall back to full peak decoding rather than returning a silent flatline.
         if mz_range.is_none() && !results.is_empty() && results.iter().all(|(_, i, _)| *i == 0.0) {
@@ -570,7 +659,16 @@ impl MzData {
             results = reader
                 .iter()
                 .filter(|s| {
-                    s.description.ms_level == ms_level && s.description.polarity == polarity
+                    s.description.ms_level == ms_level
+                        && s.description.polarity == polarity
+                        && precursor_mz.map_or(true, |target| {
+                            s.description
+                                .precursor
+                                .first()
+                                .and_then(|p| p.ions.first())
+                                .map(|ion| (ion.mz - target).abs() < 0.01)
+                                .unwrap_or(false)
+                        })
                 })
                 .map(|spectrum| {
                     let rt = spectrum.start_time() as f32;
@@ -621,6 +719,7 @@ impl MzData {
         ms_level: u8,
         polarity: ScanPolarity,
         mass_tolerance: f64,
+        precursor_mz: Option<f64>,
     ) -> Result<ChromatogramData> {
         info!(
             "Attempting to read XIC of {:?} at MS{} {:?}",
@@ -643,7 +742,18 @@ impl MzData {
         // Step A: Sequential I/O — collect owned spectra (binary arrays stay compressed)
         let spectra: Vec<_> = reader
             .iter()
-            .filter(|s| s.description.ms_level == ms_level && s.description.polarity == polarity)
+            .filter(|s| {
+                s.description.ms_level == ms_level
+                    && s.description.polarity == polarity
+                    && precursor_mz.map_or(true, |target| {
+                        s.description
+                            .precursor
+                            .first()
+                            .and_then(|p| p.ions.first())
+                            .map(|ion| (ion.mz - target).abs() < 0.01)
+                            .unwrap_or(false)
+                    })
+            })
             .collect();
 
         // Step B: Parallel CPU processing
@@ -829,7 +939,7 @@ mod tests {
     fn test_tic_does_not_hold_full_file_in_memory() {
         // Functional proxy: ensure results are still sorted and non-empty
         let mut data = setup_test_parser();
-        let result = data.get_tic(1, ScanPolarity::Positive, None).unwrap();
+        let result = data.get_tic(1, ScanPolarity::Positive, None, None).unwrap();
         assert!(!result.retention_time.is_empty());
         for i in 1..result.retention_time.len() {
             assert!(result.retention_time[i] >= result.retention_time[i - 1]);
@@ -886,17 +996,19 @@ mod tests {
     /// Helper function to create parser with TIC already extracted
     fn setup_with_tic() -> (MzData, ChromatogramData) {
         let mut mzdata = setup_test_parser();
-        let chrom = mzdata.get_tic(1, ScanPolarity::Positive, None).unwrap();
+        let chrom = mzdata
+            .get_tic(1, ScanPolarity::Positive, None, None)
+            .unwrap();
         (mzdata, chrom)
     }
 
-    // ── Parallel correctness tests ────────────────────────────────────────────
+    // -- Parallel correctness tests --------------------------------------------
 
     /// Parallel TIC must return data and must be non-decreasing in RT.
     #[test]
     fn test_parallel_tic_matches_sequential() {
         let mut data = setup_test_parser();
-        let result = data.get_tic(1, ScanPolarity::Positive, None).unwrap();
+        let result = data.get_tic(1, ScanPolarity::Positive, None, None).unwrap();
         assert!(
             !result.retention_time.is_empty(),
             "TIC should have data points"
@@ -918,7 +1030,7 @@ mod tests {
         let mut data = setup_test_parser();
         // Use a wide tolerance to ensure we get hits across the file.
         let result = data
-            .get_xic(722.43, 1, ScanPolarity::Positive, 1000.0)
+            .get_xic(722.43, 1, ScanPolarity::Positive, 1000.0, None)
             .unwrap();
         for i in 1..result.retention_time.len() {
             assert!(
@@ -1060,7 +1172,7 @@ mod tests {
     fn test_get_xic() {
         let mut mzdata = setup_test_parser();
 
-        let result = mzdata.get_xic(722.43, 1, ScanPolarity::Positive, 1000.0);
+        let result = mzdata.get_xic(722.43, 1, ScanPolarity::Positive, 1000.0, None);
         assert!(result.is_ok());
         let chrom = result.unwrap();
         assert!(!chrom.retention_time.is_empty());
@@ -1073,7 +1185,7 @@ mod tests {
     fn test_get_tic() {
         let mut mzdata = setup_test_parser();
 
-        let result = mzdata.get_tic(1, ScanPolarity::Positive, None);
+        let result = mzdata.get_tic(1, ScanPolarity::Positive, None, None);
         assert!(result.is_ok());
         let chrom = result.unwrap();
         assert!(!chrom.retention_time.is_empty());
@@ -1102,7 +1214,7 @@ mod tests {
     fn test_get_bpic() {
         let mut mzdata = setup_test_parser();
 
-        let result = mzdata.get_bpic(1, ScanPolarity::Positive, None);
+        let result = mzdata.get_bpic(1, ScanPolarity::Positive, None, None);
         assert!(result.is_ok());
         let chrom = result.unwrap();
         assert!(!chrom.retention_time.is_empty());
@@ -1123,7 +1235,7 @@ mod tests {
     fn test_get_bpic_negative_polarity() {
         let mut mzdata = setup_test_parser();
 
-        let result = mzdata.get_bpic(1, ScanPolarity::Negative, None);
+        let result = mzdata.get_bpic(1, ScanPolarity::Negative, None, None);
         assert!(result.is_ok());
         // Negative polarity may have no data in this test file
     }
@@ -1133,7 +1245,7 @@ mod tests {
         let mut mzdata = setup_test_parser();
 
         // Unknown polarity should succeed but may return empty data if file has no such spectra
-        let result = mzdata.get_bpic(1, ScanPolarity::Unknown, None);
+        let result = mzdata.get_bpic(1, ScanPolarity::Unknown, None, None);
         assert!(result.is_ok());
     }
 
@@ -1143,7 +1255,9 @@ mod tests {
         // Flatline would indicate that base_peak() is being called on empty decoded
         // arrays (MetadataOnly bug) instead of reading the MS:1000505 CV param.
         let mut mzdata = setup_test_parser();
-        let chrom = mzdata.get_bpic(1, ScanPolarity::Positive, None).unwrap();
+        let chrom = mzdata
+            .get_bpic(1, ScanPolarity::Positive, None, None)
+            .unwrap();
         assert!(
             chrom.intensity.iter().any(|&i| i > 0.0),
             "BPC must have at least some non-zero intensities — got flatline \
@@ -1160,7 +1274,9 @@ mod tests {
     #[test]
     fn test_prepare_for_plot_after_tic() {
         let (mut mzdata, _) = setup_with_tic();
-        let chrom = mzdata.get_tic(1, ScanPolarity::Positive, None).unwrap();
+        let chrom = mzdata
+            .get_tic(1, ScanPolarity::Positive, None, None)
+            .unwrap();
 
         let result = crate::processing::prepare_chromatogram_for_plot(&chrom);
         assert!(result.is_ok());
@@ -1193,7 +1309,7 @@ mod tests {
         let mut mzdata = setup_test_parser();
 
         let chrom = mzdata
-            .get_xic(722.43, 1, ScanPolarity::Positive, 1000.0)
+            .get_xic(722.43, 1, ScanPolarity::Positive, 1000.0, None)
             .unwrap();
 
         let result = crate::processing::prepare_chromatogram_for_plot(&chrom);
@@ -1212,7 +1328,9 @@ mod tests {
     #[test]
     fn test_prepare_for_plot_ordering() {
         let (mut mzdata, _) = setup_with_tic();
-        let chrom = mzdata.get_tic(1, ScanPolarity::Positive, None).unwrap();
+        let chrom = mzdata
+            .get_tic(1, ScanPolarity::Positive, None, None)
+            .unwrap();
 
         let result = crate::processing::prepare_chromatogram_for_plot(&chrom);
         assert!(result.is_ok());
@@ -1229,7 +1347,9 @@ mod tests {
     #[test]
     fn test_prepare_for_plot_starts_with_first_rt_not_zero() {
         let (mut mzdata, _) = setup_with_tic();
-        let chrom = mzdata.get_tic(1, ScanPolarity::Positive, None).unwrap();
+        let chrom = mzdata
+            .get_tic(1, ScanPolarity::Positive, None, None)
+            .unwrap();
         assert!(!chrom.retention_time.is_empty());
         let first_rt = chrom.retention_time[0];
 
@@ -1297,7 +1417,9 @@ mod tests {
     #[test]
     fn test_get_closest_index_exact_match() {
         let (mut mzdata, _) = setup_with_tic();
-        let chrom = mzdata.get_tic(1, ScanPolarity::Positive, None).unwrap();
+        let chrom = mzdata
+            .get_tic(1, ScanPolarity::Positive, None, None)
+            .unwrap();
 
         if !chrom.retention_time.is_empty() {
             let exact_rt = chrom.retention_time[0];
@@ -1313,7 +1435,9 @@ mod tests {
     #[test]
     fn test_get_closest_index_between_points() {
         let (mut mzdata, _) = setup_with_tic();
-        let chrom = mzdata.get_tic(1, ScanPolarity::Positive, None).unwrap();
+        let chrom = mzdata
+            .get_tic(1, ScanPolarity::Positive, None, None)
+            .unwrap();
 
         if chrom.retention_time.len() >= 2 {
             let rt1 = chrom.retention_time[0];
@@ -1334,7 +1458,9 @@ mod tests {
     #[test]
     fn test_get_closest_index_before_first() {
         let (mut mzdata, _) = setup_with_tic();
-        let chrom = mzdata.get_tic(1, ScanPolarity::Positive, None).unwrap();
+        let chrom = mzdata
+            .get_tic(1, ScanPolarity::Positive, None, None)
+            .unwrap();
 
         if !chrom.retention_time.is_empty() {
             let before_rt = chrom.retention_time[0] - 1.0;
@@ -1348,7 +1474,9 @@ mod tests {
     #[test]
     fn test_get_closest_index_after_last() {
         let (mut mzdata, _) = setup_with_tic();
-        let chrom = mzdata.get_tic(1, ScanPolarity::Positive, None).unwrap();
+        let chrom = mzdata
+            .get_tic(1, ScanPolarity::Positive, None, None)
+            .unwrap();
 
         if !chrom.retention_time.is_empty() {
             let after_rt = chrom.retention_time[chrom.retention_time.len() - 1] + 1.0;
@@ -1378,9 +1506,11 @@ mod tests {
     fn test_multiple_extractions_coexist() {
         let mut mzdata = setup_test_parser();
 
-        let tic = mzdata.get_tic(1, ScanPolarity::Positive, None).unwrap();
+        let tic = mzdata
+            .get_tic(1, ScanPolarity::Positive, None, None)
+            .unwrap();
         let xic = mzdata
-            .get_xic(722.43, 1, ScanPolarity::Positive, 1000.0)
+            .get_xic(722.43, 1, ScanPolarity::Positive, 1000.0, None)
             .unwrap();
 
         // Both exist simultaneously
@@ -1394,14 +1524,18 @@ mod tests {
     fn test_switching_extraction_methods() {
         let mut mzdata = setup_test_parser();
 
-        let tic = mzdata.get_tic(1, ScanPolarity::Positive, None).unwrap();
+        let tic = mzdata
+            .get_tic(1, ScanPolarity::Positive, None, None)
+            .unwrap();
         let tic_rt_count = tic.retention_time.len();
 
         let _xic = mzdata
-            .get_xic(722.43, 1, ScanPolarity::Positive, 1000.0)
+            .get_xic(722.43, 1, ScanPolarity::Positive, 1000.0, None)
             .unwrap();
 
-        let _bic = mzdata.get_bpic(1, ScanPolarity::Positive, None).unwrap();
+        let _bic = mzdata
+            .get_bpic(1, ScanPolarity::Positive, None, None)
+            .unwrap();
 
         assert!(tic_rt_count > 0);
     }
@@ -1421,7 +1555,7 @@ mod tests {
     fn test_get_xic_zero_tolerance() {
         let mut mzdata = setup_test_parser();
 
-        let _result = mzdata.get_xic(722.43, 1, ScanPolarity::Positive, 0.0);
+        let _result = mzdata.get_xic(722.43, 1, ScanPolarity::Positive, 0.0, None);
         // 0.0 is valid (within 0..=1000), should not return error from validation
     }
 
@@ -1429,7 +1563,7 @@ mod tests {
     fn test_get_xic_negative_tolerance() {
         let mut mzdata = setup_test_parser();
 
-        let result = mzdata.get_xic(722.43, 1, ScanPolarity::Positive, -1.0);
+        let result = mzdata.get_xic(722.43, 1, ScanPolarity::Positive, -1.0, None);
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -1441,7 +1575,7 @@ mod tests {
     fn test_get_xic_no_matching_peaks() {
         let mut mzdata = setup_test_parser();
 
-        let result = mzdata.get_xic(50000.0, 1, ScanPolarity::Positive, 0.0001);
+        let result = mzdata.get_xic(50000.0, 1, ScanPolarity::Positive, 0.0001, None);
         assert!(result.is_ok());
         let chrom = result.unwrap();
         // Empty chromatogram for very specific m/z not in file
@@ -1460,7 +1594,7 @@ mod tests {
 
         for polarity in polarities {
             let mut test_data = setup_test_parser();
-            let result = test_data.get_tic(1, polarity, None);
+            let result = test_data.get_tic(1, polarity, None, None);
             assert!(result.is_ok(), "TIC should handle all polarity types");
         }
     }
@@ -1475,7 +1609,7 @@ mod tests {
 
         for polarity in polarities {
             let mut test_data = setup_test_parser();
-            let result = test_data.get_xic(722.43, 1, polarity, 1000.0);
+            let result = test_data.get_xic(722.43, 1, polarity, 1000.0, None);
             assert!(result.is_ok(), "XIC should handle all polarity types");
         }
     }
@@ -1534,7 +1668,9 @@ mod tests {
     fn test_full_pipeline_tic() {
         let mut mzdata = setup_test_parser();
 
-        let chrom = mzdata.get_tic(1, ScanPolarity::Positive, None).unwrap();
+        let chrom = mzdata
+            .get_tic(1, ScanPolarity::Positive, None, None)
+            .unwrap();
         let plot_data = crate::processing::prepare_chromatogram_for_plot(&chrom).unwrap();
         assert!(plot_data.len() > 0);
 
@@ -1547,7 +1683,7 @@ mod tests {
         let mut mzdata = setup_test_parser();
 
         let chrom = mzdata
-            .get_xic(722.43, 1, ScanPolarity::Positive, 1000.0)
+            .get_xic(722.43, 1, ScanPolarity::Positive, 1000.0, None)
             .unwrap();
 
         let plot_data = crate::processing::prepare_chromatogram_for_plot(&chrom).unwrap();
@@ -1576,7 +1712,7 @@ mod tests {
     #[test]
     fn test_get_bpic_file_not_opened() {
         let mut mzdata = MzData::new();
-        let result = mzdata.get_bpic(1, ScanPolarity::Positive, None);
+        let result = mzdata.get_bpic(1, ScanPolarity::Positive, None, None);
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -1587,7 +1723,7 @@ mod tests {
     #[test]
     fn test_get_tic_file_not_opened() {
         let mut mzdata = MzData::new();
-        let result = mzdata.get_tic(1, ScanPolarity::Positive, None);
+        let result = mzdata.get_tic(1, ScanPolarity::Positive, None, None);
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -1598,7 +1734,7 @@ mod tests {
     #[test]
     fn test_get_xic_file_not_opened() {
         let mut mzdata = MzData::new();
-        let result = mzdata.get_xic(722.43, 1, ScanPolarity::Positive, 1000.0);
+        let result = mzdata.get_xic(722.43, 1, ScanPolarity::Positive, 1000.0, None);
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -1612,14 +1748,14 @@ mod tests {
     fn test_invalid_mass_returns_error() {
         let mut mzdata = MzData::new();
 
-        let result = mzdata.get_xic(-100.0, 1, ScanPolarity::Positive, 10.0);
+        let result = mzdata.get_xic(-100.0, 1, ScanPolarity::Positive, 10.0, None);
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
             ChromascopeError::InvalidMass(_)
         ));
 
-        let result = mzdata.get_xic(0.0, 1, ScanPolarity::Positive, 10.0);
+        let result = mzdata.get_xic(0.0, 1, ScanPolarity::Positive, 10.0, None);
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -1631,14 +1767,14 @@ mod tests {
     fn test_invalid_tolerance_returns_error() {
         let mut mzdata = MzData::new();
 
-        let result = mzdata.get_xic(100.0, 1, ScanPolarity::Positive, -5.0);
+        let result = mzdata.get_xic(100.0, 1, ScanPolarity::Positive, -5.0, None);
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
             ChromascopeError::InvalidMassTolerance(_)
         ));
 
-        let result = mzdata.get_xic(100.0, 1, ScanPolarity::Positive, 5000.0);
+        let result = mzdata.get_xic(100.0, 1, ScanPolarity::Positive, 5000.0, None);
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -1662,7 +1798,7 @@ mod tests {
         let mut mzdata = MzData::new();
 
         // These should pass validation but fail because file not opened
-        let result = mzdata.get_xic(100.5, 1, ScanPolarity::Positive, 10.0);
+        let result = mzdata.get_xic(100.5, 1, ScanPolarity::Positive, 10.0, None);
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -1690,7 +1826,7 @@ mod tests {
         let mut mzdata = setup_test_parser();
 
         let chrom = mzdata
-            .get_xic(722.43, 1, ScanPolarity::Positive, 1000.0)
+            .get_xic(722.43, 1, ScanPolarity::Positive, 1000.0, None)
             .unwrap();
 
         assert_eq!(chrom.retention_time.len(), chrom.index.len());
@@ -1723,7 +1859,7 @@ mod tests {
         let mut mzdata = setup_test_parser();
 
         let chrom = mzdata
-            .get_xic(722.43, 1, ScanPolarity::Positive, 1000.0)
+            .get_xic(722.43, 1, ScanPolarity::Positive, 1000.0, None)
             .unwrap();
 
         for &intensity in chrom.intensity.iter() {
@@ -1740,7 +1876,7 @@ mod tests {
         let mut mzdata = setup_test_parser();
 
         let chrom = mzdata
-            .get_xic(722.43, 1, ScanPolarity::Positive, 1000.0)
+            .get_xic(722.43, 1, ScanPolarity::Positive, 1000.0, None)
             .unwrap();
 
         if !chrom.retention_time.is_empty() {
@@ -1760,9 +1896,11 @@ mod tests {
         let mut mzdata = setup_test_parser();
 
         let xic = mzdata
-            .get_xic(722.43, 1, ScanPolarity::Positive, 1000.0)
+            .get_xic(722.43, 1, ScanPolarity::Positive, 1000.0, None)
             .unwrap();
-        let tic = mzdata.get_tic(1, ScanPolarity::Positive, None).unwrap();
+        let tic = mzdata
+            .get_tic(1, ScanPolarity::Positive, None, None)
+            .unwrap();
 
         assert_eq!(xic.retention_time.len(), xic.index.len());
         assert_eq!(xic.retention_time.len(), xic.intensity.len());
@@ -1784,10 +1922,12 @@ mod tests {
         let mut mzdata = setup_test_parser();
 
         let xic = mzdata
-            .get_xic(722.43, 1, ScanPolarity::Positive, 1000.0)
+            .get_xic(722.43, 1, ScanPolarity::Positive, 1000.0, None)
             .unwrap();
 
-        let tic = mzdata.get_tic(1, ScanPolarity::Positive, None).unwrap();
+        let tic = mzdata
+            .get_tic(1, ScanPolarity::Positive, None, None)
+            .unwrap();
         let max_spectrum_idx = *tic.index.iter().max().unwrap();
 
         for &idx in xic.index.iter() {
@@ -1829,7 +1969,7 @@ mod tests {
         let mut mzdata = setup_test_parser();
 
         for mass in [722.43, 500.0, 1000.0] {
-            let result = mzdata.get_xic(mass, 1, ScanPolarity::Positive, 1000.0);
+            let result = mzdata.get_xic(mass, 1, ScanPolarity::Positive, 1000.0, None);
             assert!(result.is_ok());
         }
     }
@@ -1880,7 +2020,7 @@ mod tests {
         println!("Embedded chromatogram count: {count}");
 
         let mut data = setup_test_parser();
-        let result = data.get_tic(1, ScanPolarity::Positive, None).unwrap();
+        let result = data.get_tic(1, ScanPolarity::Positive, None, None).unwrap();
         assert!(!result.retention_time.is_empty());
         for i in 1..result.retention_time.len() {
             assert!(
@@ -1895,7 +2035,7 @@ mod tests {
         // After get_tic(), get_mass_spectrum_by_index() must still decode arrays.
         // If detail level was not restored, this would return empty arrays.
         let mut data = setup_test_parser();
-        let chrom = data.get_tic(1, ScanPolarity::Positive, None).unwrap();
+        let chrom = data.get_tic(1, ScanPolarity::Positive, None, None).unwrap();
         if !chrom.index.is_empty() {
             let spectrum = data.get_mass_spectrum_by_index(chrom.index[0]).unwrap();
             assert!(
@@ -1913,7 +2053,7 @@ mod tests {
         // (same assertions as before, proving no spectra were wrongly excluded).
         let mut mzdata = setup_test_parser();
         let chrom = mzdata
-            .get_xic(722.43, 1, ScanPolarity::Positive, 10.0) // tight tol: few hits
+            .get_xic(722.43, 1, ScanPolarity::Positive, 10.0, None) // tight tol: few hits
             .unwrap();
         // All returned intensities must be positive (pre-filter must not include
         // spectra that have zero matching intensity after centroiding).
@@ -1935,7 +2075,7 @@ mod tests {
         // range that covers the test file's actual m/z content (~100-2000).
         let mut mzdata = setup_test_parser();
         let chrom = mzdata
-            .get_tic(1, ScanPolarity::Positive, Some((200.0, 800.0)))
+            .get_tic(1, ScanPolarity::Positive, Some((200.0, 800.0)), None)
             .unwrap();
         assert!(
             !chrom.retention_time.is_empty(),
@@ -1949,5 +2089,52 @@ mod tests {
         for i in 1..chrom.retention_time.len() {
             assert!(chrom.retention_time[i] >= chrom.retention_time[i - 1]);
         }
+    }
+
+    #[test]
+    fn test_available_scan_filters_includes_ms1() {
+        let mut data = MzData::new();
+        let path = std::path::PathBuf::from("test_file").join("data_dependent_02.mzML");
+        data.open_msfile(&path).expect("Failed to load test file");
+
+        // The test file contains only MS1 survey scans.
+        let ms_levels: Vec<u8> = data
+            .available_scan_filters
+            .iter()
+            .map(|(lvl, _, _, _, _)| *lvl)
+            .collect();
+        assert!(
+            !ms_levels.is_empty(),
+            "available_scan_filters should not be empty"
+        );
+        assert!(ms_levels.contains(&1), "Should have MS1 filter");
+    }
+
+    #[test]
+    fn test_ms1_filter_has_valid_mz_range() {
+        let mut data = MzData::new();
+        let path = std::path::PathBuf::from("test_file").join("data_dependent_02.mzML");
+        data.open_msfile(&path).expect("Failed to load test file");
+
+        let ms1 = data
+            .available_scan_filters
+            .iter()
+            .find(|(lvl, _, _, _, _)| *lvl == 1)
+            .copied();
+
+        let (_, _, _, lo, hi) = ms1.expect("MS1 filter should be present");
+        println!("MS1: {:.2}\u{2013}{:.2}", lo, hi);
+        assert!(lo >= 0.0, "MS1 min m/z should be non-negative");
+        assert!(hi > lo, "MS1 max m/z should be greater than min m/z");
+        assert!(hi > 0.0, "MS1 max m/z should be positive");
+        // Per-filter range should not be sentinel values
+        assert!(
+            lo < f64::MAX,
+            "MS1 min m/z should have been populated from scan windows"
+        );
+        assert!(
+            hi > f64::MIN,
+            "MS1 max m/z should have been populated from scan windows"
+        );
     }
 }
