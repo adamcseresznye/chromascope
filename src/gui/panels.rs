@@ -10,6 +10,7 @@ use crate::{
 use eframe::egui;
 use egui::{Color32, Context, Ui};
 use log::{debug, error, info, warn};
+use mzdata::spectrum::ScanPolarity;
 /// Updates the data selection panel in the user interface.
 ///
 /// This function creates a top panel in the UI that contains the following elements:
@@ -652,13 +653,9 @@ pub fn update_central_panel(app: &mut MzViewerApp, ctx: &Context) {
                 .show(ui, |ui| {
                     debug!("Plotting chromatogram.");
                     let chromatogram = plotting::plot_chromatogram(app, ui, ctx);
-                    chromatogram.context_menu(|ui| {
-                        ui.heading("Plot Properties");
-                        ui.separator();
-                        debug!("Adding plot properties.");
-                        add_plot_properties(app, ui);
-                        ui.separator();
-                    });
+                    if chromatogram.secondary_clicked() {
+                        app.plot_properties_open = true;
+                    }
 
                     // Integration result bar — shown only when relevant
                     match (
@@ -776,17 +773,15 @@ pub fn add_range_options(app: &mut MzViewerApp, ui: &mut Ui) {
 pub fn add_scan_filter_dropdown(app: &mut MzViewerApp, ui: &mut Ui) {
     ui.label("Scan Filter:");
 
-    // Get available scan filters and bounds from active file
-    let (available_filters, bounds) = if let Some(active_id) = app.active_file_id {
+    // Get available scan filters from active file
+    let available_filters = if let Some(active_id) = app.active_file_id {
         if let Some(file) = app.files.get(&active_id) {
-            let mut filters = file.data.available_scan_filters.to_vec();
-            filters.sort_by_key(|(ms_level, polarity)| (*ms_level, format!("{:?}", polarity)));
-            (filters, Some(&file.data.bounds))
+            file.data.available_scan_filters.to_vec()
         } else {
-            (vec![], None)
+            vec![]
         }
     } else {
-        (vec![], None)
+        vec![]
     };
 
     if available_filters.is_empty() {
@@ -794,44 +789,82 @@ pub fn add_scan_filter_dropdown(app: &mut MzViewerApp, ui: &mut Ui) {
         return;
     }
 
-    // Format current selection for display with m/z range
-    let current_selection = if let Some(bounds) = bounds {
-        format!(
-            "MS{} {:?} [m/z {:.2} - {:.2}]",
-            app.user_input.ms_level, app.user_input.polarity, bounds.min_mz, bounds.max_mz
-        )
-    } else {
-        format!(
-            "MS{} {:?}",
-            app.user_input.ms_level, app.user_input.polarity
-        )
-    };
+    // Format current selection using the per-filter m/z range
+    let current_selection = available_filters
+        .iter()
+        .find(|(lvl, pol, pre, _, _)| {
+            *lvl == app.user_input.ms_level
+                && *pol == app.user_input.polarity
+                && *pre == app.user_input.precursor_mz
+        })
+        .map(|(lvl, pol, pre, lo, hi)| format_filter_label(lvl, pol, pre, lo, hi))
+        .unwrap_or_else(|| {
+            format!(
+                "MS{} {}",
+                app.user_input.ms_level,
+                polarity_label(&app.user_input.polarity)
+            )
+        });
 
     egui::ComboBox::from_label("")
         .selected_text(current_selection)
         .show_ui(ui, |ui| {
-            for (ms_level, polarity) in available_filters {
-                // Include m/z range in dropdown items
-                let label = if let Some(bounds) = bounds {
-                    format!(
-                        "MS{} {:?} [m/z {:.2} - {:.2}]",
-                        ms_level, polarity, bounds.min_mz, bounds.max_mz
-                    )
-                } else {
-                    format!("MS{} {:?}", ms_level, polarity)
-                };
+            for (ms_level, polarity, precursor, filter_min_mz, filter_max_mz) in &available_filters
+            {
+                let label = format_filter_label(ms_level, polarity, precursor, filter_min_mz, filter_max_mz);
 
-                let is_selected =
-                    app.user_input.ms_level == ms_level && app.user_input.polarity == polarity;
+                let is_selected = app.user_input.ms_level == *ms_level
+                    && app.user_input.polarity == *polarity
+                    && app.user_input.precursor_mz == *precursor;
 
                 if ui.selectable_label(is_selected, &label).clicked() {
-                    app.user_input.ms_level = ms_level;
-                    app.user_input.polarity = polarity;
+                    app.user_input.ms_level = *ms_level;
+                    app.user_input.polarity = *polarity;
+                    app.user_input.precursor_mz = *precursor;
                     app.state_changed = StateChange::Changed;
                     info!("Scan filter changed to: {}", label);
                 }
             }
         });
+}
+
+/// Formats a scan filter label for display in the dropdown.
+///
+/// For MS1 (no precursor): `"MS1 Positive [m/z 150.00 - 1000.00]"`
+/// For MS2 (with precursor): `"MS2 Positive 159.7894 [m/z 50.00 - 1000.00]"`
+fn format_filter_label(
+    ms_level: &u8,
+    polarity: &ScanPolarity,
+    precursor: &Option<f64>,
+    lo: &f64,
+    hi: &f64,
+) -> String {
+    match precursor {
+        Some(mz) => format!(
+            "MS{} {} {:.4} [m/z {:.2} - {:.2}]",
+            ms_level,
+            polarity_label(polarity),
+            mz,
+            lo,
+            hi
+        ),
+        None => format!(
+            "MS{} {} [m/z {:.2} - {:.2}]",
+            ms_level,
+            polarity_label(polarity),
+            lo,
+            hi
+        ),
+    }
+}
+
+/// Returns a human-readable label for the given scan polarity.
+fn polarity_label(p: &ScanPolarity) -> &'static str {
+    match p {
+        ScanPolarity::Positive => "Positive",
+        ScanPolarity::Negative => "Negative",
+        _ => "Unknown",
+    }
 }
 
 /// Adds the plot type options UI elements to the provided `Ui`.
