@@ -597,6 +597,10 @@ pub fn update_file_information_panel(app: &mut MzViewerApp, ctx: &egui::Context)
                         app.active_file_id = app.files.keys().min().copied();
 
                         if let Some(new_active) = app.active_file_id {
+                            // Sync color picker to the newly active file's color
+                            if let Some(new_file) = app.files.get(&new_active) {
+                                app.user_input.line_color = new_file.display.color;
+                            }
                             info!("Active file changed to ID: {} after removal", new_active);
                         } else {
                             info!("No files remain after removal");
@@ -606,6 +610,8 @@ pub fn update_file_information_panel(app: &mut MzViewerApp, ctx: &egui::Context)
                     // Update validity state
                     if app.files.is_empty() {
                         app.invalid_file = FileValidity::Invalid;
+                        app.user_input.line_color = LineColor::default();
+                        app.user_input.retention_time_ms_spectrum = None;
                     }
                     app.integration = crate::gui::state::IntegrationState::default();
                 }
