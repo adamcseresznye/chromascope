@@ -78,21 +78,6 @@ impl LineColor {
             Self::Gold => egui::ecolor::Color32::GOLD,
         }
     }
-
-    pub fn label(&self) -> &'static str {
-        match self {
-            Self::Red => "Red",
-            Self::Green => "Green",
-            Self::Blue => "Blue",
-            Self::Yellow => "Yellow",
-            Self::White => "White",
-            Self::Gray => "Gray",
-            Self::Cyan => "Cyan",
-            Self::Orange => "Orange",
-            Self::Magenta => "Magenta",
-            Self::Gold => "Gold",
-        }
-    }
 }
 
 const DASHED_LINE_LENGTH: f32 = 10.0;

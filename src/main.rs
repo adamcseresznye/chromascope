@@ -34,11 +34,11 @@ fn main() {
         Box::new(|cc| Ok(Box::new(MzViewerApp::new(cc)))),
     ) {
         Ok(_) => {
-            info!("Application exited succesfully.");
+            info!("Application exited successfully.");
             process::exit(0)
         }
         Err(e) => {
-            error!("Error occured: {:?}.", e);
+            error!("Error occurred: {:?}.", e);
             process::exit(1)
         }
     }
