@@ -557,7 +557,6 @@ pub fn integrate_peak(data: &[[f64; 2]], start_rt: f64, end_rt: f64) -> Result<f
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     // Helper to load test file
     // Helper to load test file

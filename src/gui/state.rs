@@ -110,7 +110,7 @@ impl Default for UserInput {
             line_type: LineType::default(),
             line_color: LineColor::default(),
             smoothing: u8::default(),
-            line_width: f32::default(),
+            line_width: 1.0,
             retention_time_ms_spectrum: None,
             range_enabled: bool::default(),
             range_min: ValidatedInput::default(),
