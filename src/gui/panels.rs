@@ -1,4 +1,4 @@
-﻿use super::plotting;
+use super::plotting;
 use crate::gui::state::{
     next_color_for_index, FileCache, FileDisplaySettings, FileId, FileValidity, MzViewerApp,
     OpenFile, StateChange,
@@ -811,7 +811,13 @@ pub fn add_scan_filter_dropdown(app: &mut MzViewerApp, ui: &mut Ui) {
         .show_ui(ui, |ui| {
             for (ms_level, polarity, precursor, filter_min_mz, filter_max_mz) in &available_filters
             {
-                let label = format_filter_label(ms_level, polarity, precursor, filter_min_mz, filter_max_mz);
+                let label = format_filter_label(
+                    ms_level,
+                    polarity,
+                    precursor,
+                    filter_min_mz,
+                    filter_max_mz,
+                );
 
                 let is_selected = app.user_input.ms_level == *ms_level
                     && app.user_input.polarity == *polarity
