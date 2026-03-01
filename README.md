@@ -18,25 +18,23 @@
 
 ## Why Chromascope?
 
-mzML is an open, XML-based format widely used for storing and processing mass spectrometry data. While vendor-specific tools handle proprietary formats well, finding a lightweight GUI that works seamlessly with mzML files remains surprisingly difficult. Chromascope fills that gap by offering instant, no-setup inspection of your mass spectrometry data.
+mzML is an open, XML-based format widely used for storing and processing mass spectrometry data. While vendor-specific tools handle proprietary formats well, finding a truly lightweight GUI that works seamlessly with mzML files remains surprisingly difficult. 
+
+Chromascope fills that gap by offering instant, no-setup inspection of your mass spectrometry data. The compiled binary is incredibly small (less than 5 MB on Windows), making it highly portable, fast, and perfect for smaller machines or low-resource environments.
 
 
-## Features
+## Features & Interactive Controls
 
-- **Native mzML support**
-- **Multi-file analysis** — load and compare multiple files simultaneously
-- **TIC, BPC, and XIC extraction**
-- **Customizable display** — line color, style, smoothing, line width
-- **Cross-platform** — Windows, macOS, and Linux
+Chromascope is designed to be highly interactive and easy to use. Here is what you can do and how to do it:
 
-
-## Interactive controls and Pro-tips
-
-Chromascope is designed to be highly interactive. Here are a few essential controls that might not be immediately obvious:
-
+- **Native mzML & Multi-file support**: Load and compare multiple `.mzML` files simultaneously. Simply use the `File` menu to load them in parallel.
 - **View Mass Spectra**: **Double-click** anywhere on a chromatogram to extract and display the mass spectrum for that specific retention time.
 - **Peak integration**: **Right-click and drag** across a peak on the chromatogram to perform a trapezoidal area integration.
-- **Advanced filtering**: Use the Plot Properties (open via a right click on the chromatogram) to filter data by MS level (e.g., MS1 vs MS2), polarity, precursor m/z, and specific m/z ranges.
+- **Trace Extraction (TIC, BPC, XIC)**: Switch between Total Ion Chromatogram, Base Peak Chromatogram, and Extracted Ion Chromatogram modes. **Right-click the chromatogram** to open Plot Properties and select your desired trace.
+- **Advanced filtering**: Filter your mass spectrometry data by MS level (e.g., MS1 vs MS2), polarity, precursor m/z, and specific m/z ranges directly from the Plot Properties menu.
+- **Customizable display**: Personalize how your data is presented by adjusting line color, style, smoothing, and line width via the `Display` menu.
+- **Cross-platform**: Runs as a standalone executable on Windows, macOS, and Linux without needing an installer.
+
 
 ## Usage
 
