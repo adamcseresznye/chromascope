@@ -48,15 +48,19 @@
 //!
 //! This module can be used to define and manipulate line properties in graphical applications, allowing for customizable visual representations of data. The enums can be easily converted to types compatible with the `egui` and `egui_plot` libraries for rendering.
 
-#[derive(PartialEq, Default)]
+#[derive(PartialEq, Default, Clone, Copy, Debug)]
 pub enum LineColor {
     #[default]
     Red,
     Green,
     Blue,
-    Black,
     Yellow,
     White,
+    Gray,
+    Cyan,
+    Orange,
+    Magenta,
+    Gold,
 }
 
 impl LineColor {
@@ -65,9 +69,13 @@ impl LineColor {
             Self::Red => egui::ecolor::Color32::RED,
             Self::Green => egui::ecolor::Color32::GREEN,
             Self::Blue => egui::ecolor::Color32::BLUE,
-            Self::Black => egui::ecolor::Color32::BLACK,
             Self::Yellow => egui::ecolor::Color32::YELLOW,
             Self::White => egui::ecolor::Color32::WHITE,
+            Self::Gray => egui::ecolor::Color32::GRAY,
+            Self::Cyan => egui::ecolor::Color32::CYAN,
+            Self::Orange => egui::ecolor::Color32::ORANGE,
+            Self::Magenta => egui::ecolor::Color32::MAGENTA,
+            Self::Gold => egui::ecolor::Color32::GOLD,
         }
     }
 }
@@ -97,7 +105,7 @@ impl LineType {
     }
 }
 
-#[derive(PartialEq, Debug, Default)]
+#[derive(PartialEq, Debug, Default, Clone, Copy)]
 pub enum PlotType {
     Xic,
     Bpc,
