@@ -1,57 +1,65 @@
-<p align="center">
-<img src="assets/original_icons/logo1.png" alt="Chromascope logo" width="200" />
-</p>
+<div align="center">
 
-<p align="center">
-<a target="_blank" href="https://adamcseresznye.github.io/chromascope/docs/chromascope/index.html" title="Documentation"><img src="https://img.shields.io/badge/README-Documentation-green.svg"></a>
-</p>
+<img src="assets/icon.png" alt="Chromascope logo" width="120" />
 
 # Chromascope
 
-Chromascope is a lightweight and easy-to-use GUI application designed for reading and visualizing mzML mass spectrometry data.
+**A lightweight GUI for reading and visualizing mzML mass spectrometry data**
 
-<p align="center">
-<img src="assets/demo.gif" alt="demo" width="900" />
-</p>
+[![Rust](https://img.shields.io/badge/built%20with-Rust-orange?logo=rust)](https://www.rust-lang.org/)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)]()
 
-## Why
+<img src="assets/demo.gif" alt="Chromascope demo" width="860" />
 
-mzML is an open, XML-based format, commonly used for storing and processing mass spectrometry data. While vendor-specific mass spectrometry files are straightforward to open and read, finding a GUI-based tool that handles mzML files with the same ease can be challenging. This project aims to offer a simple, lightweight application for quickly inspecting mass spectrometry data.
+</div>
 
-## The name
+---
 
-Chromascope, a fusion of ‘chromatography’ and ‘scope, as in telescope,’ embodies the spirit of exploration, analysis, and the pursuit of insight as you work with mass spectrometry data.
+## Why Chromascope?
+
+mzML is an open, XML-based format widely used for storing and processing mass spectrometry data. While vendor-specific tools handle proprietary formats well, finding a lightweight GUI that works seamlessly with mzML files remains surprisingly difficult. Chromascope fills that gap by offering instant, no-setup inspection of your mass spectrometry data.
+
 
 ## Features
 
-- **mzML File Support**: Chromascope supports the mzML format, a widely used open standard for mass spectrometry data.
-- **User-Friendly Interface**: Easily plot TIC, BPC, or XIC by clicking on the chromatogram, with a triple-click revealing the mass spectrum at any selected retention time.
-- **Customizable Display**: Adjust visual settings like smoothing, line color, and line style.
-- **Dark Theme Support**: Enjoy an out-of-the-box dark theme for a comfortable viewing experience.
-- **Cross-Platform**: The application is built to run smoothly on multiple operating systems, including Windows, macOS, and Linux.
+- **Native mzML support**
+- **Multi-file analysis** — load and compare multiple files simultaneously
+- **TIC, BPC, and XIC extraction**
+- **Customizable display** — line color, style, smoothing, line width
+- **Cross-platform** — Windows, macOS, and Linux
+
+
+## Interactive controls and Pro-tips
+
+Chromascope is designed to be highly interactive. Here are a few essential controls that might not be immediately obvious:
+
+- **View Mass Spectra**: **Double-click** anywhere on a chromatogram to extract and display the mass spectrum for that specific retention time.
+- **Peak integration**: **Right-click and drag** across a peak on the chromatogram to perform a trapezoidal area integration.
+- **Advanced filtering**: Use the Plot Properties (open via a right click on the chromatogram) to filter data by MS level (e.g., MS1 vs MS2), polarity, precursor m/z, and specific m/z ranges.
 
 ## Usage
 
 1. **Launch Chromascope**:
    - Run the application by executing the binary or running `cargo run` from the project directory.
 
-2. **Open an mzML File**:
-   - Use the `File` menu to load an mzML file into Chromascope.
+2. **Open mzML Files**:
+   - Use the `File` menu to load one or more mzML files into Chromascope.
 
 3. **Explore Data**:
-   - Once the mzML file is loaded, you can use the provided visualization tools to explore the mass spectrometry data. Click on the chromatogram to access options like TIC, BPC, and XIC. To view the mass spectrum at a specific retention time, simply triple-click on the chromatogram at that point.
+   - Switch between TIC, BPC, and XIC modes using the Plot Properties. Use the interactive controls (double-click, right-click drag) to extract a corresponding mass spectrum or integrate a peak area.
 
 4. **Customizing Views**:
    - Adjust the display settings via the `Display` menu to customize how your data is presented.
 
 ## Installation
 
-### Downloading Pre-built Binaries
+### Downloading pre-built binaries
 
 You can download pre-built binaries for your operating system from the [Releases](https://github.com/adamcseresznye/chromascope/releases) page.
 
 
-### Building from Source
+### Building from source
 
 To build Chromascope from source, follow these steps:
 
@@ -75,18 +83,11 @@ To build Chromascope from source, follow these steps:
 
 We welcome contributions to Chromascope! If you have suggestions for new features, bug reports, or would like to contribute code, please open an issue or submit a pull request. For the contribution guidelines see [here](https://github.com/adamcseresznye/chromascope/blob/main/.github/CONTRIBUTING.md).
 
-## Planned improvements
-- 🚧 Enable display of SIM and MS2 chromatograms and spectra.
-- 🚧 Introduce functionality for simple peak integration.
-- 🚧 Provide support for handling and processing multiple files simultaneously.
 
 ## License
 
-Chromascope is licensed under the MIT License. See the [LICENSE](https://github.com/adamcseresznye/chromascope/blob/main/LICENSE-MIT) file for more details.
+Chromascope is licensed under the GPL-3.0 License. See the [LICENSE](https://github.com/adamcseresznye/chromascope/blob/main/LICENSE) file for more details.
 
-## Contact
-
-For any questions or support, feel free to open an issue on the GitHub repository.
 
 ## Acknowledgements
 
