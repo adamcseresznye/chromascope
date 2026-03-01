@@ -27,9 +27,14 @@ pub fn render_error_dialog(app: &mut MzViewerApp, ctx: &egui::Context) {
 pub fn render_xic_settings_window(app: &mut MzViewerApp, ctx: &egui::Context) {
     if app.options_window_open {
         let mut error_message: Option<String> = None;
+        // Use a local copy for `.open()` to avoid a simultaneous mutable borrow
+        // of `app` inside the closure (needed to set `app.options_window_open = false`
+        // from the Confirm button).
+        let mut window_open = true;
+        let mut close_on_confirm = false;
 
         egui::Window::new("XIC settings")
-            .open(&mut app.options_window_open)
+            .open(&mut window_open)
             .show(ctx, |ui| {
                 ui.label("Enter m/z and mass tolerance values in ppm:");
 
@@ -88,6 +93,7 @@ pub fn render_xic_settings_window(app: &mut MzViewerApp, ctx: &egui::Context) {
                     );
                     ui.add_space(5.0);
                 }
+                ui.label("m/z:");
                 if ui
                     .add(
                         egui::TextEdit::singleline(&mut app.user_input.mass.text)
@@ -95,24 +101,35 @@ pub fn render_xic_settings_window(app: &mut MzViewerApp, ctx: &egui::Context) {
                     )
                     .lost_focus()
                 {
-                    let current_mass = app.user_input.mass.value;
-                    let current_tolerance = app.user_input.mass_tolerance.value;
-                    // Validate: mass must be positive and pass XicParams validation
+                    // Capture text before sync (sync may revert it on failure).
+                    let original_mass_text = app.user_input.mass.text.clone();
+                    // Use the pending tolerance text for cross-field validation so that
+                    // typing tolerance first does not block mass from being committed.
+                    let pending_tolerance: f64 = app
+                        .user_input
+                        .mass_tolerance
+                        .text
+                        .parse()
+                        .unwrap_or(app.user_input.mass_tolerance.value);
                     let valid = app.user_input.mass.sync_on_focus_lost(|m| {
                         let temp_bounds = crate::validation::DataBounds::unrestricted();
-                        XicParams::new(*m, app.user_input.polarity, current_tolerance, &temp_bounds)
+                        XicParams::new(*m, app.user_input.polarity, pending_tolerance, &temp_bounds)
                             .is_ok()
                     });
                     match valid {
                         Ok(()) => {
                             app.state_changed = StateChange::Changed;
                         }
-                        Err(_) => {
-                            error!("Invalid mass value: {}", app.user_input.mass.text);
-                            error_message = Some(format!("Invalid mass: '{}'", current_mass));
+                        // Only report an error if the user actually typed something.
+                        // An empty field on first open should not produce a dialog.
+                        Err(_) if !original_mass_text.trim().is_empty() => {
+                            error!("Invalid mass value: {}", original_mass_text);
+                            error_message = Some(format!("Invalid m/z: '{}'", original_mass_text));
                         }
+                        _ => {}
                     }
                 };
+                ui.label("Mass tolerance (ppm):");
                 if ui
                     .add(
                         egui::TextEdit::singleline(&mut app.user_input.mass_tolerance.text)
@@ -120,6 +137,8 @@ pub fn render_xic_settings_window(app: &mut MzViewerApp, ctx: &egui::Context) {
                     )
                     .lost_focus()
                 {
+                    // Capture text before sync so we can report what the user typed.
+                    let original_tol_text = app.user_input.mass_tolerance.text.clone();
                     let current_mass = app.user_input.mass.value;
                     // Validate: tolerance must be in range for XicParams
                     let valid = app.user_input.mass_tolerance.sync_on_focus_lost(|t| {
@@ -131,19 +150,71 @@ pub fn render_xic_settings_window(app: &mut MzViewerApp, ctx: &egui::Context) {
                         Ok(()) => {
                             app.state_changed = StateChange::Changed;
                         }
-                        Err(_) => {
-                            error!(
-                                "Invalid mass tolerance: {}",
-                                app.user_input.mass_tolerance.text
-                            );
+                        // Only report an error if the user actually typed something.
+                        Err(_) if !original_tol_text.trim().is_empty() => {
+                            error!("Invalid mass tolerance: {}", original_tol_text);
+                            error_message =
+                                Some(format!("Invalid mass tolerance: '{}'", original_tol_text));
+                        }
+                        _ => {}
+                    }
+                };
+
+                ui.add_space(6.0);
+                ui.separator();
+                ui.add_space(4.0);
+
+                // "Confirm" button — forces both fields to sync even when the
+                // TextEdit still has focus (i.e. the user hasn't clicked away yet).
+                // Without this button, closing the window via the X while the
+                // tolerance field is still focused would leave mass_tolerance.value
+                // at its default (0.0), causing an "invalid mass tolerance 0" error.
+                if ui.button("Confirm").clicked() {
+                    // --- sync mass ---
+                    let pending_tolerance: f64 = app
+                        .user_input
+                        .mass_tolerance
+                        .text
+                        .parse()
+                        .unwrap_or(app.user_input.mass_tolerance.value);
+                    let mass_valid = app.user_input.mass.sync_on_focus_lost(|m| {
+                        let temp_bounds = crate::validation::DataBounds::unrestricted();
+                        XicParams::new(*m, app.user_input.polarity, pending_tolerance, &temp_bounds)
+                            .is_ok()
+                    });
+
+                    // --- sync mass_tolerance ---
+                    let current_mass = app.user_input.mass.value;
+                    let tol_valid = app.user_input.mass_tolerance.sync_on_focus_lost(|t| {
+                        let temp_bounds = crate::validation::DataBounds::unrestricted();
+                        XicParams::new(current_mass, app.user_input.polarity, *t, &temp_bounds)
+                            .is_ok()
+                    });
+
+                    match (mass_valid, tol_valid) {
+                        (Ok(()), Ok(())) => {
+                            app.state_changed = StateChange::Changed;
+                            close_on_confirm = true;
+                        }
+                        (Err(_), _) => {
+                            error_message =
+                                Some(format!("Invalid mass: '{}'", app.user_input.mass.text));
+                        }
+                        (_, Err(_)) => {
                             error_message = Some(format!(
                                 "Invalid mass tolerance: '{}'",
                                 app.user_input.mass_tolerance.text
                             ));
                         }
                     }
-                };
+                }
             });
+
+        // Propagate window-open state back from the local copy.
+        // The X button sets window_open=false; the Confirm button sets close_on_confirm=true.
+        if !window_open || close_on_confirm {
+            app.options_window_open = false;
+        }
 
         // Show error dialog outside of the closure to avoid borrow checker issues
         if let Some(msg) = error_message {

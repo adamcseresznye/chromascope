@@ -30,9 +30,9 @@ pub fn render_chromatogram(
         .height(ui.available_height() * 0.6)
         .legend(Legend::default())
         .label_formatter(|_name, value| {
-            format!("Rt = {:.2} min\nIntensity = {:.2e}", value.x, value.y) // ← CHANGED
+            format!("Rt = {:.2} min\nIntensity = {:.2e}", value.x, value.y)
         })
-        .y_axis_formatter(format_intensity_axis) // ← ADDED
+        .y_axis_formatter(format_intensity_axis)
         .boxed_zoom_pointer_button(egui::PointerButton::Middle)
         .show(ui, |plot_ui| {
             for file in app.files.values() {
