@@ -10,7 +10,7 @@ use std::process;
 fn main() {
     env_logger::init();
 
-    // include icon in the compiled binary
+    // include the icon in the compiled binary
     let icon_image = image::load_from_memory(include_bytes!(r"../assets/icon.png"))
         .expect("Should be able to open icon PNG file");
 

@@ -1,8 +1,6 @@
 //! Data export functionality for mass spectrometry chromatograms.
 //!
-//! This module provides exporters for various formats (currently CSV).
-//! Export logic is independent of GUI concerns, making it reusable in
-//! CLI tools, batch processing, or other contexts.
+//! This module provides exporters for CSV format.
 
 use crate::error::{ChromascopeError, Result};
 use std::path::Path;

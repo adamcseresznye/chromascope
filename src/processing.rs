@@ -1,15 +1,7 @@
 //! Business logic layer for chromatogram processing.
 //!
 //! This module provides high-level orchestration of data operations
-//! without any GUI dependencies. Functions here can be used in CLI tools,
-//! web services, or GUI applications.
-//!
-//! # Architecture
-//!
-//! This follows the Service Layer Pattern, where business logic is decoupled
-//! from presentation (GUI) and data access (parser) concerns. The processing
-//! module coordinates calls to `MzData` methods but doesn't handle UI events
-//! or file I/O directly.
+//! without any GUI dependencies.
 
 use crate::error::{ChromascopeError, Result};
 use crate::parser::{ChromatogramData, MzData};
@@ -172,7 +164,6 @@ pub fn run_in_background(
 
 /// High-level orchestration of chromatogram processing.
 ///
-/// This is your business logic layer - no GUI dependencies.
 /// Coordinates extraction, preparation, and smoothing of chromatogram data.
 ///
 /// # Processing Pipeline
