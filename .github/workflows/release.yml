@@ -3,13 +3,13 @@ name: Release
 on:
   push:
     tags:
-      - v[0-9]+.*
+      - v*
 
 jobs:
   create-release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
       - name: Create GitHub Release
         uses: taiki-e/create-gh-release-action@v1
         env:
@@ -25,7 +25,14 @@ jobs:
           - windows-latest
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libssl-dev
+
       - name: Upload Rust Binary
         uses: taiki-e/upload-rust-binary-action@v1
         with:
