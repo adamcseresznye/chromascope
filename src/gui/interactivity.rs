@@ -27,7 +27,7 @@ pub fn handle_chromatogram_click(
 
     info!(
         "Double click detected on plot at {:?} for file: {}",
-        &rt_clicked, file.name
+        rt_clicked, file.name
     );
 
     if let Some(rt) = rt_clicked {

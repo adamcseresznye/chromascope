@@ -1286,7 +1286,7 @@ fn review(q: &mut QuantState, ui: &mut egui::Ui) {
             plot_ui.polygon(
                 Polygon::new("Integrated peak", points)
                     .stroke(egui::Stroke::new(
-                        1.0,
+                        1.0_f32,
                         Color32::from_rgba_unmultiplied(75, 150, 215, 100),
                     ))
                     .fill_color(Color32::from_rgba_unmultiplied(75, 150, 215, 45)),

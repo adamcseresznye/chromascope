@@ -125,13 +125,13 @@ impl MzData {
     /// example_struct.open_msfile(&file_path).unwrap();
     /// ```
     pub fn open_msfile(&mut self, path: &PathBuf) -> Result<&mut Self> {
-        info!("Attempting to open file at path: {:?}", &path);
+        info!("Attempting to open file at path: {:?}", path);
 
         match MZReader::open_path(path) {
             Ok(reader) => {
                 self.msfile = Some(reader);
                 self.file_name = Some(path.display().to_string());
-                debug!("Successfully opened file at path: {:?}", &path);
+                debug!("Successfully opened file at path: {:?}", path);
 
                 // Extract data bounds for validation
                 self.extract_bounds()?;
@@ -141,7 +141,7 @@ impl MzData {
             Err(e) => {
                 error!(
                     "Failed to open file at path: {:?} with error: {:?}",
-                    &path, e
+                    path, e
                 );
                 Err(ChromascopeError::MzDataError(format!(
                     "Failed to open file: {:?}",
@@ -200,7 +200,7 @@ impl MzData {
     /// - File is not opened
     /// - No valid peaks or scan windows found in any spectrum
     fn extract_bounds(&mut self) -> Result<()> {
-        info!("Extracting data bounds from {:?}", &self.file_name);
+        info!("Extracting data bounds from {:?}", self.file_name);
 
         let reader = self
             .msfile
@@ -281,7 +281,7 @@ impl MzData {
             warn!(
                 "No scan window metadata found in {:?} — falling back to peak sampling \
              (first+last {} spectra)",
-                &self.file_name, SAMPLE_SIZE
+                self.file_name, SAMPLE_SIZE
             );
 
             let first_end = SAMPLE_SIZE.min(scan_count);
@@ -393,7 +393,7 @@ impl MzData {
     ) -> Result<ChromatogramData> {
         info!(
             "Attempting to read BIC of {:?} at MS{} {:?}",
-            &self.file_name, ms_level, polarity
+            self.file_name, ms_level, polarity
         );
 
         let acquisition_filter = self.acquisition_filter;
@@ -509,7 +509,7 @@ impl MzData {
             warn!(
                 "BPC: all base peak intensity CV params (MS:1000505) returned 0 for {:?} \
                  — retrying with full array decoding",
-                &self.file_name
+                self.file_name
             );
             results = reader
                 .iter()
@@ -542,10 +542,10 @@ impl MzData {
 
         results.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
 
-        debug!("Successfully extracted BIC from: {:?}", &self.file_name);
+        debug!("Successfully extracted BIC from: {:?}", self.file_name);
         trace!(
             "Successfully extracted the BIC of {:?}. {} data points",
-            &self.file_name,
+            self.file_name,
             results.len()
         );
 
@@ -583,7 +583,7 @@ impl MzData {
     ) -> Result<ChromatogramData> {
         info!(
             "Attempting to read TIC of {:?} at MS{} {:?}",
-            &self.file_name, ms_level, polarity
+            self.file_name, ms_level, polarity
         );
 
         let acquisition_filter = self.acquisition_filter;
@@ -666,7 +666,7 @@ impl MzData {
             warn!(
                 "TIC: all TIC CV params (MS:1000285) returned 0 for {:?} \
              — retrying with full array decoding",
-                &self.file_name
+                self.file_name
             );
             results = reader
                 .iter()
@@ -699,10 +699,10 @@ impl MzData {
 
         results.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
 
-        debug!("Successfully extracted TIC from: {:?}", &self.file_name);
+        debug!("Successfully extracted TIC from: {:?}", self.file_name);
         trace!(
             "Successfully extracted the TIC of {:?}. {} data points",
-            &self.file_name,
+            self.file_name,
             results.len()
         );
 
@@ -741,7 +741,7 @@ impl MzData {
     ) -> Result<ChromatogramData> {
         info!(
             "Attempting to read XIC of {:?} at MS{} {:?}",
-            &self.file_name, ms_level, polarity
+            self.file_name, ms_level, polarity
         );
 
         if mass <= 0.0 {
@@ -844,10 +844,10 @@ impl MzData {
 
         results.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
 
-        debug!("Successfully extracted XIC from: {:?}", &self.file_name);
+        debug!("Successfully extracted XIC from: {:?}", self.file_name);
         trace!(
             "Successfully extracted the XIC of {:?}. {} data points",
-            &self.file_name,
+            self.file_name,
             results.len()
         );
 
@@ -1177,7 +1177,7 @@ mod tests {
 
         for (idx, spectrum) in reader.iter().enumerate() {
             // Check first 5, middle 5, and last 5 spectra
-            let total_spectra = bounds.scan_count as usize;
+            let total_spectra = bounds.scan_count;
             let is_first = idx < 5;
             let is_middle = idx >= total_spectra / 2 && idx < total_spectra / 2 + 5;
             let is_last = idx >= total_spectra.saturating_sub(5);
@@ -1230,7 +1230,7 @@ mod tests {
         let mut last_spectra_min = f64::MAX;
         let mut last_spectra_max = f64::MIN;
 
-        let total_spectra = bounds.scan_count as usize;
+        let total_spectra = bounds.scan_count;
 
         for (idx, spectrum) in reader.iter().enumerate() {
             if let Some(arrays) = spectrum.arrays.as_ref() {

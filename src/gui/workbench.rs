@@ -52,7 +52,7 @@ pub fn configure(ctx: &Context, dark: bool) {
         Color32::from_rgb(224, 237, 252)
     };
     visuals.selection.stroke = egui::Stroke::new(
-        1.0,
+        1.0_f32,
         if dark {
             Color32::from_rgb(119, 185, 241)
         } else {
