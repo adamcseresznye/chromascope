@@ -1,6 +1,7 @@
-# Load via File > Load trace preset, after selecting a dataset.
+# Open in File > Preset editor, then apply to your batch.
 # Change these illustrative masses to ions present in your file.
 version = 1
+name = "Example extraction preset"
 overlay = false
 
 [[traces]]

@@ -528,7 +528,11 @@ fn analyte_rows(ui: &mut egui::Ui, rows: &mut [Row], dirty: &mut bool) -> Option
                     *dirty |= before != (row.acquisition, row.kind.clone(), row.polarity.clone());
                 });
                 if let Err(error) = row.spec() {
-                    ui.colored_label(ui.visuals().error_fg_color, error);
+                    if row.mass.trim().is_empty() && row.kind == "XIC" {
+                        ui.weak("Enter a target m/z to configure this analyte.");
+                    } else {
+                        ui.colored_label(ui.visuals().error_fg_color, error);
+                    }
                 }
             });
             ui.add_space(6.0);
@@ -541,20 +545,24 @@ pub(super) fn show(app: &mut MzViewerApp, ctx: &egui::Context) {
     let mut editor = std::mem::replace(&mut app.presets.editor, EditorState::empty());
     let mut open = editor.open;
     let mut apply = None;
-    egui::Window::new("Analyte preset editor").open(&mut open).default_size(egui::vec2(900.0,650.0)).resizable(true).show(ctx,|ui|{
+    egui::Window::new("Viewer extraction preset").open(&mut open).default_size(egui::vec2(900.0,650.0)).resizable(true).show(ctx,|ui|{
         ui.horizontal_wrapped(|ui|{
             if ui.button("New").clicked(){editor.replace(Draft::default());}
             if ui.button("Open…").clicked(){if let Some(path)=rfd::FileDialog::new().add_filter("Chromascope preset",&["toml"]).pick_file(){match Draft::read(path){Ok(d)=>editor.replace(d),Err(e)=>editor.error=Some(e)}}}
             ui.menu_button("Recent presets",|ui|{for path in editor.recent.clone(){if ui.button(path.file_stem().unwrap_or_default().to_string_lossy()).on_hover_text(path.display().to_string()).clicked(){match Draft::read(path){Ok(d)=>editor.replace(d),Err(e)=>editor.error=Some(e)}ui.close();}}});
             if ui.button("Save").clicked(){editor.save(false);}
             if ui.button("Save As…").clicked(){editor.save(true);}
-            if ui.add_enabled(!app.async_state.is_processing,egui::Button::new("Apply to batch")).clicked(){match editor.draft.text(){Ok(text)=>apply=Some(text),Err(e)=>editor.error=Some(e)}}
+            if let Some(result)=super::examples::menu(ui) { match result {
+                Ok(path)=>{editor.error=None;editor.status=format!("Example saved to {}. Open extraction presets here; quantification methods in Batch Quantification → Edit method.",path.display());},
+                Err(e)=>editor.error=Some(e),
+            } }
+            if ui.add_enabled(!app.async_state.is_processing && app.active_file_id.is_some(),egui::Button::new("Apply to viewer samples")).on_hover_text("Extract these traces across the viewer samples; use Batch Quantification for automated integration").clicked(){match editor.draft.text(){Ok(text)=>apply=Some(text),Err(e)=>editor.error=Some(e)}}
             if editor.dirty{ui.label("Unsaved changes");}
         });
         ui.horizontal_wrapped(|ui|{ui.label("Preset name");editor.dirty|=cell(ui,&mut editor.draft.name,240.0);ui.label("Rows");editor.dirty|=ui.add(egui::DragValue::new(&mut editor.draft.grid_rows).range(1..=8)).changed();ui.label("Columns");editor.dirty|=ui.add(egui::DragValue::new(&mut editor.draft.columns).range(1..=8)).changed();editor.dirty|=ui.checkbox(&mut editor.draft.overlay,"Overlay analytes").changed();});
         if let Some(path)=&editor.draft.path{ui.small(path.display().to_string());}else{ui.small("Save As lets you choose any folder for this preset.");}
         let mut action=None;
-        egui::ScrollArea::vertical().id_salt("preset_table").max_height(420.0).auto_shrink([false, false]).show(ui, |ui| {
+        egui::ScrollArea::vertical().id_salt("preset_table").max_height(420.0).auto_shrink([false, true]).show(ui, |ui| {
             action = analyte_rows(ui, &mut editor.draft.rows, &mut editor.dirty);
         });
         if let Some((i,op))=action{match op{0 if editor.draft.rows.len()<64=>{let mut row=editor.draft.rows[i].clone();row.name.push_str(" copy");editor.draft.rows.insert(i+1,row);},1 if i>0=>editor.draft.rows.swap(i,i-1),2 if i+1<editor.draft.rows.len()=>editor.draft.rows.swap(i,i+1),3=>{editor.draft.rows.remove(i);},_=>{}}editor.dirty=true;}
@@ -590,7 +598,7 @@ pub(super) fn show(app: &mut MzViewerApp, ctx: &egui::Context) {
             Ok(()) => {
                 editor.error = None;
                 editor.status =
-                    "Applied to the batch. Select samples to inspect their analytes.".into();
+                    "Applied to viewer samples. Select a sample to inspect its analytes.".into();
             }
             Err(e) => editor.error = Some(e),
         }

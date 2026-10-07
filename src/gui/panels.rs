@@ -29,12 +29,12 @@ use mzdata::spectrum::ScanPolarity;
 /// - `ctx: &Context`: A reference to the `egui::Context` instance, which is used to update the UI's visuals.
 pub fn update_data_selection_panel(app: &mut MzViewerApp, ctx: &Context) {
     egui::TopBottomPanel::top("data_selection_panel").show(ctx, |ui| {
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Chromascope").strong().size(18.0));
+        ui.horizontal_wrapped(|ui| {
+            ui.selectable_value(&mut app.quant.active, false, "Viewer");
+            ui.selectable_value(&mut app.quant.active, true, "Batch Quantification");
             ui.separator();
             ui.menu_button("File", |ui| {
-                super::workspace::menu(app, ui);
-                if ui.button("Open").on_hover_text("Open a file").clicked() {
+                if ui.button("Open data…").on_hover_text("Open one or more data files").clicked() {
                     debug!("File open button clicked.");
                     handle_file_selection(app);
                     info!("File selection handled.");
@@ -51,7 +51,10 @@ pub fn update_data_selection_panel(app: &mut MzViewerApp, ctx: &Context) {
                     }
                     ui.close();
                 }
-                ui.menu_button("ProteoWizard", |ui| {
+                super::workspace::recent_menu(app, ui);
+                ui.separator();
+                if !app.quant.active { super::workspace::menu(app, ui); ui.separator(); }
+                ui.menu_button("Vendor import settings", |ui| {
                     ui.label("Vendor data is converted locally to temporary mzML.");
                     if let Some(path) = &app.msconvert_path {
                         ui.label(format!("msconvert: {}", path.display()));
@@ -68,7 +71,8 @@ pub fn update_data_selection_panel(app: &mut MzViewerApp, ctx: &Context) {
                         ui.close();
                     }
                     if ui
-                        .button("Detect again (environment / saved path / PATH)")
+                        .button("Detect msconvert again")
+                        .on_hover_text("Search the environment, saved location, PATH, and standard installation folders")
                         .clicked()
                     {
                         app.msconvert_path = crate::import::discover_msconvert();
@@ -79,44 +83,56 @@ pub fn update_data_selection_panel(app: &mut MzViewerApp, ctx: &Context) {
                     );
                 });
 
-                ui.menu_button("Export", |ui| {
-                    if ui
-                        .button("Chromatogram")
-                        .on_hover_text("Export the active chromatogram to CSV")
-                        .clicked()
-                    {
-                        debug!("Export Chromatogram clicked.");
-                        handle_csv_export(app);
-                        ui.close();
-                    }
-
-                    // Greyed out with tooltip if no spectrum is loaded yet
-                    let has_spectrum = app
-                        .active_file_id
-                        .and_then(|id| app.files.get(&id))
-                        .and_then(|f| f.cache.mass_spectrum.as_ref())
-                        .is_some();
-
-                    ui.add_enabled_ui(has_spectrum, |ui| {
-                        let btn = ui.button("Mass Spectrum").on_hover_text(if has_spectrum {
-                            "Export the mass spectrum at the current retention time to CSV"
-                        } else {
-                            "Double-click the chromatogram first to load a spectrum"
-                        });
-                        if btn.clicked() {
-                            debug!("Export Mass Spectrum clicked.");
-                            handle_spectrum_csv_export(app);
+                if !app.quant.active {
+                    ui.menu_button("Export", |ui| {
+                        let has_trace=app.active_file_id.and_then(|id|app.files.get(&id)).is_some_and(|f|f.cache.plot_data.is_some());
+                        if ui
+                            .add_enabled(has_trace,egui::Button::new("Chromatogram CSV…"))
+                            .on_hover_text("Export the active chromatogram to CSV")
+                            .clicked()
+                        {
+                            debug!("Export Chromatogram clicked.");
+                            handle_csv_export(app);
                             ui.close();
                         }
+
+                        // Greyed out with tooltip if no spectrum is loaded yet
+                        let has_spectrum = app
+                            .active_file_id
+                            .and_then(|id| app.files.get(&id))
+                            .and_then(|f| f.cache.mass_spectrum.as_ref())
+                            .is_some();
+
+                        ui.add_enabled_ui(has_spectrum, |ui| {
+                            let btn = ui.button("Spectrum CSV…").on_hover_text(if has_spectrum {
+                                "Export the mass spectrum at the current retention time to CSV"
+                            } else {
+                                "Double-click the chromatogram first to load a spectrum"
+                            });
+                            if btn.clicked() {
+                                debug!("Export Mass Spectrum clicked.");
+                                handle_spectrum_csv_export(app);
+                                ui.close();
+                            }
+                        });
+                        ui.separator();
+                        super::workspace::figure_menu(app,ui);
                     });
-                });
+                }
+                ui.separator();
+                if ui.button("About Chromascope…").clicked() {
+                    ctx.data_mut(|d| d.insert_temp(egui::Id::new("about_open"), true));
+                    ui.close();
+                }
             });
 
-            ui.menu_button("Display", |ui| {
-                debug!("Display menu button clicked.");
-                add_display_options(app, ui);
-                info!("Display options added.");
-            });
+            if !app.quant.active {
+                ui.menu_button("Display", |ui| {
+                    debug!("Display menu button clicked.");
+                    add_display_options(app, ui);
+                    info!("Display options added.");
+                });
+            }
 
             {
                 let is_dark = ui.visuals().dark_mode;
@@ -130,23 +146,28 @@ pub fn update_data_selection_panel(app: &mut MzViewerApp, ctx: &Context) {
                 }
             }
         });
-        ui.separator();
-        ui.horizontal_wrapped(|ui| {
-            if ui.button("Open data…").clicked() {
-                handle_file_selection(app);
-            }
+        if !app.quant.active {
             ui.separator();
-            super::workbench::trace_buttons(app, ui);
-            ui.separator();
-            ui.toggle_value(&mut app.workspace.view.files, "Files");
-            ui.toggle_value(&mut app.workspace.view.inspector, "Inspector");
-            ui.toggle_value(&mut app.workspace.view.spectrum, "Spectrum");
-            if let Some(file) = app.active_file_id.and_then(|id| app.files.get(&id)) {
+            ui.horizontal_wrapped(|ui| {
+                let loaded=app.active_file_id.and_then(|id|app.files.get(&id)).is_some_and(|f|!f.is_loading);
+                ui.add_enabled_ui(loaded,|ui|super::workbench::trace_buttons(app,ui));
                 ui.separator();
-                ui.add(egui::Label::new(&file.name).truncate())
-                    .on_hover_text(file.cache.source_path.as_deref().unwrap_or(&file.path));
-            }
-        });
+                ui.weak("Panels:");
+                let panels_changed = ui.toggle_value(&mut app.workspace.view.files, "Data files").on_hover_text("Show or hide the left panel for selecting samples, managing visible files, and cancelling imports").clicked()
+                    | ui.toggle_value(&mut app.workspace.view.inspector, "Trace settings").on_hover_text("Show or hide the right panel for extraction filters, smoothing, trace appearance, and measurements").clicked()
+                    | ui.toggle_value(&mut app.workspace.view.spectrum, "Mass spectrum").on_hover_text("Show or hide the lower spectrum plot and scan navigation; hiding preserves the selected scan").clicked();
+                if panels_changed { app.workspace.view.focus_restore = None; }
+                ui.separator();
+                if ui.selectable_label(app.workspace.view.focus_restore.is_some(), "Focus mode").on_hover_text("Hide all three panels to focus on chromatograms. Turn off to restore your previous panel setup. Opening a panel leaves focus mode.").clicked() {
+                    app.workspace.view.toggle_focus();
+                }
+                if let Some(file) = app.active_file_id.and_then(|id| app.files.get(&id)) {
+                    ui.separator();
+                    ui.add(egui::Label::new(&file.name).truncate())
+                        .on_hover_text(file.cache.source_path.as_deref().unwrap_or(&file.path));
+                }
+            });
+        }
     });
 }
 
@@ -500,13 +521,21 @@ pub fn update_file_information_panel(app: &mut MzViewerApp, ctx: &egui::Context)
         .width_range(180.0..=380.0)
         .resizable(true)
         .show(ctx, |ui| {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.heading("Data files");
-                if ui.small_button("Collapse").clicked() {
+                if ui.small_button("Hide").clicked() {
                     app.workspace.view.files = false;
                 }
             });
-            ui.small(format!("{} datasets", app.files.len()));
+            ui.small(format!(
+                "{} {}",
+                app.files.len(),
+                if app.files.len() == 1 {
+                    "dataset"
+                } else {
+                    "datasets"
+                }
+            ));
             ui.separator();
             let mut remove = None;
             let mut select = None;
@@ -634,7 +663,7 @@ pub fn update_central_panel(app: &mut MzViewerApp, ctx: &Context) {
                         if ui.button("Open data…").clicked() {
                             handle_file_selection(app);
                         }
-                        ui.small("For directory datasets, use File → Open dataset folder.");
+                        ui.small("For directory datasets, use File > Open dataset folder.");
                     });
                 });
                 return;
@@ -645,22 +674,54 @@ pub fn update_central_panel(app: &mut MzViewerApp, ctx: &Context) {
                     ui.small(format!("Shared preset · {} analytes", specs.len()));
                 }
 
+                ui.add_enabled_ui(!app.workspace.view.compare_samples, |ui| {
                 ui.selectable_value(&mut app.workspace.overlay, false, "Grid");
-                ui.selectable_value(&mut app.workspace.overlay, true, "Overlay analytes");
+                ui.selectable_value(&mut app.workspace.overlay, true, "Overlay");
                 if !app.workspace.overlay {
-                    ui.label("Rows");
-                    ui.add(egui::DragValue::new(&mut app.workspace.view.rows).range(1..=8));
-                    if ui.small_button("+ Row").clicked() {
-                        app.workspace.view.rows = (app.workspace.view.rows + 1).min(8);
-                    }
-                    ui.label("Columns");
-                    ui.add(egui::DragValue::new(&mut app.workspace.view.columns).range(1..=8));
-                    if ui.small_button("+ Column").clicked() {
-                        app.workspace.view.columns = (app.workspace.view.columns + 1).min(8);
-                    }
+                    ui.menu_button("Grid layout…", |ui| {
+                        egui::Grid::new("grid_layout_controls").show(ui, |ui| {
+                            ui.label("Rows");
+                            ui.add(egui::DragValue::new(&mut app.workspace.view.rows).range(1..=8));
+                            if ui.small_button("+ Row").clicked() {
+                                app.workspace.view.rows = (app.workspace.view.rows + 1).min(8);
+                            }
+                            ui.end_row();
+                            ui.label("Columns");
+                            ui.add(
+                                egui::DragValue::new(&mut app.workspace.view.columns).range(1..=8),
+                            );
+                            if ui.small_button("+ Column").clicked() {
+                                app.workspace.view.columns =
+                                    (app.workspace.view.columns + 1).min(8);
+                            }
+                            ui.end_row();
+                        });
+                    });
                 }
+                });
                 ui.checkbox(&mut app.workspace.view.compare_samples, "Compare samples")
-                    .on_hover_text("Explicitly show traces from other samples together");
+                    .on_hover_text("Samples become columns and analytes become rows. Turn off to restore your individual grid or overlay layout.");
+                if app.workspace.view.compare_samples { ui.weak("Samples × analytes"); }
+                use super::workspace::IntensityScale;
+                let previous = (app.workspace.view.intensity_scale, app.workspace.view.intensity_maximum);
+                egui::ComboBox::from_id_salt("intensity_scale")
+                    .selected_text(match app.workspace.view.intensity_scale {
+                        IntensityScale::Individual => "Scale: Individual",
+                        IntensityScale::SharedHighest => "Scale: Shared highest peak",
+                        IntensityScale::SharedCustom => "Scale: Shared custom maximum",
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut app.workspace.view.intensity_scale, IntensityScale::Individual, "Individual");
+                        ui.selectable_value(&mut app.workspace.view.intensity_scale, IntensityScale::SharedHighest, "Shared highest peak");
+                        ui.selectable_value(&mut app.workspace.view.intensity_scale, IntensityScale::SharedCustom, "Shared custom maximum");
+                    }).response.on_hover_text("Shared scales use the same intensity axis for every visible trace; data is not normalized. The automatic maximum includes all visible traces across grid pages.");
+                if app.workspace.view.intensity_scale == IntensityScale::SharedCustom {
+                    ui.label("Maximum (a.u.)");
+                    ui.add(egui::DragValue::new(&mut app.workspace.view.intensity_maximum).range(1.0..=f64::MAX).speed(1000.0));
+                }
+                if previous != (app.workspace.view.intensity_scale, app.workspace.view.intensity_maximum) {
+                    app.workspace.reset_plots = true;
+                }
             });
             let divider_id = egui::Id::new("workbench_plot_split");
             let mut fraction = ctx.data_mut(|data| *data.get_temp_mut_or(divider_id, 0.58_f32));
@@ -696,13 +757,13 @@ pub fn update_central_panel(app: &mut MzViewerApp, ctx: &Context) {
                 .clamp(0.3, 0.75);
                 ctx.data_mut(|data| data.insert_temp(divider_id, fraction));
             }
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.strong("Mass spectrum");
-                if ui.small_button("Collapse").clicked() {
+                if ui.small_button("Hide").clicked() {
                     app.workspace.view.spectrum = false;
                 }
                 if ui
-                    .small_button("Close")
+                    .small_button("Clear spectrum")
                     .on_hover_text("Clear the selected spectrum and expand chromatograms")
                     .clicked()
                 {
@@ -716,6 +777,7 @@ pub fn update_central_panel(app: &mut MzViewerApp, ctx: &Context) {
                     ui.weak(format!("RT {rt:.3} min"));
                 }
             });
+            super::workspace::scan_navigation(app, ui);
             plotting::plot_mass_spectrum(app, ui);
         });
 }
@@ -789,7 +851,7 @@ pub fn add_range_options(app: &mut MzViewerApp, ui: &mut Ui) {
 /// Shows polarity, scan type, and m/z range in a format similar to
 /// Thermo's Qual Browser scan filter display.
 pub fn add_scan_filter_dropdown(app: &mut MzViewerApp, ui: &mut Ui) {
-    ui.label("Scan Filter:");
+    ui.label("Scan filter");
 
     // Get available scan filters from active file
     let available_filters = if let Some(active_id) = app.active_file_id {

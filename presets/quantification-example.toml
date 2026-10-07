@@ -1,0 +1,35 @@
+# Batch Quantification → Edit method > Open….
+# Retention times are minutes; replace these example values for your assay.
+# Remove the MRM analyte below if your samples contain only full-scan data.
+version = 1
+name = "Example targeted assay"
+detection_smoothing = 2
+# Minimum local peak prominence in instrument intensity units.
+minimum_height = 100.0
+# Stop at 5% of peak height above the neighbouring valley.
+boundary_fraction = 0.05
+
+[[analytes]]
+expected_rt = 4.25
+rt_window = [3.9, 4.6]
+[analytes.extraction]
+name = "Analyte A"
+acquisition = "FS"
+kind = "XIC"
+mass = 483.0
+ppm = 10.0
+polarity = "positive"
+smoothing = 0
+
+[[analytes]]
+expected_rt = 5.0
+rt_window = [4.5, 5.5]
+[analytes.extraction]
+name = "Analyte B transition"
+acquisition = "MRM"
+kind = "XIC"
+mass = 100.0
+precursor_mz = 483.0
+ppm = 10.0
+polarity = "positive"
+smoothing = 0

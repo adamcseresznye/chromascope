@@ -1,10 +1,10 @@
 [package]
 name = "chromascope"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["Adam Cseresznye"]
 edition = "2021"
 license = "GPL-3.0-only"
-include = ["LICENSE", "**/*.rs", "Cargo.toml"]
+include = ["LICENSE", "**/*.rs", "Cargo.toml", "assets/icon.png", "assets/fonts/**", "presets/**"]
 rust-version = "1.76"
 
 [lib]
