@@ -1,4 +1,4 @@
-﻿//! # backend for parsing mass spectrometry files for plotting
+//! # backend for parsing mass spectrometry files for plotting
 
 //! The `parser` module provides functionality for reading and processing mass spectrometry data files. Supports mzML,
 //! MGF, Bruker TDF, and any other format supported by the `mzdata` crate. It allows users to extract various types of data, including Base Peak Intensity (BIC), Total Ion Chromatogram (TIC), and Extracted Ion Chromatogram (XIC). Additionally, it offers methods for data smoothing and preparation for plotting.
@@ -29,7 +29,7 @@ use std::path::PathBuf;
 
 /// Represents extracted chromatogram data from a mass spectrometry file.
 /// Returned by `get_tic()`, `get_bpic()`, and `get_xic()` methods.
-#[derive(Debug, Clone)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub struct ChromatogramData {
     /// Retention times (minutes) for each data point
     pub retention_time: Vec<f32>,
@@ -56,6 +56,7 @@ pub struct MassSpectrum {
 
 /// Represents a data structure for parsing mass spectrometry files.
 pub struct MzData {
+    pub(crate) acquisition_filter: Option<crate::processing::AcquisitionMode>,
     /// An optional `String` representing the name of the data file.
     file_name: Option<String>,
     /// An optional format-agnostic reader for the opened mass spectrometry file.
@@ -95,6 +96,7 @@ impl MzData {
     /// A new instance of `MzData` with all fields initialized.
     pub fn new() -> Self {
         Self {
+            acquisition_filter: None,
             file_name: None,
             msfile: None,
             bounds: DataBounds::unrestricted(),
@@ -394,26 +396,15 @@ impl MzData {
             &self.file_name, ms_level, polarity
         );
 
+        let acquisition_filter = self.acquisition_filter;
         let reader = self.msfile.as_mut().ok_or_else(|| {
             ChromascopeError::FileNotOpened(
                 "File must be opened before extracting chromatogram".to_string(),
             )
         })?;
 
-        // -- Tier 1: embedded chromatogram fast path ---------------------------
-        // Only valid when no m/z range filter is requested and ms_level == 1.
-        if mz_range.is_none() && ms_level == 1 {
-            let embedded = reader
-                .get_chromatogram_by_id("BPC")
-                .or_else(|| reader.get_chromatogram_by_id("MS:1000628"));
-
-            if let Some(chrom) = embedded {
-                info!("Fast path: embedded BPC chromatogram found");
-                return chrom_to_chromatogram_data(chrom, true);
-            }
-            info!("No embedded BPC found, falling back to spectrum iteration");
-        }
-
+        // Derive traces from selected spectra: vendor embedded chromatograms
+        // can mix polarities/MS levels and cannot provide scan-index mappings.
         // -- Tier 2: spectrum iteration fallback -------------------------------
         // MetadataOnly is valid for full-file BPC: base peak intensity
         // (MS:1000505) and base peak m/z (MS:1000504) are CV params on the
@@ -425,14 +416,20 @@ impl MzData {
         let mut results: Vec<(f32, f32, f32, usize)> = reader
             .iter()
             .filter(|s| {
-                s.description.ms_level == ms_level
+                acquisition_filter.map_or(true, |mode| mode.matches(&s.description))
+                    && s.description.ms_level == ms_level
                     && s.description.polarity == polarity
                     && precursor_mz.map_or(true, |target| {
                         s.description
                             .precursor
                             .first()
-                            .and_then(|p| p.ions.first())
-                            .map(|ion| (ion.mz - target).abs() < 0.01)
+                            .map(|p| {
+                                p.ions
+                                    .first()
+                                    .map(|ion| ion.mz)
+                                    .unwrap_or(f64::from(p.isolation_window.target))
+                            })
+                            .map(|mz| (mz - target).abs() < 0.01)
                             .unwrap_or(false)
                     })
             })
@@ -440,29 +437,42 @@ impl MzData {
                 let rt = spectrum.start_time() as f32;
                 let idx = spectrum.index();
                 let (intensity, mz) = if let Some((min_mz, max_mz)) = mz_range {
-                    match spectrum.into_centroid() {
-                        Ok(centroided) => {
-                            let max_peak = centroided
-                                .peaks
+                    if let Some(arrays) = spectrum.arrays.as_ref() {
+                        match (arrays.mzs(), arrays.intensities()) {
+                            (Ok(mzs), Ok(intensities)) => mzs
                                 .iter()
-                                .filter(|p| p.mz >= min_mz && p.mz <= max_mz)
-                                .max_by(|a, b| {
-                                    a.intensity
-                                        .partial_cmp(&b.intensity)
-                                        .unwrap_or(Ordering::Equal)
-                                });
-                            if let Some(peak) = max_peak {
-                                (peak.intensity, peak.mz as f32)
-                            } else {
+                                .zip(intensities.iter())
+                                .filter(|(mz, _)| **mz >= min_mz && **mz <= max_mz)
+                                .max_by(|a, b| a.1.total_cmp(b.1))
+                                .map(|(&mz, &intensity)| (intensity, mz as f32))
+                                .unwrap_or((0.0, 0.0)),
+                            _ => (0.0, 0.0),
+                        }
+                    } else {
+                        match spectrum.into_centroid() {
+                            Ok(centroided) => {
+                                let max_peak = centroided
+                                    .peaks
+                                    .iter()
+                                    .filter(|p| p.mz >= min_mz && p.mz <= max_mz)
+                                    .max_by(|a, b| {
+                                        a.intensity
+                                            .partial_cmp(&b.intensity)
+                                            .unwrap_or(Ordering::Equal)
+                                    });
+                                if let Some(peak) = max_peak {
+                                    (peak.intensity, peak.mz as f32)
+                                } else {
+                                    (0.0_f32, 0.0_f32)
+                                }
+                            }
+                            Err(_) => {
+                                warn!(
+                                    "Failed to centroid spectrum at RT {}, using zero intensity",
+                                    rt
+                                );
                                 (0.0_f32, 0.0_f32)
                             }
-                        }
-                        Err(_) => {
-                            warn!(
-                                "Failed to centroid spectrum at RT {}, using zero intensity",
-                                rt
-                            );
-                            (0.0_f32, 0.0_f32)
                         }
                     }
                 } else {
@@ -504,14 +514,20 @@ impl MzData {
             results = reader
                 .iter()
                 .filter(|s| {
-                    s.description.ms_level == ms_level
+                    acquisition_filter.map_or(true, |mode| mode.matches(&s.description))
+                        && s.description.ms_level == ms_level
                         && s.description.polarity == polarity
                         && precursor_mz.map_or(true, |target| {
                             s.description
                                 .precursor
                                 .first()
-                                .and_then(|p| p.ions.first())
-                                .map(|ion| (ion.mz - target).abs() < 0.01)
+                                .map(|p| {
+                                    p.ions
+                                        .first()
+                                        .map(|ion| ion.mz)
+                                        .unwrap_or(f64::from(p.isolation_window.target))
+                                })
+                                .map(|mz| (mz - target).abs() < 0.01)
                                 .unwrap_or(false)
                         })
                 })
@@ -570,25 +586,15 @@ impl MzData {
             &self.file_name, ms_level, polarity
         );
 
+        let acquisition_filter = self.acquisition_filter;
         let reader = self.msfile.as_mut().ok_or_else(|| {
             ChromascopeError::FileNotOpened(
                 "File must be opened before extracting chromatogram".to_string(),
             )
         })?;
 
-        // -- Tier 1: embedded chromatogram fast path ---------------------------
-        if mz_range.is_none() && ms_level == 1 {
-            let embedded = reader
-                .get_chromatogram_by_id("TIC")
-                .or_else(|| reader.get_chromatogram_by_id("MS:1000235"));
-
-            if let Some(chrom) = embedded {
-                info!("Fast path: embedded TIC chromatogram found");
-                return chrom_to_chromatogram_data(chrom, false);
-            }
-            info!("No embedded TIC found, falling back to spectrum iteration");
-        }
-
+        // Derive traces from selected spectra: vendor embedded chromatograms
+        // can mix polarities/MS levels and cannot provide scan-index mappings.
         // -- Tier 2: spectrum iteration fallback -------------------------------
         if mz_range.is_none() {
             reader.set_detail_level(DetailLevel::MetadataOnly);
@@ -597,14 +603,20 @@ impl MzData {
         let mut results: Vec<(f32, f32, usize)> = reader
             .iter()
             .filter(|s| {
-                s.description.ms_level == ms_level
+                acquisition_filter.map_or(true, |mode| mode.matches(&s.description))
+                    && s.description.ms_level == ms_level
                     && s.description.polarity == polarity
                     && precursor_mz.map_or(true, |target| {
                         s.description
                             .precursor
                             .first()
-                            .and_then(|p| p.ions.first())
-                            .map(|ion| (ion.mz - target).abs() < 0.01)
+                            .map(|p| {
+                                p.ions
+                                    .first()
+                                    .map(|ion| ion.mz)
+                                    .unwrap_or(f64::from(p.isolation_window.target))
+                            })
+                            .map(|mz| (mz - target).abs() < 0.01)
                             .unwrap_or(false)
                     })
             })
@@ -659,14 +671,20 @@ impl MzData {
             results = reader
                 .iter()
                 .filter(|s| {
-                    s.description.ms_level == ms_level
+                    acquisition_filter.map_or(true, |mode| mode.matches(&s.description))
+                        && s.description.ms_level == ms_level
                         && s.description.polarity == polarity
                         && precursor_mz.map_or(true, |target| {
                             s.description
                                 .precursor
                                 .first()
-                                .and_then(|p| p.ions.first())
-                                .map(|ion| (ion.mz - target).abs() < 0.01)
+                                .map(|p| {
+                                    p.ions
+                                        .first()
+                                        .map(|ion| ion.mz)
+                                        .unwrap_or(f64::from(p.isolation_window.target))
+                                })
+                                .map(|mz| (mz - target).abs() < 0.01)
                                 .unwrap_or(false)
                         })
                 })
@@ -733,6 +751,7 @@ impl MzData {
             return Err(ChromascopeError::InvalidMassTolerance(mass_tolerance));
         }
 
+        let acquisition_filter = self.acquisition_filter;
         let reader = self.msfile.as_mut().ok_or_else(|| {
             ChromascopeError::FileNotOpened(
                 "File must be opened before extracting chromatogram".to_string(),
@@ -743,14 +762,20 @@ impl MzData {
         let spectra: Vec<_> = reader
             .iter()
             .filter(|s| {
-                s.description.ms_level == ms_level
+                acquisition_filter.map_or(true, |mode| mode.matches(&s.description))
+                    && s.description.ms_level == ms_level
                     && s.description.polarity == polarity
                     && precursor_mz.map_or(true, |target| {
                         s.description
                             .precursor
                             .first()
-                            .and_then(|p| p.ions.first())
-                            .map(|ion| (ion.mz - target).abs() < 0.01)
+                            .map(|p| {
+                                p.ions
+                                    .first()
+                                    .map(|ion| ion.mz)
+                                    .unwrap_or(f64::from(p.isolation_window.target))
+                            })
+                            .map(|mz| (mz - target).abs() < 0.01)
                             .unwrap_or(false)
                     })
             })
@@ -760,7 +785,7 @@ impl MzData {
         let tol_da = mass * (mass_tolerance / 1_000_000.0);
         let mut results: Vec<(f32, f32, usize)> = spectra
             .into_par_iter()
-            .filter_map(|spectrum| {
+            .map(|spectrum| {
                 let spectrum_rt = spectrum
                     .description
                     .acquisition
@@ -770,26 +795,42 @@ impl MzData {
                     .unwrap_or(0.0);
                 let spectrum_idx = spectrum.index();
 
-                // Cheap pre-filter: mzML m/z arrays are guaranteed ascending, so use
-                // binary search (O(log n)) instead of linear scan (O(n)) to test whether
-                // any peak falls in [mass-tol_da, mass+tol_da].
+                // Sum stored samples directly: this works for profile and centroid
+                // arrays without silently applying peak picking during import.
                 if let Some(arrays) = spectrum.arrays.as_ref() {
-                    if let Ok(mzs) = arrays.mzs() {
-                        let lower = mass - tol_da;
-                        let upper = mass + tol_da;
-                        // partition_point returns the first index where the predicate is false,
-                        // i.e. the first index where mz >= lower.
-                        let first_ge = mzs.partition_point(|&mz| mz < lower);
-                        if first_ge >= mzs.len() || mzs[first_ge] > upper {
-                            return None; // no peak in [lower, upper]
-                        }
+                    let mzs = arrays.mzs().map_err(|e| {
+                        ChromascopeError::MzDataError(format!("Cannot read XIC m/z array: {:?}", e))
+                    })?;
+                    let lower = mass - tol_da;
+                    let upper = mass + tol_da;
+                    let start = mzs.partition_point(|&mz| mz < lower);
+                    let end = mzs.partition_point(|&mz| mz <= upper);
+                    if start == end {
+                        return Ok((spectrum_rt, 0.0, spectrum_idx));
                     }
+                    let intensities = arrays.intensities().map_err(|e| {
+                        ChromascopeError::MzDataError(format!(
+                            "Cannot read XIC intensity array: {:?}",
+                            e
+                        ))
+                    })?;
+                    if intensities.len() != mzs.len() {
+                        return Err(ChromascopeError::MzDataError(
+                            "XIC array lengths differ".into(),
+                        ));
+                    }
+                    return Ok((
+                        spectrum_rt,
+                        intensities[start..end].iter().sum(),
+                        spectrum_idx,
+                    ));
                 }
-
-                // into_centroid() correctly handles both profile and already-centroided
-                // spectra — do NOT add a manual SignalContinuity branch check, as the
-                // two branches return different concrete types and will not compile.
-                let centroided = spectrum.into_centroid().ok()?;
+                let centroided = spectrum.into_centroid().map_err(|e| {
+                    ChromascopeError::MzDataError(format!(
+                        "Cannot read XIC scan {}: {:?}",
+                        spectrum_idx, e
+                    ))
+                })?;
                 let total_intensity: f32 = centroided
                     .peaks
                     .all_peaks_for(mass, Tolerance::PPM(mass_tolerance))
@@ -797,13 +838,9 @@ impl MzData {
                     .map(|p| p.intensity)
                     .sum();
 
-                if total_intensity > 0.0 {
-                    Some((spectrum_rt, total_intensity, spectrum_idx))
-                } else {
-                    None
-                }
+                Ok((spectrum_rt, total_intensity, spectrum_idx))
             })
-            .collect();
+            .collect::<Result<Vec<_>>>()?;
 
         results.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
 
@@ -883,6 +920,95 @@ impl MzData {
         })
     }
 
+    /// Human-readable native scan and acquisition metadata, without decoding peak arrays.
+    pub fn scan_metadata(&mut self, index: usize) -> Result<String> {
+        let reader = self
+            .msfile
+            .as_mut()
+            .ok_or_else(|| ChromascopeError::FileNotOpened("No file opened".into()))?;
+        reader.set_detail_level(DetailLevel::MetadataOnly);
+        let spec = reader.get_spectrum_by_index(index);
+        reader.set_detail_level(DetailLevel::Full);
+        let spec = spec.ok_or_else(|| ChromascopeError::MzDataError(format!("No scan {index}")))?;
+        let d = &spec.description;
+        let mut text = format!(
+            "Native ID: {}\nMS level: {}\nPolarity: {:?}\nRepresentation: {:?}",
+            d.id, d.ms_level, d.polarity, d.signal_continuity
+        );
+        for p in &d.precursor {
+            let w = &p.isolation_window;
+            text.push_str(&format!("\nIsolation target: {:.5} m/z", w.target));
+            if !w.is_empty() {
+                let kind = if matches!(w.flags, mzdata::spectrum::IsolationWindowState::Offset) {
+                    "offsets"
+                } else {
+                    "bounds"
+                };
+                text.push_str(&format!(
+                    "\nIsolation {kind}: {:.5}–{:.5} m/z",
+                    w.lower_bound, w.upper_bound
+                ));
+            }
+            if let Some(parent) = &p.precursor_id {
+                text.push_str(&format!("\nParent scan: {parent}"));
+            }
+            if !p.activation.methods().is_empty() {
+                text.push_str(&format!("\nActivation: {:?}", p.activation.methods()));
+            }
+            if p.activation.energy != 0.0 {
+                text.push_str(&format!("\nActivation energy: {}", p.activation.energy));
+            }
+            for param in &p.activation.params {
+                text.push_str(&format!(
+                    "\n{}: {} ({})",
+                    param.name, param.value, param.unit
+                ));
+            }
+            for ion in &p.ions {
+                text.push_str(&format!(
+                    "\nPrecursor ion: {:.5} m/z\nPrecursor intensity: {:.4e}",
+                    ion.mz, ion.intensity
+                ));
+                text.push_str(&format!(
+                    "\nCharge: {}",
+                    ion.charge
+                        .map(|c| c.to_string())
+                        .unwrap_or_else(|| "not reported".into())
+                ));
+            }
+        }
+        for scan in &d.acquisition.scans {
+            text.push_str(&format!(
+                "\nActual RT: {:.6} min\nInstrument configuration: {}",
+                scan.start_time, scan.instrument_configuration_id
+            ));
+            if scan.injection_time > 0.0 {
+                text.push_str(&format!("\nInjection time: {} ms", scan.injection_time));
+            }
+            for w in &scan.scan_windows {
+                text.push_str(&format!(
+                    "\nScan window: {:.3}–{:.3} m/z",
+                    w.lower_bound, w.upper_bound
+                ));
+            }
+            if let Some(params) = &scan.params {
+                for param in params.iter() {
+                    text.push_str(&format!(
+                        "\n{}: {} ({})",
+                        param.name, param.value, param.unit
+                    ));
+                }
+            }
+        }
+        for param in &d.params {
+            text.push_str(&format!(
+                "\n{}: {} ({})",
+                param.name, param.value, param.unit
+            ));
+        }
+        Ok(text)
+    }
+
     /// Returns a reference to the file name.
     pub fn file_name(&self) -> &Option<String> {
         &self.file_name
@@ -896,39 +1022,6 @@ impl MzData {
     pub fn is_open(&self) -> bool {
         self.msfile.is_some()
     }
-}
-
-/// Convert an mzdata embedded [`mzdata::spectrum::Chromatogram`] into [`ChromatogramData`].
-///
-/// `include_mz` should be `true` for BPC (has base-peak m/z array),
-/// `false` for TIC (no m/z data).
-///
-/// Embedded chromatograms have no spectrum index mapping — sequential indices
-/// (`0..len`) are used.
-fn chrom_to_chromatogram_data(
-    chrom: mzdata::spectrum::Chromatogram,
-    _include_mz: bool,
-) -> Result<ChromatogramData> {
-    let retention_time: Vec<f32> = chrom
-        .time()
-        .map_err(|e| ChromascopeError::MzDataError(format!("Failed to read RT array: {e:?}")))
-        .map(|t| t.iter().map(|&v| v as f32).collect())?;
-
-    let intensity: Vec<f32> = chrom
-        .intensity()
-        .map_err(|e| {
-            ChromascopeError::MzDataError(format!("Failed to read intensity array: {e:?}"))
-        })
-        .map(|i| i.iter().copied().collect())?;
-
-    let index: Vec<usize> = (0..retention_time.len()).collect();
-
-    Ok(ChromatogramData {
-        retention_time,
-        intensity,
-        mz: Vec::new(),
-        index,
-    })
 }
 
 #[cfg(test)]
@@ -1226,7 +1319,7 @@ mod tests {
         assert_eq!(chrom.retention_time.len(), chrom.mz.len());
         assert_eq!(chrom.retention_time.len(), chrom.index.len());
         assert!(
-            chrom.retention_time.len() > 0,
+            !chrom.retention_time.is_empty(),
             "Should have extracted some data points"
         );
     }
@@ -1282,7 +1375,7 @@ mod tests {
         assert!(result.is_ok());
 
         let plot_data = result.unwrap();
-        assert!(plot_data.len() > 0, "Should have plot data");
+        assert!(!plot_data.is_empty(), "Should have plot data");
 
         for point in plot_data.iter() {
             assert!(point[0] >= 0.0, "Retention time should be non-negative");
@@ -1578,8 +1671,14 @@ mod tests {
         let result = mzdata.get_xic(50000.0, 1, ScanPolarity::Positive, 0.0001, None);
         assert!(result.is_ok());
         let chrom = result.unwrap();
-        // Empty chromatogram for very specific m/z not in file
-        assert!(chrom.retention_time.is_empty() || chrom.intensity.iter().all(|&i| i > 0.0));
+        // Keep every matching scan even when the ion is absent.
+        let tic = mzdata
+            .get_tic(1, ScanPolarity::Positive, None, None)
+            .unwrap();
+        assert!(!chrom.intensity.is_empty());
+        assert!(chrom.intensity.iter().all(|&i| i == 0.0));
+        assert_eq!(chrom.index, tic.index);
+        assert_eq!(chrom.retention_time, tic.retention_time);
     }
 
     // ========== Polarity Tests ==========
@@ -1672,10 +1771,10 @@ mod tests {
             .get_tic(1, ScanPolarity::Positive, None, None)
             .unwrap();
         let plot_data = crate::processing::prepare_chromatogram_for_plot(&chrom).unwrap();
-        assert!(plot_data.len() > 0);
+        assert!(!plot_data.is_empty());
 
         let smoothed = crate::processing::smooth_chromatogram(plot_data, 3).unwrap();
-        assert!(smoothed.len() > 0);
+        assert!(!smoothed.is_empty());
     }
 
     #[test]
@@ -1687,7 +1786,7 @@ mod tests {
             .unwrap();
 
         let plot_data = crate::processing::prepare_chromatogram_for_plot(&chrom).unwrap();
-        assert!(plot_data.len() > 0);
+        assert!(!plot_data.is_empty());
     }
 
     #[test]
@@ -1864,8 +1963,8 @@ mod tests {
 
         for &intensity in chrom.intensity.iter() {
             assert!(
-                intensity > 0.0,
-                "All XIC intensities should be positive, got: {}",
+                intensity >= 0.0,
+                "All XIC intensities should be non-negative, got: {}",
                 intensity
             );
         }
@@ -2010,17 +2109,13 @@ mod tests {
     }
 
     #[test]
-    fn test_tic_uses_embedded_chromatogram_when_available() {
-        // Check whether the test file has embedded chromatograms; if so the
-        // fast path should be exercised. Either way the result must be sorted
-        // and non-empty.
-        let path = get_test_file_path();
-        let reader = MZReader::open_path(&path).unwrap();
-        let count = reader.count_chromatograms();
-        println!("Embedded chromatogram count: {count}");
-
+    fn test_tic_scan_indices_map_to_actual_spectra() {
         let mut data = setup_test_parser();
         let result = data.get_tic(1, ScanPolarity::Positive, None, None).unwrap();
+        for (&index, &rt) in result.index.iter().zip(&result.retention_time) {
+            let spectrum = data.get_mass_spectrum_by_index(index).unwrap();
+            assert_eq!(spectrum.retention_time, rt);
+        }
         assert!(!result.retention_time.is_empty());
         for i in 1..result.retention_time.len() {
             assert!(
@@ -2055,13 +2150,9 @@ mod tests {
         let chrom = mzdata
             .get_xic(722.43, 1, ScanPolarity::Positive, 10.0, None) // tight tol: few hits
             .unwrap();
-        // All returned intensities must be positive (pre-filter must not include
-        // spectra that have zero matching intensity after centroiding).
+        // Retain zero scans, including those rejected by the cheap pre-filter.
         for &i in chrom.intensity.iter() {
-            assert!(
-                i > 0.0,
-                "XIC intensity must be positive after binary search pre-filter"
-            );
+            assert!(i >= 0.0, "XIC intensity must be non-negative");
         }
         // RT must be sorted
         for i in 1..chrom.retention_time.len() {

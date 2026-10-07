@@ -7,7 +7,7 @@ use log::{error, info, warn};
 pub fn handle_chromatogram_click(
     app: &mut MzViewerApp,
     response: egui::Response,
-    plot_bounds: Option<egui_plot::PlotBounds>,
+    pointer_coord: Option<PlotPoint>,
 ) {
     if !response.double_clicked() {
         return;
@@ -18,7 +18,7 @@ pub fn handle_chromatogram_click(
         return;
     };
 
-    let rt_clicked = calculate_clicked_rt(app, &response, plot_bounds);
+    let rt_clicked = pointer_coord.map(|p| p.x as f32);
 
     let Some(file) = app.files.get_mut(&active_id) else {
         warn!("Active file ID {} not found", active_id);
@@ -41,6 +41,7 @@ pub fn handle_chromatogram_click(
             info!("Found closest spectrum at index: {}", index);
             match file.data.get_mass_spectrum_by_index(index) {
                 Ok(spectrum) => {
+                    app.user_input.retention_time_ms_spectrum = Some(spectrum.retention_time);
                     file.cache.mass_spectrum = Some(spectrum);
                 }
                 Err(e) => {
@@ -118,6 +119,7 @@ pub fn compute_integration(app: &mut MzViewerApp) {
                         Some(crate::processing::interpolate_at(data, end));
                 }
             }
+            super::workspace::record(app);
             info!("Peak area [{:.3}–{:.3} min] = {:.4e}", start, end, area);
         }
         Some(Err(e)) => {
@@ -129,26 +131,4 @@ pub fn compute_integration(app: &mut MzViewerApp) {
             warn!("No cached plot data available for integration");
         }
     }
-}
-
-/// Converts a screen click position to a retention time in plot coordinates.
-pub fn calculate_clicked_rt(
-    app: &mut MzViewerApp,
-    response: &egui::Response,
-    plot_bounds: Option<egui_plot::PlotBounds>,
-) -> Option<f32> {
-    let plot_position = response.interact_pointer_pos()?;
-    let bounds = plot_bounds?;
-
-    let plot_width = response.rect.width();
-    let min_x = *bounds.range_x().start();
-    let max_x = *bounds.range_x().end();
-
-    let relative_x = (plot_position.x - response.rect.left()) / plot_width;
-    let converted_rt = min_x + relative_x as f64 * (max_x - min_x);
-
-    app.user_input.retention_time_ms_spectrum = Some(converted_rt as f32);
-    info!("Retention time clicked: {:?}", converted_rt as f32);
-
-    Some(converted_rt as f32)
 }

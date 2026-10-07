@@ -1,6 +1,6 @@
-﻿use crate::{
+use crate::{
     parser,
-    plotting_parameters::{LineColor, LineType, PlotType},
+    plotting_parameters::{LineColor, PlotType},
     processing::ProcessingParams,
 };
 use mzdata::spectrum::ScanPolarity;
@@ -15,7 +15,7 @@ use std::sync::mpsc;
 /// When focus is lost, call `sync_on_focus_lost` to attempt parsing. Invalid
 /// input is rejected and `text` is reverted to the previous `value`, ensuring
 /// the UI never drifts from a known-good state.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct ValidatedInput<T> {
     pub text: String,
     pub value: T,
@@ -62,7 +62,7 @@ impl<T: ToString + Copy> ValidatedInput<T> {
     }
 }
 
-#[derive(PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq)]
 pub struct UserInput {
     /// Optional file path for the input data
     pub file_path: Option<String>,
@@ -71,13 +71,12 @@ pub struct UserInput {
     /// The MS level to filter (e.g., 1 for MS1, 2 for MS2)
     pub ms_level: u8,
     /// The polarity of the scan. It can be either ScanPolarity::Positive or ScanPolarity::Negative
+    #[serde(with = "crate::processing::polarity_serde")]
     pub polarity: ScanPolarity,
     /// The m/z value entered by the user — text for the TextEdit, value for processing.
     pub mass: ValidatedInput<f64>,
     /// The mass tolerance in ppm — text for the TextEdit, value for processing.
     pub mass_tolerance: ValidatedInput<f64>,
-    /// The type of line to be used in the plot
-    pub line_type: LineType,
     /// The color of the line to be used in the plot
     pub line_color: LineColor,
     /// The amount of smoothing to be applied to the plot
@@ -96,6 +95,8 @@ pub struct UserInput {
     pub range_window_open: bool,
     /// Precursor m/z filter. None for MS1 or unfiltered MS2; Some(mz) for a specific precursor.
     pub precursor_mz: Option<f64>,
+    #[serde(default)]
+    pub acquisition: Option<crate::processing::AcquisitionMode>,
 }
 
 impl Default for UserInput {
@@ -107,16 +108,16 @@ impl Default for UserInput {
             polarity: ScanPolarity::default(),
             mass: ValidatedInput::default(),
             mass_tolerance: ValidatedInput::default(),
-            line_type: LineType::default(),
             line_color: LineColor::default(),
             smoothing: u8::default(),
-            line_width: 1.0,
+            line_width: 2.0,
             retention_time_ms_spectrum: None,
             range_enabled: bool::default(),
             range_min: ValidatedInput::default(),
             range_max: ValidatedInput::default(),
             range_window_open: false,
             precursor_mz: None,
+            acquisition: None,
         }
     }
 }
@@ -172,8 +173,14 @@ pub(crate) struct FileDisplaySettings {
 /// Cached computation results for an opened file.
 #[derive(Debug, Default)]
 pub(crate) struct FileCache {
-    /// The processed plot data for this file
+    /// Full-resolution processed data used for integration and CSV export
     pub(crate) plot_data: Option<Vec<[f64; 2]>>,
+    /// Reduced rendering copy only.
+    pub(crate) display_data: Option<Vec<[f64; 2]>>,
+    /// Own converted files until readers and workers release them.
+    pub(crate) import_workspace: Option<std::sync::Arc<tempfile::TempDir>>,
+    pub(crate) import_cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub(crate) source_path: Option<String>,
     /// The last extracted chromatogram (used for double-click spectrum lookup)
     pub(crate) chromatogram: Option<parser::ChromatogramData>,
     /// The last retrieved mass spectrum (populated on double-click)
@@ -204,18 +211,26 @@ pub(crate) struct OpenFile {
     pub(crate) is_loading: bool,
 }
 
+impl Drop for OpenFile {
+    fn drop(&mut self) {
+        self.cache
+            .import_cancel
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 /// Returns the next color in the cycle based on the file index
 pub(crate) fn next_color_for_index(index: usize) -> LineColor {
     let colors = [
-        LineColor::Red,
-        LineColor::Green,
         LineColor::Blue,
+        LineColor::Orange,
+        LineColor::Green,
+        LineColor::Magenta,
+        LineColor::Red,
         LineColor::Yellow,
         LineColor::White,
         LineColor::Gray,
         LineColor::Cyan,
-        LineColor::Orange,
-        LineColor::Magenta,
         LineColor::Gold,
     ];
     colors[index % colors.len()]
@@ -269,6 +284,9 @@ pub struct MzViewerApp {
     pub(crate) async_state: AsyncState,
     /// Whether the Plot Properties window is open
     pub(crate) plot_properties_open: bool,
+    pub(super) presets: super::presets::PresetState,
+    pub(super) workspace: super::workspace::Workspace,
+    pub(crate) msconvert_path: Option<std::path::PathBuf>,
 }
 
 impl Default for MzViewerApp {
@@ -285,6 +303,9 @@ impl Default for MzViewerApp {
             integration: IntegrationState::default(),
             async_state: AsyncState::new(),
             plot_properties_open: false,
+            presets: Default::default(),
+            workspace: super::workspace::Workspace::default(),
+            msconvert_path: crate::import::discover_msconvert(),
         }
     }
 }

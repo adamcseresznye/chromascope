@@ -7,6 +7,7 @@
 pub mod error;
 pub mod export;
 pub mod gui;
+pub mod import;
 pub mod parser;
 pub mod plotting_parameters;
 pub mod processing;
