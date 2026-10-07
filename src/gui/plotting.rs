@@ -137,7 +137,7 @@ pub fn render_integration_overlay(app: &MzViewerApp, plot_ui: &mut egui_plot::Pl
     plot_ui.vline(
         VLine::new("Integration start", start)
             .color(egui::Color32::from_rgb(0, 180, 0))
-            .width(2.0)
+            .width(2.0_f32)
             .style(egui_plot::LineStyle::Dashed { length: 6.0 }),
     );
 
@@ -149,7 +149,7 @@ pub fn render_integration_overlay(app: &MzViewerApp, plot_ui: &mut egui_plot::Pl
     plot_ui.vline(
         VLine::new("Integration end", end)
             .color(egui::Color32::from_rgb(0, 180, 0))
-            .width(2.0)
+            .width(2.0_f32)
             .style(egui_plot::LineStyle::Dashed { length: 6.0 }),
     );
 
@@ -227,7 +227,7 @@ pub fn render_integration_overlay(app: &MzViewerApp, plot_ui: &mut egui_plot::Pl
     // exactly where the integration baseline sits.
     let baseline = egui_plot::Line::new("Baseline chord", vec![[s, i_start], [e, i_end]])
         .color(egui::Color32::YELLOW)
-        .width(1.5)
+        .width(1.5_f32)
         .style(egui_plot::LineStyle::Dashed { length: 6.0 });
     plot_ui.line(baseline);
 }
