@@ -1,0 +1,40 @@
+# Load via File > Load trace preset, after selecting a dataset.
+# Change these illustrative masses to ions present in your file.
+version = 1
+overlay = false
+
+[[traces]]
+name = "Full scan TIC"
+acquisition = "FS"
+kind = "TIC"
+polarity = "positive"
+smoothing = 0
+
+[[traces]]
+name = "Ion 483 — narrow extraction"
+acquisition = "FS"
+kind = "XIC"
+mass = 483.2383
+ppm = 5.0
+smoothing = 0
+
+[[traces]]
+name = "Ion 483 — wider extraction"
+acquisition = "FS"
+kind = "XIC"
+mass = 483.2383
+ppm = 10.0
+smoothing = 3
+
+# For SIM, set acquisition = "SIM" and mass to the monitored ion.
+# For MRM, set acquisition = "MRM", precursor_mz = the precursor,
+# and mass = the product ion. Both require corresponding scan metadata.
+# Example MRM block (uncomment only for a matching MRM source):
+# [[traces]]
+# name = "483 > 100 transition"
+# acquisition = "MRM"
+# precursor_mz = 483.2383
+# mass = 100.0
+# ppm = 10.0
+# smoothing = 0
+# polarity = "positive"

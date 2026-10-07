@@ -1,11 +1,11 @@
 use super::plotting;
 use crate::gui::state::{
-    next_color_for_index, FileCache, FileDisplaySettings, FileId, FileValidity, MzViewerApp,
-    OpenFile, StateChange,
+    next_color_for_index, FileCache, FileDisplaySettings, FileValidity, MzViewerApp, OpenFile,
+    StateChange,
 };
 use crate::{
     parser,
-    plotting_parameters::{LineColor, LineType, PlotType},
+    plotting_parameters::{LineColor, PlotType},
 };
 use eframe::egui;
 use egui::{Color32, Context, Ui};
@@ -30,14 +30,54 @@ use mzdata::spectrum::ScanPolarity;
 pub fn update_data_selection_panel(app: &mut MzViewerApp, ctx: &Context) {
     egui::TopBottomPanel::top("data_selection_panel").show(ctx, |ui| {
         ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Chromascope").strong().size(18.0));
+            ui.separator();
             ui.menu_button("File", |ui| {
+                super::workspace::menu(app, ui);
                 if ui.button("Open").on_hover_text("Open a file").clicked() {
                     debug!("File open button clicked.");
-                    app.reset_state();
                     handle_file_selection(app);
                     info!("File selection handled.");
                     ui.close();
                 }
+
+                if ui
+                    .button("Open dataset folder…")
+                    .on_hover_text("Open a vendor dataset directory, such as .d or Waters .raw")
+                    .clicked()
+                {
+                    if let Some(path) = rfd::FileDialog::new().pick_folder() {
+                        queue_file_imports(app, vec![path]);
+                    }
+                    ui.close();
+                }
+                ui.menu_button("ProteoWizard", |ui| {
+                    ui.label("Vendor data is converted locally to temporary mzML.");
+                    if let Some(path) = &app.msconvert_path {
+                        ui.label(format!("msconvert: {}", path.display()));
+                    } else {
+                        ui.label("msconvert is not configured.");
+                    }
+                    if ui.button("Locate msconvert…").clicked() {
+                        if let Some(path) = rfd::FileDialog::new().pick_file() {
+                            match crate::import::save_msconvert(&path) {
+                                Ok(()) => app.msconvert_path = Some(path),
+                                Err(e) => app.show_error_dialog(e),
+                            }
+                        }
+                        ui.close();
+                    }
+                    if ui
+                        .button("Detect again (environment / saved path / PATH)")
+                        .clicked()
+                    {
+                        app.msconvert_path = crate::import::discover_msconvert();
+                    }
+                    ui.hyperlink_to(
+                        "Get ProteoWizard",
+                        "https://proteowizard.sourceforge.io/download.html",
+                    );
+                });
 
                 ui.menu_button("Export", |ui| {
                     if ui
@@ -81,17 +121,30 @@ pub fn update_data_selection_panel(app: &mut MzViewerApp, ctx: &Context) {
             {
                 let is_dark = ui.visuals().dark_mode;
                 if ui
-                    .button(if is_dark { "☀ Light" } else { "🌙 Dark" })
+                    .button(if is_dark { "Light theme" } else { "Dark theme" })
                     .clicked()
                 {
                     debug!("Visuals toggle button clicked.");
-                    ctx.set_visuals(if is_dark {
-                        egui::Visuals::light()
-                    } else {
-                        egui::Visuals::dark()
-                    });
+                    super::workbench::configure(ctx, !is_dark);
                     info!("Visuals updated.");
                 }
+            }
+        });
+        ui.separator();
+        ui.horizontal_wrapped(|ui| {
+            if ui.button("Open data…").clicked() {
+                handle_file_selection(app);
+            }
+            ui.separator();
+            super::workbench::trace_buttons(app, ui);
+            ui.separator();
+            ui.toggle_value(&mut app.workspace.view.files, "Files");
+            ui.toggle_value(&mut app.workspace.view.inspector, "Inspector");
+            ui.toggle_value(&mut app.workspace.view.spectrum, "Spectrum");
+            if let Some(file) = app.active_file_id.and_then(|id| app.files.get(&id)) {
+                ui.separator();
+                ui.add(egui::Label::new(&file.name).truncate())
+                    .on_hover_text(file.cache.source_path.as_deref().unwrap_or(&file.path));
             }
         });
     });
@@ -103,7 +156,6 @@ pub fn update_data_selection_panel(app: &mut MzViewerApp, ctx: &Context) {
 /// - Smoothing level: Adjusts the level of moving average smoothing applied to the plot data.
 /// - Line width: Adjusts the width of the lines in the plot.
 /// - Line color: Allows the user to select the color of the lines in the plot.
-/// - Line style: Allows the user to select the style of the lines in the plot.
 ///
 /// When the user changes any of these options, the function updates the corresponding fields in the `user_input` struct and sets the `state_changed` flag to indicate that the plot data needs to be re-processed.
 ///
@@ -155,12 +207,6 @@ pub fn add_display_options(app: &mut MzViewerApp, ui: &mut Ui) {
         add_line_color_options(app, ui);
         info!("Line color options added.");
     });
-
-    ui.menu_button("Line style", |ui| {
-        debug!("Line style menu button clicked.");
-        add_line_style_options(app, ui);
-        info!("Line style options added.");
-    });
 }
 
 /// Adds the line color options to the provided `egui::Ui` instance.
@@ -209,25 +255,6 @@ pub fn add_line_color_options(app: &mut MzViewerApp, ui: &mut Ui) {
     info!("Line color changed.")
 }
 
-/// Adds the line style options to the provided `egui::Ui` instance.
-///
-/// This function creates a horizontal layout of radio buttons that allow the user to select the style of the lines in the plot.
-/// The available line styles are: Solid, Dashed, and Dotted.
-///
-/// When the user selects a new line style, the function updates the `user_input.line_type` field accordingly.
-///
-/// # Parameters
-/// - `&mut self`: A mutable reference to the current instance of the struct that contains the `user_input` field.
-/// - `ui: &mut Ui`: A mutable reference to the `egui::Ui` instance where the line style options will be added.
-pub fn add_line_style_options(app: &mut MzViewerApp, ui: &mut Ui) {
-    ui.horizontal(|ui| {
-        ui.radio_value(&mut app.user_input.line_type, LineType::Solid, "Solid");
-        ui.radio_value(&mut app.user_input.line_type, LineType::Dashed, "Dashed");
-        ui.radio_value(&mut app.user_input.line_type, LineType::Dotted, "Dotted");
-    });
-    info!("Line style changed.")
-}
-
 /// Handles the selection of files by the user.
 ///
 /// This function is responsible for the following tasks:
@@ -244,85 +271,62 @@ pub fn add_line_style_options(app: &mut MzViewerApp, ui: &mut Ui) {
 /// it will be handled by the `rfd::FileDialog::new().pick_files()` function.
 pub fn handle_file_selection(app: &mut MzViewerApp) {
     if let Some(paths) = rfd::FileDialog::new().pick_files() {
-        info!("Files selected: {} file(s)", paths.len());
+        queue_file_imports(app, paths);
+    }
+}
 
-        let mut first_new_file_id: Option<FileId> = None;
-
-        for (color_index, path) in paths.iter().enumerate() {
-            let path_str = path.display().to_string();
-
-            if !path_str.to_lowercase().ends_with("mzml") {
-                warn!("Invalid file format: {}", path_str);
-                app.show_error_dialog(format!("Not an mzML file: {}", path_str));
-                continue;
-            }
-
-            // Assign FileId and increment counter
-            let file_id = app.next_file_id;
-            app.next_file_id += 1;
-
-            // Track the first file ID for setting as active
-            if first_new_file_id.is_none() {
-                first_new_file_id = Some(file_id);
-            }
-
-            let name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("Loading…")
-                .to_string();
-            let color = next_color_for_index(color_index);
-
-            // Insert placeholder immediately — spinner shows in UI right away
-            app.files.insert(
-                file_id,
-                OpenFile {
-                    id: file_id,
-                    name,
-                    path: path_str,
-                    data: parser::MzData::new(),
-                    display: FileDisplaySettings {
-                        color,
-                        visible: true,
-                    },
-                    cache: FileCache::default(),
-                    is_loading: true,
+/// Add datasets without replacing existing files. An empty/cancelled selection
+/// does not change any workspace state.
+pub(super) fn queue_file_imports(app: &mut MzViewerApp, paths: Vec<std::path::PathBuf>) {
+    let mut first_id = None;
+    for path in paths {
+        super::workspace::remember(app, path.clone());
+        let file_id = app.next_file_id;
+        app.next_file_id += 1;
+        let name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        let color = next_color_for_index(file_id);
+        let cache = FileCache {
+            source_path: Some(path.to_string_lossy().into_owned()),
+            ..Default::default()
+        };
+        let cancelled = cache.import_cancel.clone();
+        app.files.insert(
+            file_id,
+            OpenFile {
+                id: file_id,
+                name,
+                path: path.to_string_lossy().into_owned(),
+                data: parser::MzData::new(),
+                display: FileDisplaySettings {
+                    color,
+                    visible: true,
                 },
-            );
-
-            info!(
-                "Placeholder inserted for file ID {}, spawning background thread",
-                file_id
-            );
-
-            let tx_clone = app.async_state.file_loading_tx.clone();
-            let path_clone = path.clone();
-            std::thread::spawn(move || {
-                let result = crate::processing::open_file_in_background(path_clone, file_id, color);
-                let _ = tx_clone.send(result);
-            });
+                cache,
+                is_loading: true,
+            },
+        );
+        first_id.get_or_insert(file_id);
+        let tx = app.async_state.file_loading_tx.clone();
+        let executable = app.msconvert_path.clone();
+        std::thread::spawn(move || {
+            let result =
+                crate::processing::import_file_in_background(path, executable, cancelled, file_id);
+            let _ = tx.send(result);
+        });
+    }
+    if let Some(id) = first_id {
+        app.active_file_id = Some(id);
+        app.invalid_file = FileValidity::Valid;
+        app.integration = Default::default();
+        app.user_input.retention_time_ms_spectrum = None;
+        if app.user_input.plot_type == PlotType::Xic && app.user_input.mass.value <= 0.0 {
+            app.user_input.plot_type = PlotType::Tic;
         }
-
-        // Set the active file to the first newly added file
-        if let Some(first_id) = first_new_file_id {
-            app.active_file_id = Some(first_id);
-            app.invalid_file = FileValidity::Valid;
-
-            // Ensure we're in a safe state for initial processing
-            // If plot type is XIC but mass is invalid, switch to TIC
-            if app.user_input.plot_type == PlotType::Xic && app.user_input.mass.value <= 0.0 {
-                info!(
-                    "Switching to TIC plot type for initial file opening (XIC requires valid mass)"
-                );
-                app.user_input.plot_type = PlotType::Tic;
-            }
-
-            app.state_changed = StateChange::Changed;
-            info!("Active file set to ID: {}", first_id);
-        }
-    } else {
-        warn!("No file selected. Setting file validity to Invalid.");
-        app.invalid_file = FileValidity::Invalid;
+        app.state_changed = StateChange::Changed;
     }
 }
 
@@ -369,7 +373,13 @@ pub fn handle_csv_export(app: &mut MzViewerApp) {
     };
 
     // Create default filename from active file name
-    let default_name = active_file.name.replace(".mzML", "_chromatogram.csv");
+    let default_name = format!(
+        "{}_chromatogram.csv",
+        std::path::Path::new(&active_file.path)
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+    );
 
     // Open save dialog
     let dialog = rfd::FileDialog::new()
@@ -438,9 +448,14 @@ pub fn handle_spectrum_csv_export(app: &mut MzViewerApp) {
         .map(|rt| format!("{:.3}min", rt))
         .unwrap_or_else(|| "unknown_rt".to_string());
 
-    let default_name = active_file
-        .name
-        .replace(".mzML", &format!("_spectrum_{}.csv", rt_label));
+    let default_name = format!(
+        "{}_spectrum_{}.csv",
+        std::path::Path::new(&active_file.path)
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy(),
+        rt_label
+    );
 
     let dialog = rfd::FileDialog::new()
         .add_filter("CSV", &["csv"])
@@ -477,229 +492,232 @@ pub fn handle_spectrum_csv_export(app: &mut MzViewerApp) {
 /// 4. Highlights the currently active file.
 /// 5. If no files are opened, displays a message indicating this.
 pub fn update_file_information_panel(app: &mut MzViewerApp, ctx: &egui::Context) {
-    egui::SidePanel::left("file_information_panel").show(ctx, |ui| {
-        ui.label("Opened files:");
-        ui.separator();
-
-        if app.files.is_empty() {
-            ui.colored_label(Color32::GRAY, "No files opened");
-        } else {
-            let mut file_to_remove: Option<FileId> = None;
-            let mut new_active_id: Option<FileId> = None;
-
-            // Collect (id, file) pairs and sort by ID for consistent display order
-            let mut files_sorted: Vec<_> = app.files.iter_mut().collect();
-            files_sorted.sort_by_key(|(id, _)| **id);
-
-            for (file_id, file) in files_sorted {
-                let is_active = app.active_file_id == Some(*file_id);
-
-                ui.horizontal(|ui| {
-                    if file.is_loading {
-                        ui.spinner();
-                        ui.label(
-                            egui::RichText::new(&file.name)
-                                .small()
-                                .italics()
-                                .color(egui::Color32::GRAY),
-                        );
-                        // Skip close/select buttons while loading
+    if !app.workspace.view.files {
+        return;
+    }
+    egui::SidePanel::left("file_information_panel")
+        .default_width(220.0)
+        .width_range(180.0..=380.0)
+        .resizable(true)
+        .show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.heading("Data files");
+                if ui.small_button("Collapse").clicked() {
+                    app.workspace.view.files = false;
+                }
+            });
+            ui.small(format!("{} datasets", app.files.len()));
+            ui.separator();
+            let mut remove = None;
+            let mut select = None;
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                if app.files.is_empty() {
+                    ui.weak("Open data to start inspecting chromatograms and spectra.");
+                }
+                let mut files: Vec<_> = app.files.iter_mut().collect();
+                files.sort_by_key(|(id, _)| **id);
+                for (id, file) in files {
+                    let active = app.active_file_id == Some(*id);
+                    let fill = if active {
+                        ui.visuals().selection.bg_fill
                     } else {
-                        // Highlight the active file
-                        if is_active {
-                            let frame = egui::Frame::default()
-                                .fill(ui.visuals().selection.bg_fill)
-                                .inner_margin(egui::Margin::same(4));
-                            frame.show(ui, |ui| {
-                                // Visibility checkbox
-                                if ui.checkbox(&mut file.display.visible, "").changed() {
-                                    info!(
-                                        "File visibility toggled: {} (ID: {}) -> {}",
-                                        file.name, file_id, file.display.visible
+                        Color32::TRANSPARENT
+                    };
+                    egui::Frame::new()
+                        .fill(fill)
+                        .inner_margin(8)
+                        .corner_radius(5)
+                        .show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            ui.horizontal(|ui| {
+                                if file.is_loading {
+                                    ui.spinner();
+                                } else {
+                                    ui.checkbox(&mut file.display.visible, "")
+                                        .on_hover_text("Show this trace");
+                                    let (marker, _) = ui.allocate_exact_size(
+                                        egui::vec2(10.0, 18.0),
+                                        egui::Sense::hover(),
+                                    );
+                                    ui.painter().circle_filled(
+                                        marker.center(),
+                                        4.0,
+                                        file.display.color.to_egui(),
                                     );
                                 }
-
-                                // File name label (clickable to set as active)
-                                if ui
-                                    .selectable_label(true, egui::RichText::new(&file.name).small())
-                                    .on_hover_text(format!("Active file (ID: {})", file_id))
-                                    .clicked()
-                                {
-                                    new_active_id = Some(*file_id);
-                                }
-
-                                // Close button
-                                if ui.small_button("❌").on_hover_text("Close file").clicked() {
-                                    file_to_remove = Some(*file_id);
-                                    info!(
-                                        "Close button clicked for file: {} (ID: {})",
-                                        file.name, file_id
-                                    );
-                                }
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        if ui
+                                            .small_button(if file.is_loading {
+                                                "Cancel"
+                                            } else {
+                                                "×"
+                                            })
+                                            .on_hover_text("Close dataset")
+                                            .clicked()
+                                        {
+                                            remove = Some(*id);
+                                        }
+                                        let response = ui.add(
+                                            egui::Button::selectable(
+                                                active,
+                                                egui::RichText::new(&file.name),
+                                            )
+                                            .truncate(),
+                                        );
+                                        if response
+                                            .on_hover_text(
+                                                file.cache
+                                                    .source_path
+                                                    .as_deref()
+                                                    .unwrap_or(&file.path),
+                                            )
+                                            .clicked()
+                                        {
+                                            select = Some(*id);
+                                        }
+                                    },
+                                );
                             });
-                        } else {
-                            // Visibility checkbox
-                            if ui.checkbox(&mut file.display.visible, "").changed() {
-                                info!(
-                                    "File visibility toggled: {} (ID: {}) -> {}",
-                                    file.name, file_id, file.display.visible
-                                );
-                            }
-
-                            // File name label (clickable to set as active)
-                            if ui
-                                .selectable_label(false, egui::RichText::new(&file.name).small())
-                                .on_hover_text(format!(
-                                    "Click to set as active file (ID: {})",
-                                    file_id
-                                ))
-                                .clicked()
-                            {
-                                new_active_id = Some(*file_id);
-                            }
-
-                            // Close button
-                            if ui.small_button("❌").on_hover_text("Close file").clicked() {
-                                file_to_remove = Some(*file_id);
-                                info!(
-                                    "Close button clicked for file: {} (ID: {})",
-                                    file.name, file_id
-                                );
-                            }
-                        }
-                    }
-                });
-            }
-
-            // Update active ID if a file was clicked
-            if let Some(new_id) = new_active_id {
-                if app.active_file_id != Some(new_id) {
-                    app.active_file_id = Some(new_id);
-                    app.state_changed = StateChange::Changed;
-                    // Sync the color picker to reflect the newly active file's color
-                    if let Some(file) = app.files.get(&new_id) {
+                            ui.small(if file.is_loading {
+                                "Importing…"
+                            } else if active {
+                                "Active dataset"
+                            } else {
+                                "Overlay trace"
+                            });
+                        });
+                    ui.add_space(6.0);
+                }
+            });
+            if let Some(id) = select {
+                if app.active_file_id != Some(id) {
+                    app.active_file_id = Some(id);
+                    app.integration = Default::default();
+                    app.user_input.retention_time_ms_spectrum = None;
+                    if let Some(file) = app.files.get(&id) {
                         app.user_input.line_color = file.display.color;
                     }
-                    info!("Active file changed to ID: {}", new_id);
+                    super::workspace::activate_file(app, id);
                 }
             }
-
-            // Remove file if close button was clicked
-            if let Some(id) = file_to_remove {
-                if let Some(removed_file) = app.files.remove(&id) {
-                    info!(
-                        "File removed: {} (ID: {}). FileIds of remaining files are unaffected.",
-                        removed_file.name, id
-                    );
-
-                    // If we removed the active file, set a new active file or None
-                    if app.active_file_id == Some(id) {
-                        // Set active to the first remaining file (by lowest ID), or None if empty
-                        app.active_file_id = app.files.keys().min().copied();
-
-                        if let Some(new_active) = app.active_file_id {
-                            // Sync color picker to the newly active file's color
-                            if let Some(new_file) = app.files.get(&new_active) {
-                                app.user_input.line_color = new_file.display.color;
-                            }
-                            info!("Active file changed to ID: {} after removal", new_active);
-                        } else {
-                            info!("No files remain after removal");
-                        }
-                    }
-
-                    // Update validity state
-                    if app.files.is_empty() {
-                        app.invalid_file = FileValidity::Invalid;
-                        app.user_input.line_color = LineColor::default();
-                        app.user_input.retention_time_ms_spectrum = None;
-                    }
-                    app.integration = crate::gui::state::IntegrationState::default();
+            if let Some(id) = remove {
+                app.files.remove(&id);
+                app.workspace.traces.remove(&id);
+                if app.active_file_id == Some(id) {
+                    app.active_file_id = None;
                 }
+                app.user_input.retention_time_ms_spectrum = None;
+                app.repair_active_file();
             }
-        }
-    });
+        });
 }
 
-/// Updates the central panel of the user interface.
-///
-/// This function is responsible for rendering the main content area of the application, which includes the chromatogram and mass spectrum plots.
-///
-/// # Parameters
-///
-/// - `ctx`: A reference to the `egui::Context` object, which is used to render the user interface.
-///
-/// # Functionality
-///
-/// 1. Displays a `CentralPanel` that fills the available space in the center of the application.
-/// 2. Adds a `ScrollArea` to the central panel, allowing the user to scroll the content if it exceeds the available space.
-/// 3. Renders a `CollapsingHeader` for the chromatogram plot, which can be expanded or collapsed by the user.
-///    - Calls the `plot_chromatogram()` function to generate the chromatogram plot.
-///    - Adds a context menu to the chromatogram plot, which allows the user to access the plot properties.
-///    - Calls the `add_plot_properties()` function to add the plot properties to the context menu.
-/// 4. Adds some vertical space between the chromatogram and mass spectrum plots.
-/// 5. Renders a `CollapsingHeader` for the mass spectrum plot, which can be expanded or collapsed by the user.
-///    - Calls the `plot_mass_spectrum()` function to generate the mass spectrum plot.
-///
-/// # Errors
-///
-/// This function does not return any errors. It handles the rendering of the central panel and the associated plots within the user interface.
+/// Linked plots with a draggable divider and a clear empty state.
 pub fn update_central_panel(app: &mut MzViewerApp, ctx: &Context) {
-    debug!("Updating central panel.");
-    egui::CentralPanel::default().show(ctx, |ui| {
-        egui::ScrollArea::both().show(ui, |ui| {
-            egui::CollapsingHeader::new("Chromatogram")
-                .default_open(true)
-                .show(ui, |ui| {
-                    debug!("Plotting chromatogram.");
-                    let chromatogram = plotting::plot_chromatogram(app, ui, ctx);
-                    if chromatogram.secondary_clicked() {
-                        app.plot_properties_open = true;
-                    }
-
-                    // Integration result bar — shown only when relevant
-                    match (
-                        app.integration.start_rt,
-                        app.integration.end_rt,
-                        app.integration.result,
-                    ) {
-                        (Some(s), Some(e), Some(area)) => {
-                            ui.horizontal(|ui| {
-                                ui.colored_label(
-                                    egui::Color32::from_rgb(60, 200, 60),
-                                    format!("Peak Area [{:.3} – {:.3} min] = {:.4e}", s, e, area),
-                                );
-                                if ui.small_button("✕ Clear").clicked() {
-                                    app.integration.start_rt = None;
-                                    app.integration.end_rt = None;
-                                    app.integration.result = None;
-                                }
-                            });
+    egui::CentralPanel::default()
+        .frame(
+            egui::Frame::central_panel(&ctx.style())
+                .fill(ctx.style().visuals.extreme_bg_color)
+                .inner_margin(16),
+        )
+        .show(ctx, |ui| {
+            if app.files.is_empty() {
+                ui.centered_and_justified(|ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.heading("Inspect your mass spectrometry data");
+                        ui.label(
+                            "Open mzML or a vendor dataset to view chromatograms and spectra.",
+                        );
+                        ui.add_space(12.0);
+                        if ui.button("Open data…").clicked() {
+                            handle_file_selection(app);
                         }
-                        (Some(s), None, _) => {
-                            ui.colored_label(
-                                egui::Color32::YELLOW,
-                                format!("∫ Drag to set end … (start: {:.3} min)", s),
-                            );
-                        }
-                        _ => {}
+                        ui.small("For directory datasets, use File → Open dataset folder.");
+                    });
+                });
+                return;
+            }
+            ui.horizontal_wrapped(|ui| {
+                ui.strong("Chromatograms");
+                if let Some(specs) = &app.presets.specs {
+                    ui.small(format!("Shared preset · {} analytes", specs.len()));
+                }
+
+                ui.selectable_value(&mut app.workspace.overlay, false, "Grid");
+                ui.selectable_value(&mut app.workspace.overlay, true, "Overlay analytes");
+                if !app.workspace.overlay {
+                    ui.label("Rows");
+                    ui.add(egui::DragValue::new(&mut app.workspace.view.rows).range(1..=8));
+                    if ui.small_button("+ Row").clicked() {
+                        app.workspace.view.rows = (app.workspace.view.rows + 1).min(8);
                     }
-
-                    info!("Chromatogram plotted successfully.");
-                });
-
-            ui.add_space(5.0); // Add some space between the plots
-
-            egui::CollapsingHeader::new("Mass Spectrum")
-                .default_open(true)
-                .show(ui, |ui| {
-                    debug!("Plotting mass spectrum.");
-                    plotting::plot_mass_spectrum(app, ui);
-                    info!("Mass spectrum plotted successfully.");
-                });
+                    ui.label("Columns");
+                    ui.add(egui::DragValue::new(&mut app.workspace.view.columns).range(1..=8));
+                    if ui.small_button("+ Column").clicked() {
+                        app.workspace.view.columns = (app.workspace.view.columns + 1).min(8);
+                    }
+                }
+                ui.checkbox(&mut app.workspace.view.compare_samples, "Compare samples")
+                    .on_hover_text("Explicitly show traces from other samples together");
+            });
+            let divider_id = egui::Id::new("workbench_plot_split");
+            let mut fraction = ctx.data_mut(|data| *data.get_temp_mut_or(divider_id, 0.58_f32));
+            let available = ui.available_size();
+            let chromatogram_height = if app.workspace.view.spectrum {
+                ((available.y - 44.0) * fraction).max(130.0)
+            } else {
+                available.y
+            };
+            ui.allocate_ui_with_layout(
+                egui::vec2(available.x, chromatogram_height),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    plotting::plot_chromatogram(app, ui, ctx);
+                },
+            );
+            if !app.workspace.view.spectrum {
+                return;
+            }
+            let (rect, response) =
+                ui.allocate_exact_size(egui::vec2(ui.available_width(), 8.0), egui::Sense::drag());
+            ui.painter().hline(
+                rect.x_range(),
+                rect.center().y,
+                ui.visuals().widgets.noninteractive.bg_stroke,
+            );
+            let response = response
+                .on_hover_cursor(egui::CursorIcon::ResizeVertical)
+                .on_hover_text("Drag to resize plots");
+            if response.dragged() {
+                fraction = (fraction
+                    + ctx.input(|input| input.pointer.delta().y) / available.y.max(1.0))
+                .clamp(0.3, 0.75);
+                ctx.data_mut(|data| data.insert_temp(divider_id, fraction));
+            }
+            ui.horizontal(|ui| {
+                ui.strong("Mass spectrum");
+                if ui.small_button("Collapse").clicked() {
+                    app.workspace.view.spectrum = false;
+                }
+                if ui
+                    .small_button("Close")
+                    .on_hover_text("Clear the selected spectrum and expand chromatograms")
+                    .clicked()
+                {
+                    if let Some(file) = app.active_file_id.and_then(|id| app.files.get_mut(&id)) {
+                        file.cache.mass_spectrum = None;
+                    }
+                    app.user_input.retention_time_ms_spectrum = None;
+                    app.workspace.view.spectrum = false;
+                }
+                if let Some(rt) = app.user_input.retention_time_ms_spectrum {
+                    ui.weak(format!("RT {rt:.3} min"));
+                }
+            });
+            plotting::plot_mass_spectrum(app, ui);
         });
-    });
-    info!("Central panel updated successfully.");
 }
 
 /// Adds the plot properties UI elements to the provided `Ui`.
@@ -807,6 +825,8 @@ pub fn add_scan_filter_dropdown(app: &mut MzViewerApp, ui: &mut Ui) {
         });
 
     egui::ComboBox::from_label("")
+        .width(ui.available_width())
+        .truncate()
         .selected_text(current_selection)
         .show_ui(ui, |ui| {
             for (ms_level, polarity, precursor, filter_min_mz, filter_max_mz) in &available_filters

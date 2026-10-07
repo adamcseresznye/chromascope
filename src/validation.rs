@@ -122,10 +122,11 @@ impl DataBounds {
 /// let invalid = XicParams::new(2000.0, ScanPolarity::Positive, 10.0, &bounds);
 /// assert!(invalid.is_err());
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct XicParams {
     mass: f64,
     mass_tolerance: f64,
+    #[serde(with = "crate::processing::polarity_serde")]
     polarity: ScanPolarity,
 }
 

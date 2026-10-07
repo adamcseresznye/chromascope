@@ -24,6 +24,7 @@ use std::path::PathBuf;
 /// use mzdata::spectrum::ScanPolarity;
 ///
 /// let params = ProcessingParams {
+///     acquisition: None,
 ///     plot_type: PlotType::Tic,
 ///     ms_level: 1,
 ///     polarity: ScanPolarity::Positive,
@@ -33,13 +34,16 @@ use std::path::PathBuf;
 ///     precursor_mz: None,
 /// };
 /// ```
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct ProcessingParams {
+    #[serde(default)]
+    pub acquisition: Option<AcquisitionMode>,
     /// Type of chromatogram to extract (TIC, BPC, or XIC)
     pub plot_type: PlotType,
     /// MS level filter (e.g., 1 for MS1, 2 for MS2)
     pub ms_level: u8,
     /// Ion polarity filter (Positive, Negative, or Unknown)
+    #[serde(with = "crate::processing::polarity_serde")]
     pub polarity: ScanPolarity,
     /// Smoothing window size (0-10, where 0 means no smoothing)
     pub smoothing: u8,
@@ -62,25 +66,32 @@ pub enum ProcessingResult {
     Success {
         file_id: usize,
         plot_data: Vec<[f64; 2]>,
+        params: ProcessingParams,
         chromatogram: ChromatogramData,
     },
     Error {
         file_id: usize,
         message: String,
+        params: ProcessingParams,
     },
 }
 
 /// Result of a background file-loading task.
 /// Sent from the background thread to the UI thread via mpsc channel.
 #[derive(Debug)]
+pub struct LoadedRun {
+    pub name: String,
+    pub path: String,
+    pub bounds: DataBounds,
+    pub scan_filters: Vec<(u8, ScanPolarity, Option<f64>, f64, f64)>,
+}
+
+#[derive(Debug)]
 pub enum FileLoadingResult {
     Success {
         file_id: usize,
-        name: String,
-        path: String,
-        color: LineColor,
-        bounds: DataBounds,
-        scan_filters: Vec<(u8, ScanPolarity, Option<f64>, f64, f64)>,
+        runs: Vec<LoadedRun>,
+        workspace: Option<std::sync::Arc<tempfile::TempDir>>,
     },
     Error {
         file_id: usize,
@@ -89,39 +100,72 @@ pub enum FileLoadingResult {
     },
 }
 
-/// Opens a file and extracts metadata on a background thread.
-///
-/// # Design note
-/// `MzData` is fully created and dropped inside this function.
-/// It never crosses a thread boundary, satisfying the `!Send` constraint.
-pub fn open_file_in_background(
+/// Imports all runs and extracts metadata off the UI thread.
+pub fn import_file_in_background(
     path: PathBuf,
+    executable: Option<PathBuf>,
+    cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
     file_id: usize,
-    color: LineColor,
 ) -> FileLoadingResult {
     let name = path
         .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("unknown")
-        .to_string();
-    let path_str = path.display().to_string();
-
-    let mut data = MzData::new();
-    match data.open_msfile(&path) {
-        Ok(_) => FileLoadingResult::Success {
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+    let result = (|| {
+        let imported = crate::import::prepare_input(&path, executable.as_deref(), &cancelled)?;
+        let multiple = imported.paths.len() > 1;
+        let mut runs = Vec::new();
+        for run_path in imported.paths {
+            if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
+                return Err("Import cancelled.".to_string());
+            }
+            let mut data = MzData::new();
+            data.open_msfile(&run_path).map_err(|e| e.to_string())?;
+            let run_name = if multiple {
+                format!(
+                    "{} / {}",
+                    name,
+                    run_path.file_stem().unwrap_or_default().to_string_lossy()
+                )
+            } else {
+                name.clone()
+            };
+            runs.push(LoadedRun {
+                name: run_name,
+                path: run_path.to_string_lossy().into_owned(),
+                bounds: data.bounds,
+                scan_filters: data.available_scan_filters.clone(),
+            });
+        }
+        Ok((runs, imported.workspace))
+    })();
+    match result {
+        Ok((runs, workspace)) => FileLoadingResult::Success {
             file_id,
-            name,
-            path: path_str,
-            color,
-            bounds: data.bounds,
-            scan_filters: data.available_scan_filters.clone(),
+            runs,
+            workspace,
         },
-        Err(e) => FileLoadingResult::Error {
+        Err(message) => FileLoadingResult::Error {
             file_id,
             name,
-            message: format!("{}", e),
+            message,
         },
     }
+}
+
+/// Opens an mzML input without an external converter.
+pub fn open_file_in_background(
+    path: PathBuf,
+    file_id: usize,
+    _color: LineColor,
+) -> FileLoadingResult {
+    import_file_in_background(
+        path,
+        None,
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        file_id,
+    )
 }
 
 /// Entry point for background thread processing.
@@ -146,6 +190,7 @@ pub fn run_in_background(
         return ProcessingResult::Error {
             file_id,
             message: format!("{}", e),
+            params,
         };
     }
 
@@ -154,10 +199,12 @@ pub fn run_in_background(
             file_id,
             plot_data,
             chromatogram,
+            params,
         },
         Err(e) => ProcessingResult::Error {
             file_id,
             message: format!("{}", e),
+            params,
         },
     }
 }
@@ -169,10 +216,10 @@ pub fn run_in_background(
 /// # Processing Pipeline
 /// 1. **Extract raw chromatogram** based on type (TIC/BPC/XIC)
 ///    - Mutates `MzData` internal fields (retention_time, intensity, etc.)
-/// 2. **Prepare for visualization** (aggregate duplicates, format as [f64; 2] pairs)
+/// 2. **Prepare full-resolution data** (aggregate duplicates, format as [f64; 2] pairs)
 ///    - Returns a new Vec without mutating
 /// 3. **Apply smoothing filter** if window size > 0
-///    - Mutates `MzData.plot_data` field with smoothed results
+///    - Smooths full-resolution data before any display reduction
 /// 4. **Return the final result** as owned Vec
 ///
 /// # Arguments
@@ -205,6 +252,7 @@ pub fn run_in_background(
 /// data.open_msfile(&PathBuf::from("data.mzML"))?;
 ///
 /// let params = ProcessingParams {
+///     acquisition: None,
 ///     plot_type: PlotType::Tic,
 ///     ms_level: 1,
 ///     polarity: ScanPolarity::Positive,
@@ -223,6 +271,7 @@ pub fn process_chromatogram(
     data: &mut MzData,
     params: &ProcessingParams,
 ) -> Result<(Vec<[f64; 2]>, ChromatogramData)> {
+    data.acquisition_filter = params.acquisition;
     // Step 1: Extract raw chromatogram based on type, returning owned ChromatogramData
     let chromatogram = match params.plot_type {
         PlotType::Tic => data.get_tic(
@@ -253,6 +302,11 @@ pub fn process_chromatogram(
         }
     };
 
+    if let Some(mode) = params.acquisition {
+        if chromatogram.index.is_empty() {
+            return Err(ChromascopeError::MzDataError(format!("No matching {mode:?} scans. The source must contain matching acquisition metadata and spectra for this mode.")));
+        }
+    }
     // Step 2: Prepare for visualization (aggregate duplicates, format)
     let prepared = prepare_chromatogram_for_plot(&chromatogram)?;
 
@@ -307,24 +361,38 @@ pub fn prepare_chromatogram_for_plot(chrom: &ChromatogramData) -> Result<Vec<[f6
 
     debug!("Prepared {} data points for plotting", data.len());
 
-    // Decimate to MAX_PLOT_POINTS to keep egui_plot responsive on long files.
-    // Uses max-intensity per chunk to preserve peak shapes visually.
-    const MAX_PLOT_POINTS: usize = 2000;
-    if data.len() > MAX_PLOT_POINTS {
-        let chunk_size = (data.len() as f64 / MAX_PLOT_POINTS as f64).ceil() as usize;
-        let decimated: Vec<[f64; 2]> = data
-            .chunks(chunk_size)
-            .map(|chunk| {
-                *chunk
-                    .iter()
-                    .max_by(|a, b| a[1].partial_cmp(&b[1]).unwrap_or(std::cmp::Ordering::Equal))
-                    .unwrap()
-            })
-            .collect();
-        return Ok(decimated);
-    }
-
     Ok(data)
+}
+
+/// Reduce only the rendering copy, keeping endpoints and extrema in each bucket.
+/// Scientific calculations and exports must use the full-resolution input.
+pub fn decimate_for_display(data: &[[f64; 2]]) -> Vec<[f64; 2]> {
+    const MAX_PLOT_POINTS: usize = 2000;
+    if data.len() <= MAX_PLOT_POINTS {
+        return data.to_vec();
+    }
+    let bucket_size = (data.len() - 2).div_ceil((MAX_PLOT_POINTS - 2) / 2);
+    let mut result = vec![data[0]];
+    for chunk in data[1..data.len() - 1].chunks(bucket_size) {
+        let min = chunk
+            .iter()
+            .enumerate()
+            .min_by(|a, b| a.1[1].total_cmp(&b.1[1]))
+            .unwrap()
+            .0;
+        let max = chunk
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1[1].total_cmp(&b.1[1]))
+            .unwrap()
+            .0;
+        result.push(chunk[min.min(max)]);
+        if min != max {
+            result.push(chunk[min.max(max)]);
+        }
+    }
+    result.push(data[data.len() - 1]);
+    result
 }
 
 /// Find the closest spectrum index by retention time using binary search.
@@ -563,6 +631,7 @@ mod tests {
         // Arrange
         let mut data = load_test_file();
         let params = ProcessingParams {
+            acquisition: None,
             plot_type: PlotType::Tic,
             polarity: ScanPolarity::Positive,
             smoothing: 0,
@@ -594,6 +663,7 @@ mod tests {
         // Arrange
         let mut data = load_test_file();
         let params = ProcessingParams {
+            acquisition: None,
             plot_type: PlotType::Bpc,
             polarity: ScanPolarity::Positive,
             smoothing: 0,
@@ -621,6 +691,7 @@ mod tests {
         // Arrange
         let mut data = load_test_file();
         let params = ProcessingParams {
+            acquisition: None,
             plot_type: PlotType::Xic,
             polarity: ScanPolarity::Positive,
             smoothing: 0,
@@ -656,6 +727,7 @@ mod tests {
             .expect("Valid XIC params should construct");
 
         let params = ProcessingParams {
+            acquisition: None,
             plot_type: PlotType::Xic,
             polarity: ScanPolarity::Positive,
             smoothing: 0,
@@ -684,6 +756,7 @@ mod tests {
         // Arrange
         let mut data = load_test_file();
         let params = ProcessingParams {
+            acquisition: None,
             plot_type: PlotType::Bpc,
             polarity: ScanPolarity::Positive,
             smoothing: 3,
@@ -714,6 +787,7 @@ mod tests {
         // Arrange
         let mut data = load_test_file();
         let params = ProcessingParams {
+            acquisition: None,
             plot_type: PlotType::Tic,
             polarity: ScanPolarity::Negative,
             smoothing: 0,
@@ -740,6 +814,7 @@ mod tests {
         // Arrange
         let mut data = load_test_file();
         let params = ProcessingParams {
+            acquisition: None,
             plot_type: PlotType::Tic,
             polarity: ScanPolarity::Positive,
             smoothing: 11, // Invalid: > 10
@@ -771,6 +846,7 @@ mod tests {
         // The tuple must contain the smoothed plot data AND the indexable raw chromatogram.
         let mut data = load_test_file();
         let params = ProcessingParams {
+            acquisition: None,
             plot_type: PlotType::Tic,
             polarity: ScanPolarity::Positive,
             smoothing: 2,
@@ -798,7 +874,7 @@ mod tests {
 
         // Lengths must be consistent (plot_data may differ due to duplicate RT aggregation,
         // but both must be non-trivially populated)
-        assert!(plot_data.len() > 0);
+        assert!(!plot_data.is_empty());
         assert_eq!(chromatogram.retention_time.len(), chromatogram.index.len());
     }
 
@@ -933,11 +1009,125 @@ mod tests {
             mz: vec![],
             index: (0..5000).collect(),
         };
-        let result = prepare_chromatogram_for_plot(&chrom).unwrap();
+        let full = prepare_chromatogram_for_plot(&chrom).unwrap();
+        assert_eq!(full.len(), 5000);
+        let result = decimate_for_display(&full);
+        assert_eq!(result.first(), full.first());
+        assert_eq!(result.last(), full.last());
         assert!(
             result.len() <= 2000,
             "Expected ≤ 2000 points, got {}",
             result.len()
         );
+    }
+}
+
+pub(crate) mod polarity_serde {
+    use mzdata::spectrum::ScanPolarity;
+    use serde::{Deserialize, Deserializer, Serializer};
+    pub fn serialize<S: Serializer>(p: &ScanPolarity, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(match p {
+            ScanPolarity::Positive => "positive",
+            ScanPolarity::Negative => "negative",
+            _ => "unknown",
+        })
+    }
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<ScanPolarity, D::Error> {
+        match String::deserialize(d)?.as_str() {
+            "positive" => Ok(ScanPolarity::Positive),
+            "negative" => Ok(ScanPolarity::Negative),
+            "unknown" => Ok(ScanPolarity::Unknown),
+            _ => Err(serde::de::Error::custom("Invalid polarity")),
+        }
+    }
+}
+
+/// Acquisition types are matched from spectrum CV metadata, rather than inferred from MS level alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum AcquisitionMode {
+    FS,
+    SIM,
+    MRM,
+}
+impl AcquisitionMode {
+    pub fn matches(self, description: &mzdata::spectrum::SpectrumDescription) -> bool {
+        let mut sim = false;
+        let mut mrm = false;
+        for p in description.params.iter().chain(
+            description
+                .acquisition
+                .scans
+                .iter()
+                .flat_map(|scan| scan.params.iter().flat_map(|ps| ps.iter())),
+        ) {
+            let name = p.name.to_ascii_lowercase();
+            sim |= p.accession == Some(1000582)
+                || name == "sim spectrum"
+                || name == "selected ion monitoring spectrum";
+            mrm |= p.accession == Some(1000583)
+                || name == "srm spectrum"
+                || name == "mrm spectrum"
+                || name == "selected reaction monitoring spectrum";
+        }
+        match self {
+            Self::FS => !sim && !mrm && description.ms_level == 1,
+            Self::SIM => sim,
+            Self::MRM => mrm,
+        }
+    }
+}
+
+#[cfg(test)]
+mod acquisition_tests {
+    use super::*;
+    #[test]
+    fn targeted_modes_require_correct_spectrum_metadata() {
+        let mut d = mzdata::spectrum::SpectrumDescription {
+            ms_level: 1,
+            ..Default::default()
+        };
+        assert!(AcquisitionMode::FS.matches(&d));
+        assert!(!AcquisitionMode::SIM.matches(&d));
+        d.params.push(mzdata::params::Param {
+            name: "SIM spectrum".into(),
+            accession: Some(1000582),
+            ..Default::default()
+        });
+        assert!(AcquisitionMode::SIM.matches(&d));
+        assert!(!AcquisitionMode::FS.matches(&d));
+        assert!(!AcquisitionMode::MRM.matches(&d));
+        d.ms_level = 2;
+        d.params.clear();
+        assert!(!AcquisitionMode::MRM.matches(&d));
+        d.params.push(mzdata::params::Param {
+            name: "SRM spectrum".into(),
+            accession: Some(1000583),
+            ..Default::default()
+        });
+        assert!(AcquisitionMode::MRM.matches(&d));
+        assert!(!AcquisitionMode::SIM.matches(&d));
+    }
+    #[test]
+    fn acquisition_filter_changes_actual_extraction_and_can_be_cleared() {
+        let mut data = MzData::new();
+        data.open_msfile(&PathBuf::from("test_file/data_dependent_02.mzML"))
+            .unwrap();
+        let mut params = ProcessingParams {
+            acquisition: Some(AcquisitionMode::FS),
+            plot_type: PlotType::Tic,
+            ms_level: 1,
+            polarity: ScanPolarity::Positive,
+            smoothing: 0,
+            xic_params: None,
+            mz_range: None,
+            precursor_mz: None,
+        };
+        let (_, full) = process_chromatogram(&mut data, &params).unwrap();
+        assert!(!full.index.is_empty());
+        params.acquisition = Some(AcquisitionMode::SIM);
+        assert!(process_chromatogram(&mut data, &params).is_err());
+        params.acquisition = None;
+        let (_, unfiltered) = process_chromatogram(&mut data, &params).unwrap();
+        assert_eq!(unfiltered.index, full.index);
     }
 }

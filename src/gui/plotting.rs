@@ -1,60 +1,100 @@
-use crate::gui::state::{MzViewerApp, OpenFile, StateChange};
+use crate::gui::state::{MzViewerApp, OpenFile};
 use eframe::egui;
-use egui_plot::{Legend, Line, PlotPoint, PlotPoints, Polygon, VLine};
+use egui_plot::{Line, PlotPoint, PlotPoints, Polygon, VLine};
 use log::{debug, info, warn};
 
 /// Renders the chromatogram plot widget and returns the response plus coordinate data.
-pub fn render_chromatogram(
-    app: &MzViewerApp,
+fn render_chromatogram(
+    app: &mut MzViewerApp,
     ui: &mut egui::Ui,
+    key: Option<&(super::state::FileId, crate::processing::ProcessingParams)>,
+    height: f32,
 ) -> (
     egui::Response,
     Option<egui_plot::PlotBounds>,
     Option<PlotPoint>,
 ) {
-    if app.async_state.is_processing {
-        let response = ui
-            .centered_and_justified(|ui| {
-                ui.spinner();
-                ui.label("Loading chromatogram…");
-            })
-            .response;
-        return (response, None, None);
-    }
-
     let mut plot_bounds = None;
-    let mut pointer_coord: Option<PlotPoint> = None;
-
-    let response = egui_plot::Plot::new("chromatogram")
-        .width(ui.available_width() * 0.99)
-        .height(ui.available_height() * 0.6)
-        .legend(Legend::default())
-        .label_formatter(|_name, value| {
-            format!("Rt = {:.2} min\nIntensity = {:.2e}", value.x, value.y)
+    let mut pointer_coord = None;
+    let restore_bounds = app
+        .workspace
+        .apply_bounds
+        .then_some(app.workspace.bounds)
+        .flatten();
+    let id = key
+        .map(|(id, p)| format!("chromatogram_{id}_{p:?}"))
+        .unwrap_or_else(|| "chromatogram_overlay".into());
+    let mut plot = egui_plot::Plot::new(id)
+        .width(ui.available_width())
+        .height(height.max(100.0))
+        .x_axis_label("Retention time (min)")
+        .y_axis_label("Intensity (a.u.)")
+        .show_background(false)
+        .show_grid([false, true])
+        .allow_double_click_reset(false)
+        .label_formatter(|name, value| {
+            format!("{name}\nRT {:.4} min\nIntensity {:.3e}", value.x, value.y)
         })
         .y_axis_formatter(format_intensity_axis)
-        .boxed_zoom_pointer_button(egui::PointerButton::Middle)
+        .boxed_zoom_pointer_button(egui::PointerButton::Middle);
+    if key.is_some() {
+        plot = plot.link_axis("stacked_retention_time", [true, false]);
+    }
+    if app.workspace.reset_plots {
+        plot = plot.reset();
+    }
+    let response = plot
         .show(ui, |plot_ui| {
-            for file in app.files.values() {
-                if file.display.visible {
-                    if let Some(data) = &file.cache.plot_data {
-                        let line = create_line_for_file(app, file, data);
-                        plot_ui.line(line);
-                    }
+            if let Some([min, max]) = restore_bounds {
+                if key.is_some() {
+                    plot_ui.set_plot_bounds_x(min[0]..=max[0]);
+                    plot_ui.set_auto_bounds([false, true]);
+                } else {
+                    plot_ui.set_plot_bounds(egui_plot::PlotBounds::from_min_max(min, max));
                 }
             }
-
-            if app.files.is_empty() {
-                warn!("No files opened");
+            for (id, params) in super::workspace::trace_keys(app, true) {
+                if key.is_some_and(|(file, p)| *file != id || *p != params) {
+                    continue;
+                }
+                let file = &app.files[&id];
+                if file.cache.last_processing_params.as_ref() == Some(&params) {
+                    if let Some(points) = &file.cache.display_data {
+                        plot_ui.line(create_line_for_file(app, file, points));
+                    }
+                } else if let Some(t) = app
+                    .workspace
+                    .traces
+                    .get(&id)
+                    .and_then(|ts| ts.iter().find(|t| t.params == params))
+                {
+                    plot_ui.line(
+                        Line::new(
+                            format!("{} · {}", file.name, t.name),
+                            t.display_points.clone(),
+                        )
+                        .color(t.color.to_egui())
+                        .width(app.user_input.line_width),
+                    );
+                }
             }
-
-            render_integration_overlay(app, plot_ui);
-
+            if key.map_or(true, |(id, p)| {
+                app.active_file_id == Some(*id)
+                    && app
+                        .files
+                        .get(id)
+                        .and_then(|f| f.cache.last_processing_params.as_ref())
+                        == Some(p)
+            }) {
+                render_integration_overlay(app, plot_ui);
+            }
             plot_bounds = Some(plot_ui.plot_bounds());
             pointer_coord = plot_ui.pointer_coordinate();
         })
         .response;
-
+    if let Some(b) = plot_bounds {
+        app.workspace.bounds = Some([b.min(), b.max()]);
+    }
     (response, plot_bounds, pointer_coord)
 }
 
@@ -64,10 +104,20 @@ pub fn create_line_for_file(
     file: &OpenFile,
     data: &[[f64; 2]],
 ) -> Line<'static> {
-    Line::new(file.name.clone(), PlotPoints::from(data.to_vec()))
-        .width(app.user_input.line_width)
-        .style(app.user_input.line_type.to_egui())
-        .color(file.display.color.to_egui())
+    Line::new(
+        format!(
+            "{} · {}",
+            file.name,
+            file.cache
+                .last_processing_params
+                .as_ref()
+                .map(|p| super::workspace::display_name(app, file.id, p))
+                .unwrap_or_default()
+        ),
+        PlotPoints::from(data.to_vec()),
+    )
+    .width(app.user_input.line_width)
+    .color(file.display.color.to_egui())
 }
 
 /// Draws the integration region shading and boundary lines on the chromatogram plot.
@@ -108,6 +158,10 @@ pub fn render_integration_overlay(app: &MzViewerApp, plot_ui: &mut egui_plot::Pl
         Some(d) => d,
         None => return,
     };
+    let drawing_data = match &file.cache.display_data {
+        Some(d) => d,
+        None => return,
+    };
 
     let (s, e) = if start < end {
         (start, end)
@@ -115,8 +169,7 @@ pub fn render_integration_overlay(app: &MzViewerApp, plot_ui: &mut egui_plot::Pl
         (end, start)
     };
 
-    // Use cached interpolated boundary intensities when available; else fall back to
-    // the nearest data-point intensities so the overlay renders during a drag.
+    // Interpolate boundaries from full-resolution data, even while dragging.
     let i_start = app
         .integration
         .start_intensity
@@ -129,7 +182,12 @@ pub fn render_integration_overlay(app: &MzViewerApp, plot_ui: &mut egui_plot::Pl
     // Top edge: left interpolated boundary → interior curve points → right interpolated boundary.
     let mut top: Vec<[f64; 2]> = Vec::new();
     top.push([s, i_start]);
-    top.extend(data.iter().filter(|p| p[0] > s && p[0] < e).copied());
+    top.extend(
+        drawing_data
+            .iter()
+            .filter(|p| p[0] > s && p[0] < e)
+            .copied(),
+    );
     top.push([e, i_end]);
 
     if top.len() < 2 {
@@ -191,30 +249,261 @@ pub fn plot_chromatogram(
     ctx: &egui::Context,
 ) -> egui::Response {
     app.poll_processing_result(ctx);
-
-    if app.state_changed == StateChange::Changed && app.active_file_id.is_some() {
-        if let Some(active_id) = app.active_file_id {
-            if let Some(file) = app.files.get(&active_id) {
-                info!(
-                    "State has changed, reprocessing plot data for active file: {} (ID: {})",
-                    file.name, active_id
+    app.process_pending_update();
+    let available_height = ui.available_height().max(130.0);
+    let response = ui
+        .vertical(|ui| {
+            if app.workspace.overlay {
+                egui::ScrollArea::vertical()
+                    .id_salt("overlay_legend")
+                    .max_height(100.0)
+                    .show(ui, |ui| {
+                        for (id, p) in super::workspace::trace_keys(app, false) {
+                            if app.files[&id].display.visible {
+                                super::workspace::trace_row(app, ui, id, &p, true);
+                            }
+                        }
+                    });
+                let (response, bounds, point) = render_chromatogram(
+                    app,
+                    ui,
+                    None,
+                    (available_height - ui.min_rect().height()).max(120.0),
                 );
+                interactions(app, &response, bounds, point, None);
+            } else {
+                let keys = super::workspace::trace_keys(app, true);
+                let capacity =
+                    app.workspace.view.rows.clamp(1, 8) * app.workspace.view.columns.clamp(1, 8);
+                let pages = keys.len().div_ceil(capacity).max(1);
+                app.workspace.page = app.workspace.page.min(pages - 1);
+                if pages > 1 {
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add_enabled(app.workspace.page > 0, egui::Button::new("Previous page"))
+                            .clicked()
+                        {
+                            app.workspace.page -= 1;
+                        }
+                        ui.label(format!("Page {} / {pages}", app.workspace.page + 1));
+                        if ui
+                            .add_enabled(
+                                app.workspace.page + 1 < pages,
+                                egui::Button::new("Next page"),
+                            )
+                            .clicked()
+                        {
+                            app.workspace.page += 1;
+                        }
+                    });
+                }
+                if keys.is_empty() {
+                    if let Some(error) = app.active_file_id.and_then(|id|app.presets.failed.get(&id)) { ui.colored_label(ui.visuals().error_fg_color,format!("Preset could not be applied to this sample: {error}")); }
+                    else if app.presets.specs.is_some() && app.async_state.is_processing { ui.spinner(); ui.label("Preparing this sample's preset analytes…"); }
+                    else { ui.weak("No visible traces. Enable a trace in the inspector or extract a new one."); }
+                }
+                egui::ScrollArea::both()
+                    .id_salt("stacked_chromatograms")
+                    .max_height((available_height - 32.0).max(110.0))
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        let selected = keys
+                            .iter()
+                            .skip(app.workspace.page * capacity)
+                            .take(capacity)
+                            .collect::<Vec<_>>();
+                        let width = ui.available_width();
+                        let columns = app
+                            .workspace
+                            .view
+                            .columns
+                            .clamp(1, 8)
+                            .min(selected.len().max(1));
+                        let card_width = ((width - 8.0 * (columns - 1) as f32) / columns as f32)
+                            .clamp(220.0, 760.0);
+                        let height = ((available_height - 56.0)
+                            / app.workspace.view.rows.clamp(1, 8) as f32
+                            - 48.0)
+                            .clamp(115.0, 280.0);
+                        for row in selected.chunks(columns) {
+                            let group_width = card_width * row.len() as f32
+                                + ui.spacing().item_spacing.x * (row.len() - 1) as f32;
+                            ui.horizontal(|ui| {
+                                ui.add_space(((width - group_width) / 2.0).max(0.0));
+                                for key in row {
+                                    ui.allocate_ui_with_layout(
+                                        egui::vec2(card_width, height + 48.0),
+                                        egui::Layout::top_down(egui::Align::Min),
+                                        |ui| {
+                                            ui.push_id(
+                                                format!("stack_{}_{:?}", key.0, key.1),
+                                                |ui| {
+                                                    egui::Frame::group(ui.style())
+                                                        .inner_margin(8.0)
+                                                        .show(ui, |ui| {
+                                                            ui.set_width(
+                                                                (card_width - 16.0).max(1.0),
+                                                            );
+                                                            super::workspace::trace_row(
+                                                                app, ui, key.0, &key.1, true,
+                                                            );
+                                                            let (response, bounds, point) =
+                                                                render_chromatogram(
+                                                                    app,
+                                                                    ui,
+                                                                    Some(key),
+                                                                    height,
+                                                                );
+                                                            interactions(
+                                                                app,
+                                                                &response,
+                                                                bounds,
+                                                                point,
+                                                                Some(key),
+                                                            );
+                                                        });
+                                                },
+                                            );
+                                        },
+                                    );
+                                }
+                            });
+                            ui.add_space(8.0);
+                        }
+                    });
+            }
+        })
+        .response;
+    app.workspace.apply_bounds = false;
+    app.workspace.reset_plots = false;
+    response
+}
+fn interactions(
+    app: &mut MzViewerApp,
+    response: &egui::Response,
+    bounds: Option<egui_plot::PlotBounds>,
+    point: Option<PlotPoint>,
+    key: Option<&(super::state::FileId, crate::processing::ProcessingParams)>,
+) {
+    if !app.async_state.is_processing {
+        if response.double_clicked()
+            || response.drag_started_by(egui::PointerButton::Secondary)
+            || response.secondary_clicked()
+        {
+            if let Some((id, p)) = key {
+                super::workspace::select_key(app, *id, p);
             }
         }
-
-        if !app.async_state.is_processing {
-            app.request_chromatogram_update();
-        }
-
-        app.state_changed = StateChange::Unchanged;
+        super::interactivity::handle_chromatogram_click(app, response.clone(), point);
+        super::interactivity::handle_integration_drag(app, response, point);
     }
-
-    let (response, plot_bounds, pointer_coord) = render_chromatogram(app, ui);
-
-    super::interactivity::handle_chromatogram_click(app, response.clone(), plot_bounds);
-    super::interactivity::handle_integration_drag(app, &response, pointer_coord);
-
-    response
+    let popup_id = response.id.with("clicked_rt");
+    if response.secondary_clicked() {
+        response
+            .ctx
+            .data_mut(|d| d.insert_temp(popup_id, point.map(|p| p.x)));
+    }
+    response.context_menu(|ui| {
+        if ui
+            .add_enabled(
+                !app.async_state.is_processing,
+                egui::Button::new("Inspect spectrum here"),
+            )
+            .clicked()
+        {
+            let rt = ui
+                .ctx()
+                .data(|d| d.get_temp::<Option<f64>>(popup_id))
+                .flatten();
+            if let (Some(id), Some(rt)) = (app.active_file_id, rt) {
+                let scan = app
+                    .files
+                    .get(&id)
+                    .and_then(|f| f.cache.chromatogram.as_ref())
+                    .and_then(|c| crate::processing::find_closest_spectrum_index(c, rt as f32));
+                if let Some(scan) = scan {
+                    super::workspace::load_scan(app, id, scan);
+                }
+            }
+            ui.close();
+        }
+        if ui.button("Plot properties…").clicked() {
+            app.plot_properties_open = true;
+            ui.close();
+        }
+        if ui.button("Load trace preset…").clicked() {
+            super::presets::load(app);
+            ui.close();
+        }
+        if ui.button("Reset zoom").clicked() {
+            ui.ctx()
+                .data_mut(|d| d.insert_temp(egui::Id::new("reset_chromatograms"), true));
+            ui.close();
+        }
+        if ui
+            .add_enabled(
+                !app.async_state.is_processing,
+                egui::Button::new("Integrate visible RT range"),
+            )
+            .clicked()
+        {
+            if let Some(b) = bounds {
+                app.integration.start_rt = Some(b.min()[0]);
+                app.integration.end_rt = Some(b.max()[0]);
+                super::interactivity::compute_integration(app);
+            }
+            ui.close();
+        }
+        if ui.button("Clear integration").clicked() {
+            app.integration = Default::default();
+            ui.close();
+        }
+        if ui.button("Integration results…").clicked() {
+            ui.ctx()
+                .data_mut(|d| d.insert_temp(egui::Id::new("results_open"), true));
+            ui.close();
+        }
+        if ui.button("Export selected trace CSV…").clicked() {
+            super::panels::handle_csv_export(app);
+            ui.close();
+        }
+        if ui.button("Export chromatogram figure…").clicked() {
+            super::workspace::export_figure(app, false);
+            ui.close();
+        }
+        if let Some((id, p)) = key {
+            ui.separator();
+            if ui.button("Hide this trace").clicked() {
+                if app
+                    .files
+                    .get(id)
+                    .and_then(|f| f.cache.last_processing_params.as_ref())
+                    == Some(p)
+                {
+                    app.workspace.hidden_current.insert(*id);
+                    app.integration = Default::default();
+                } else if let Some(t) = app
+                    .workspace
+                    .traces
+                    .get_mut(id)
+                    .and_then(|ts| ts.iter_mut().find(|t| &t.params == p))
+                {
+                    t.visible = false;
+                }
+                ui.close();
+            }
+            if ui
+                .add_enabled(
+                    !app.async_state.is_processing,
+                    egui::Button::new("Delete this trace"),
+                )
+                .clicked()
+            {
+                super::workspace::delete_key(app, *id, p);
+                ui.close();
+            }
+        }
+    });
 }
 
 /// Plots the mass spectrum bar chart for the active file's cached spectrum.
@@ -230,9 +519,21 @@ pub fn plot_mass_spectrum(app: &mut MzViewerApp, ui: &mut egui::Ui) -> egui::Res
                 );
 
                 let line_color = file.display.color;
+                let restore_bounds = app
+                    .workspace
+                    .apply_spectrum_bounds
+                    .then_some(app.workspace.spectrum_bounds)
+                    .flatten();
+                app.workspace.apply_spectrum_bounds = false;
+                let mut spectrum_bounds = None;
                 let response = egui_plot::Plot::new("mass_spectrum")
                     .width(ui.available_width() * 0.99)
                     .height(ui.available_height())
+                    .x_axis_label("m/z")
+                    .y_axis_label("Intensity (a.u.)")
+                    .show_background(false)
+                    .show_grid([false, true])
+                    .grid_spacing(egui::Rangef::new(12.0, 1800.0))
                     .label_formatter(|name, value| {
                         if name.is_empty() {
                             format!("m/z = {:.4}\nIntensity = {:.2e}", value.x, value.y)
@@ -243,7 +544,11 @@ pub fn plot_mass_spectrum(app: &mut MzViewerApp, ui: &mut egui::Ui) -> egui::Res
                     })
                     .y_axis_formatter(format_intensity_axis) // ← ADDED
                     .show(ui, |plot_ui| {
+                        if let Some([min, max]) = restore_bounds {
+                            plot_ui.set_plot_bounds(egui_plot::PlotBounds::from_min_max(min, max));
+                        }
                         let bounds = plot_ui.plot_bounds();
+                        spectrum_bounds = Some([bounds.min(), bounds.max()]);
                         let zoom_level = (bounds.max()[0] - bounds.min()[0]).abs();
                         debug!("Zoom level calculated: {}", zoom_level);
 
@@ -262,13 +567,17 @@ pub fn plot_mass_spectrum(app: &mut MzViewerApp, ui: &mut egui::Ui) -> egui::Res
                         plot_ui.bar_chart(egui_plot::BarChart::new("Mass Spectrum", adjusted_bars));
                     })
                     .response;
+                app.workspace.spectrum_bounds = spectrum_bounds;
                 return response;
             }
         }
     }
 
     warn!("No mass spectrum data available or no active file selected");
-    ui.label("No mass spectrum data available")
+    ui.centered_and_justified(|ui| {
+        ui.weak("Double-click a chromatogram to inspect its mass spectrum.")
+    })
+    .response
 }
 
 /// Formats intensity axis labels in scientific notation for better readability at high zoom levels.

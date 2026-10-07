@@ -1,4 +1,4 @@
-﻿//! # gui logic and components
+//! # gui logic and components
 
 //! The module provides a graphical user interface (GUI) for visualizing mass spectrometry data from MzML files.
 //! It allows users to load mass spectrometry data, select various plotting options, and visualize chromatograms and mass spectra.
@@ -31,7 +31,6 @@
 //! - `mass_tolerance_input`: A string representation of the mass tolerance input provided by the user.
 //! - `mass`: The mass value parsed from the mass_input.
 //! - `mass_tolerance`: The mass tolerance value parsed from the mass_tolerance_input.
-//! - `line_type`: The type of line to be used in the plot (solid, dashed, dotted).
 //! - `line_color`: The color of the line in the plot.
 //! - `smoothing`: The level of smoothing to be applied to the plot data.
 //! - `line_width`: The width of the line in the plot.
@@ -102,13 +101,17 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 
 use eframe::egui;
-use log::{error, info, warn};
+use log::{error, warn};
 
 mod dialogs;
 mod interactivity;
 mod panels;
 mod plotting;
+mod preset_editor;
+mod presets;
 mod state;
+mod workbench;
+mod workspace;
 
 use state::{AsyncState, FileValidity, IntegrationState, StateChange};
 
@@ -125,16 +128,17 @@ impl MzViewerApp {
     ///
     /// # Returns
     /// A new instance of the `MzViewerApp` struct with the following default values:
-    /// - `user_input.line_width`: 1.0
+    /// - `user_input.line_width`: 2.0
     /// - All other fields in `user_input` are set to their default values.
     /// - All other fields in the `MzViewerApp` struct are set to their default values.
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+        workbench::configure(&_cc.egui_ctx, _cc.egui_ctx.style().visuals.dark_mode);
         Self {
             files: HashMap::new(),
             active_file_id: None,
             next_file_id: 0,
             user_input: UserInput {
-                line_width: 1.0,
+                line_width: 2.0,
                 ..Default::default()
             },
             invalid_file: FileValidity::Invalid,
@@ -144,13 +148,21 @@ impl MzViewerApp {
             integration: IntegrationState::default(),
             async_state: AsyncState::new(),
             plot_properties_open: false,
+            presets: Default::default(),
+            workspace: workspace::Workspace::default(),
+            msconvert_path: crate::import::discover_msconvert(),
         }
     }
     /// Resets the internal state of the instance.
     ///
     /// This function clears all opened files and resets the active file ID.
     pub fn reset_state(&mut self) {
+        self.presets = Default::default();
         self.files.clear();
+        self.workspace.traces.clear();
+        self.workspace.hidden_current.clear();
+        self.workspace.names.clear();
+        self.workspace.order.clear();
         self.active_file_id = None;
         self.integration = IntegrationState::default();
         self.user_input.line_color = crate::plotting_parameters::LineColor::default();
@@ -202,10 +214,10 @@ impl MzViewerApp {
             return;
         }
 
-        // Store params before spawning
-        if let Some(file) = self.files.get_mut(&active_id) {
-            file.cache.last_processing_params = Some(params.clone());
-        }
+        let workspace = self
+            .files
+            .get(&active_id)
+            .and_then(|f| f.cache.import_workspace.clone());
 
         let (tx, rx) = mpsc::channel();
         self.async_state.processing_rx = Some(rx);
@@ -214,6 +226,7 @@ impl MzViewerApp {
         std::thread::spawn(move || {
             let result = crate::processing::run_in_background(path, params, active_id);
             let _ = tx.send(result);
+            drop(workspace);
         });
     }
 
@@ -242,19 +255,52 @@ impl MzViewerApp {
         self.async_state.is_processing = false;
         self.async_state.processing_rx = None;
 
+        self.apply_processing_result(result);
+    }
+
+    pub(super) fn apply_processing_result(&mut self, result: crate::processing::ProcessingResult) {
         match result {
             crate::processing::ProcessingResult::Success {
                 file_id,
                 plot_data,
                 chromatogram,
+                params,
             } => {
+                workspace::retain_current(self, file_id);
+                workspace::register_order(self, file_id, &params);
+                self.workspace.hidden_current.remove(&file_id);
+                if let Some(traces) = self.workspace.traces.get_mut(&file_id) {
+                    traces.retain(|t| t.params != params);
+                }
                 if let Some(file) = self.files.get_mut(&file_id) {
+                    file.cache.display_data =
+                        Some(crate::processing::decimate_for_display(&plot_data));
                     file.cache.plot_data = Some(plot_data);
+                    let trace_count = self.workspace.traces.get(&file_id).map_or(0, Vec::len);
+                    if trace_count > 0
+                        && file.cache.last_processing_params.as_ref() != Some(&params)
+                    {
+                        file.display.color = state::next_color_for_index(file_id + trace_count);
+                        if self.active_file_id == Some(file_id) {
+                            self.user_input.line_color = file.display.color;
+                        }
+                    }
+                    file.cache.last_processing_params = Some(params);
                     file.cache.chromatogram = Some(chromatogram);
+                    if self.active_file_id == Some(file_id) {
+                        self.integration = IntegrationState::default();
+                    }
                 }
             }
-            crate::processing::ProcessingResult::Error { message, .. } => {
-                self.show_error_dialog(message);
+            crate::processing::ProcessingResult::Error {
+                file_id, message, ..
+            } => {
+                if let Some(file) = self.files.get_mut(&file_id) {
+                    file.cache.last_processing_params = None;
+                }
+                if self.files.contains_key(&file_id) {
+                    self.show_error_dialog(message);
+                }
             }
         }
     }
@@ -281,68 +327,133 @@ impl MzViewerApp {
             }
         };
 
+        ctx.request_repaint();
         match result {
             FileLoadingResult::Success {
                 file_id,
-                bounds,
-                scan_filters,
-                path,
-                ..
+                runs,
+                workspace,
             } => {
-                if let Some(file) = self.files.get_mut(&file_id) {
-                    // Apply metadata from background thread
-                    file.data.bounds = bounds;
-                    file.data.available_scan_filters = scan_filters.clone();
+                // A cancelled/closed placeholder must never reappear.
+                let Some(placeholder) = self.files.get(&file_id) else {
+                    return;
+                };
+                let source = placeholder.cache.source_path.clone();
+                let color = placeholder.display.color;
+                let first_loaded = self.files.values().all(|f| f.is_loading);
+                for (index, run) in runs.into_iter().enumerate() {
+                    let id = if index == 0 {
+                        file_id
+                    } else {
+                        let id = self.next_file_id;
+                        self.next_file_id += 1;
+                        self.files.insert(
+                            id,
+                            state::OpenFile {
+                                id,
+                                name: run.name.clone(),
+                                path: run.path.clone(),
+                                data: crate::parser::MzData::new(),
+                                display: state::FileDisplaySettings {
+                                    color: state::next_color_for_index(id),
+                                    visible: true,
+                                },
+                                cache: state::FileCache::default(),
+                                is_loading: true,
+                            },
+                        );
+                        id
+                    };
+                    let file = self.files.get_mut(&id).unwrap();
+                    file.name = run.name;
+                    file.path = run.path;
+                    file.cache.source_path = source.clone();
+                    file.cache.import_workspace = workspace.clone();
+                    file.data.bounds = run.bounds;
+                    file.data.available_scan_filters = run.scan_filters.clone();
                     file.is_loading = false;
-
-                    // Open a NEW reader on the UI thread for spectrum lookups.
-                    let path_buf = PathBuf::from(&path);
-                    if let Err(e) = file.data.open_reader_only(&path_buf) {
-                        error!("Reader-only open failed for {}: {}", path, e);
-                        self.show_error_dialog(format!(
-                            "File metadata loaded but spectrum lookup unavailable: {}",
-                            e
-                        ));
+                    if index == 0 {
+                        file.display.color = color;
                     }
-
-                    // Seed only if no other file has SUCCESSFULLY loaded yet
-                    let no_other_file_loaded = self
-                        .files
-                        .values()
-                        .filter(|f| f.id != file_id)
-                        .all(|f| f.is_loading);
-
-                    if no_other_file_loaded {
-                        if scan_filters.iter().any(|(ms, pol, _, _, _)| {
-                            *ms == 1 && *pol == mzdata::spectrum::ScanPolarity::Positive
-                        }) {
-                            self.user_input.ms_level = 1;
-                            self.user_input.polarity = mzdata::spectrum::ScanPolarity::Positive;
-                            self.user_input.precursor_mz = None;
-                        } else if let Some((ms, pol, pre, _, _)) = scan_filters.first() {
+                    if let Err(e) = file.data.open_reader_only(&PathBuf::from(&file.path)) {
+                        self.files.remove(&id);
+                        self.show_error_dialog(format!("Cannot open imported run: {}", e));
+                        continue;
+                    }
+                    if first_loaded && index == 0 {
+                        if let Some((ms, pol, pre, _, _)) = run
+                            .scan_filters
+                            .iter()
+                            .find(|(ms, pol, _, _, _)| {
+                                *ms == 1 && *pol == mzdata::spectrum::ScanPolarity::Positive
+                            })
+                            .or_else(|| run.scan_filters.first())
+                        {
                             self.user_input.ms_level = *ms;
                             self.user_input.polarity = *pol;
                             self.user_input.precursor_mz = *pre;
                         }
                     }
-
-                    self.state_changed = StateChange::Changed;
-                    info!("File ID {} fully loaded and reader opened", file_id);
                 }
+                self.repair_active_file();
+                self.state_changed = StateChange::Changed;
             }
             FileLoadingResult::Error {
                 file_id,
                 name,
                 message,
             } => {
+                if !self.files.contains_key(&file_id) {
+                    return;
+                }
                 self.files.remove(&file_id);
                 error!("Background load failed for {}: {}", name, message);
                 self.show_error_dialog(format!("Failed to open {}: {}", name, message));
-                if self.files.is_empty() {
-                    self.active_file_id = None;
-                    self.invalid_file = FileValidity::Invalid;
-                }
+                self.repair_active_file();
             }
+        }
+    }
+
+    fn repair_active_file(&mut self) {
+        if self
+            .active_file_id
+            .map_or(true, |id| !self.files.contains_key(&id))
+        {
+            self.active_file_id = self.files.keys().min().copied();
+        }
+        self.invalid_file = if self.files.is_empty() {
+            FileValidity::Invalid
+        } else {
+            FileValidity::Valid
+        };
+        self.integration = IntegrationState::default();
+        if let Some(file) = self.active_file_id.and_then(|id| self.files.get(&id)) {
+            self.user_input.line_color = file.display.color;
+            self.state_changed = StateChange::Changed;
+        }
+    }
+
+    /// Retain pending changes while loading or processing; consume only when a
+    /// current request can actually be started (or satisfied by its cache).
+    fn process_pending_update(&mut self) {
+        if self.presets.specs.is_some() {
+            return;
+        }
+        if self.workspace.restore_input.is_some() {
+            return;
+        }
+        if self.user_input.plot_type == PlotType::Xic
+            && (self.user_input.mass.value <= 0.0 || self.user_input.mass_tolerance.value <= 0.0)
+        {
+            return;
+        }
+        let ready = self
+            .active_file_id
+            .and_then(|id| self.files.get(&id))
+            .is_some_and(|f| !f.is_loading);
+        if self.state_changed == StateChange::Changed && ready && !self.async_state.is_processing {
+            self.state_changed = StateChange::Unchanged;
+            self.request_chromatogram_update();
         }
     }
 
@@ -400,6 +511,7 @@ impl MzViewerApp {
         };
 
         Ok(ProcessingParams {
+            acquisition: self.user_input.acquisition,
             plot_type: self.user_input.plot_type,
             ms_level: self.user_input.ms_level,
             polarity: self.user_input.polarity,
@@ -431,9 +543,17 @@ impl eframe::App for MzViewerApp {
     ///
     /// This method does not return any errors. It calls several other functions that may encounter errors, but those errors are handled within the respective functions
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        presets::poll(self, ctx);
+        preset_editor::show(self, ctx);
+        workspace::input(self, ctx);
         self.poll_file_loading_result(ctx);
+        workspace::restore_loaded(self, ctx);
+        self.poll_processing_result(ctx);
+        self.process_pending_update();
         panels::update_data_selection_panel(self, ctx);
+        workbench::status(self, ctx);
         panels::update_file_information_panel(self, ctx);
+        workbench::inspector(self, ctx);
         panels::update_central_panel(self, ctx);
         dialogs::render_xic_settings_window(self, ctx);
         dialogs::render_range_window(self, ctx);
@@ -505,11 +625,10 @@ mod tests {
 
     #[test]
     fn test_reset_state_clears_files() {
-        let mut app = MzViewerApp::default();
-
-        // Simulate having files (we can't create real OpenFile instances easily in tests,
-        // but we can test that the fields are reset)
-        app.active_file_id = Some(0);
+        let mut app = MzViewerApp {
+            active_file_id: Some(0),
+            ..Default::default()
+        };
 
         // Reset state
         app.reset_state();
@@ -784,7 +903,7 @@ mod tests {
         // Remaining files keep their original IDs and are still accessible by their IDs
         assert_eq!(app.files.get(&0).unwrap().id, 0); // file1 still has ID 0
         assert_eq!(app.files.get(&2).unwrap().id, 2); // file3 still has ID 2
-        assert!(app.files.get(&1).is_none()); // ID 1 is gone
+        assert!(!app.files.contains_key(&1)); // ID 1 is gone
 
         // Next ID continues from where it left off
         assert_eq!(app.next_file_id, 3);
@@ -832,7 +951,7 @@ mod tests {
         assert_eq!(app.active_file_id, Some(1));
 
         // Can still access file with ID 1
-        assert!(app.files.get(&1).is_some());
+        assert!(app.files.contains_key(&1));
         assert_eq!(app.files.get(&1).unwrap().name, "file1.mzML");
     }
 
@@ -950,6 +1069,7 @@ mod tests {
         // Pre-populate last_processing_params with the exact params that
         // build_processing_params would return for the current user_input.
         let cached_params = ProcessingParams {
+            acquisition: None,
             plot_type: PlotType::Tic,
             ms_level: 1,
             polarity: mzdata::spectrum::ScanPolarity::Positive,
@@ -1057,5 +1177,137 @@ mod tests {
 
         assert_eq!(app.user_input.line_color, LineColor::default());
         assert!(app.active_file_id.is_none());
+    }
+
+    fn app_with_real_files(count: usize) -> MzViewerApp {
+        let path = PathBuf::from("test_file/data_dependent_02.mzML");
+        let mut app = MzViewerApp {
+            active_file_id: Some(0),
+            next_file_id: count,
+            ..Default::default()
+        };
+        app.user_input.polarity = mzdata::spectrum::ScanPolarity::Positive;
+        for id in 0..count {
+            let mut data = parser::MzData::new();
+            data.open_msfile(&path).unwrap();
+            app.files.insert(
+                id,
+                OpenFile {
+                    id,
+                    name: format!("run {}", id),
+                    path: path.to_string_lossy().into_owned(),
+                    data,
+                    display: FileDisplaySettings {
+                        color: LineColor::Red,
+                        visible: true,
+                    },
+                    cache: FileCache::default(),
+                    is_loading: false,
+                },
+            );
+        }
+        app
+    }
+
+    fn finish_processing(app: &mut MzViewerApp) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let ctx = egui::Context::default();
+        while app.async_state.is_processing && std::time::Instant::now() < deadline {
+            app.poll_processing_result(&ctx);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(!app.async_state.is_processing);
+        assert!(app.error_message.is_none(), "{:?}", app.error_message);
+    }
+
+    #[test]
+    fn pending_parameter_changes_survive_running_job() {
+        let mut app = app_with_real_files(1);
+        app.request_chromatogram_update();
+        assert!(app.async_state.is_processing);
+        // Request caching is committed only after a successful result.
+        assert!(app.files[&0].cache.last_processing_params.is_none());
+        app.user_input.smoothing = 1;
+        app.state_changed = StateChange::Changed;
+        app.process_pending_update();
+        assert_eq!(app.state_changed, StateChange::Changed);
+        finish_processing(&mut app);
+        app.process_pending_update();
+        assert!(app.async_state.is_processing);
+        finish_processing(&mut app);
+        assert_eq!(
+            app.files[&0]
+                .cache
+                .last_processing_params
+                .as_ref()
+                .unwrap()
+                .smoothing,
+            1
+        );
+    }
+
+    #[test]
+    fn switching_files_during_processing_updates_new_active_file() {
+        let mut app = app_with_real_files(2);
+        app.request_chromatogram_update();
+        app.active_file_id = Some(1);
+        app.state_changed = StateChange::Changed;
+        app.process_pending_update();
+        assert_eq!(app.state_changed, StateChange::Changed);
+        finish_processing(&mut app);
+        app.process_pending_update();
+        finish_processing(&mut app);
+        assert!(app.files[&0].cache.plot_data.is_some());
+        assert!(app.files[&1].cache.plot_data.is_some());
+    }
+
+    #[test]
+    fn empty_selection_preserves_workspace_and_new_files_are_appended() {
+        let mut app = app_with_real_files(1);
+        panels::queue_file_imports(&mut app, vec![]);
+        assert_eq!(app.active_file_id, Some(0));
+        assert_eq!(app.files.len(), 1);
+        assert_eq!(app.next_file_id, 1);
+        panels::queue_file_imports(
+            &mut app,
+            vec![PathBuf::from("test_file/data_dependent_02.mzML")],
+        );
+        assert_eq!(app.files.len(), 2);
+        assert_eq!(app.active_file_id, Some(1));
+        assert_eq!(app.files[&0].name, "run 0");
+        let ctx = egui::Context::default();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while app.files[&1].is_loading && std::time::Instant::now() < deadline {
+            app.poll_file_loading_result(&ctx);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(!app.files[&1].is_loading);
+        assert!(app.error_message.is_none());
+    }
+
+    #[test]
+    fn integration_and_export_keep_full_resolution() {
+        let mut app = app_with_real_files(1);
+        // A long narrow peak makes max-per-chunk reduction inflate area.
+        let full: Vec<_> = (0..5001)
+            .map(|i| [i as f64, if i == 2500 { 100.0 } else { 0.0 }])
+            .collect();
+        let display = crate::processing::decimate_for_display(&full);
+        assert!(display.len() < full.len());
+        app.files.get_mut(&0).unwrap().cache.plot_data = Some(full);
+        app.files.get_mut(&0).unwrap().cache.display_data = Some(display);
+        app.integration.start_rt = Some(0.0);
+        app.integration.end_rt = Some(5000.0);
+        super::interactivity::compute_integration(&mut app);
+        assert_eq!(app.integration.result, Some(100.0));
+        let dir = tempfile::tempdir().unwrap();
+        let csv = dir.path().join("chromatogram.csv");
+        crate::export::export_chromatogram_csv(
+            app.files[&0].cache.plot_data.as_ref().unwrap(),
+            &csv,
+        )
+        .unwrap();
+        let contents = std::fs::read_to_string(csv).unwrap();
+        assert_eq!(contents.lines().count(), 5002);
     }
 }
