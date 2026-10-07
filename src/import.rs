@@ -147,7 +147,7 @@ pub fn prepare_input(
         return Err(format!("Dataset does not exist: {}", source.display()));
     }
     let executable = executable.ok_or(
-        "Vendor imports require ProteoWizard. Choose File → ProteoWizard → Locate msconvert, or add msconvert to PATH."
+        "Vendor imports require ProteoWizard. Choose File > Vendor import settings → Locate msconvert, or add msconvert to PATH."
     )?;
     let workspace = Arc::new(
         tempfile::Builder::new()
@@ -167,7 +167,7 @@ pub fn prepare_input(
         .spawn()
         .map_err(|e| {
             format!(
-                "Cannot start {}: {}. Check File → ProteoWizard and the required vendor runtimes.",
+                "Cannot start {}: {}. Check File > Vendor import settings and the required vendor runtimes.",
                 executable.display(),
                 e
             )

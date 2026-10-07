@@ -42,6 +42,9 @@ struct SavedFile {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub(super) struct ViewSettings {
+    pub focus_restore: Option<[bool; 3]>,
+    pub intensity_scale: IntensityScale,
+    pub intensity_maximum: f64,
     pub horizontal: bool,
     pub rows: usize,
     pub columns: usize,
@@ -53,6 +56,9 @@ pub(super) struct ViewSettings {
 impl Default for ViewSettings {
     fn default() -> Self {
         Self {
+            focus_restore: None,
+            intensity_scale: IntensityScale::Individual,
+            intensity_maximum: 1_000_000.0,
             horizontal: false,
             rows: 3,
             columns: 2,
@@ -60,6 +66,60 @@ impl Default for ViewSettings {
             files: true,
             inspector: true,
             spectrum: true,
+        }
+    }
+}
+impl ViewSettings {
+    pub fn toggle_focus(&mut self) {
+        if let Some([files, inspector, spectrum]) = self.focus_restore.take() {
+            self.files = files;
+            self.inspector = inspector;
+            self.spectrum = spectrum;
+        } else {
+            self.focus_restore = Some([self.files, self.inspector, self.spectrum]);
+            self.files = false;
+            self.inspector = false;
+            self.spectrum = false;
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) enum IntensityScale {
+    #[default]
+    Individual,
+    SharedHighest,
+    SharedCustom,
+}
+
+pub(super) fn shared_intensity_maximum(app: &MzViewerApp) -> Option<f64> {
+    match app.workspace.view.intensity_scale {
+        IntensityScale::Individual => None,
+        IntensityScale::SharedCustom => {
+            let value = app.workspace.view.intensity_maximum;
+            (value.is_finite() && value > 0.0).then_some(value)
+        }
+        IntensityScale::SharedHighest => {
+            let mut maximum: f64 = 0.0;
+            for (id, params) in trace_keys(app, true) {
+                let file = &app.files[&id];
+                let points = if file.cache.last_processing_params.as_ref() == Some(&params) {
+                    file.cache.plot_data.as_deref()
+                } else {
+                    app.workspace
+                        .traces
+                        .get(&id)
+                        .and_then(|traces| traces.iter().find(|t| t.params == params))
+                        .map(|t| t.points.as_slice())
+                };
+                if let Some(points) = points {
+                    maximum = points
+                        .iter()
+                        .filter(|p| p[1].is_finite())
+                        .map(|p| p[1])
+                        .fold(maximum, f64::max);
+                }
+            }
+            Some(if maximum > 0.0 { maximum * 1.05 } else { 1.0 })
         }
     }
 }
@@ -414,6 +474,34 @@ pub(super) fn select_key(app: &mut MzViewerApp, id: FileId, params: &ProcessingP
         select_trace(app, id, i);
     }
 }
+pub(super) struct ComparisonLayout {
+    pub samples: Vec<FileId>,
+    pub analytes: Vec<(String, ProcessingParams)>,
+    pub visible: Vec<(FileId, ProcessingParams)>,
+}
+pub(super) fn comparison_layout(app: &MzViewerApp) -> ComparisonLayout {
+    let mut samples: Vec<_> = app
+        .files
+        .iter()
+        .filter(|(_, f)| f.display.visible && !f.is_loading)
+        .map(|(id, _)| *id)
+        .collect();
+    samples.sort_unstable();
+    let visible = trace_keys(app, true);
+    let mut analytes = app.presets.specs.clone().unwrap_or_default();
+    if analytes.is_empty() {
+        for (id, params) in &visible {
+            if !analytes.iter().any(|(_, p)| p == params) {
+                analytes.push((display_name(app, *id, params), params.clone()));
+            }
+        }
+    }
+    ComparisonLayout {
+        samples,
+        analytes,
+        visible,
+    }
+}
 pub(super) fn delete_key(app: &mut MzViewerApp, id: FileId, params: &ProcessingParams) {
     if app.async_state.is_processing {
         return;
@@ -550,79 +638,6 @@ pub(super) fn inspector(app: &mut MzViewerApp, ui: &mut egui::Ui) {
         }
     }
     ui.separator();
-    ui.heading("Scan navigation");
-    let scan = app
-        .active_file_id
-        .and_then(|id| app.files.get(&id))
-        .and_then(|f| f.cache.mass_spectrum.as_ref())
-        .map(|s| s.index);
-    ui.horizontal(|ui| {
-        if ui
-            .add_enabled(scan.is_some_and(|s| s > 0), egui::Button::new("← Previous"))
-            .clicked()
-        {
-            navigate(app, -1);
-        }
-        let can_next = app
-            .active_file_id
-            .and_then(|id| app.files.get(&id))
-            .is_some_and(|f| scan.is_some_and(|s| s + 1 < f.data.bounds.scan_count));
-        if ui
-            .add_enabled(can_next, egui::Button::new("Next →"))
-            .clicked()
-        {
-            navigate(app, 1);
-        }
-    });
-    if let Some(id) = app.active_file_id {
-        let count = app.files.get(&id).map_or(0, |f| f.data.bounds.scan_count);
-        if count > 0 {
-            ui.horizontal(|ui| {
-                let edit_id = egui::Id::new(("scan_jump", id));
-                let mut number = ui
-                    .ctx()
-                    .data_mut(|d| *d.get_temp_mut_or(edit_id, scan.unwrap_or(0) + 1));
-                ui.add(
-                    egui::DragValue::new(&mut number)
-                        .range(1..=count)
-                        .prefix("Scan "),
-                );
-                ui.ctx().data_mut(|d| d.insert_temp(edit_id, number));
-                if ui.button("Go").clicked() {
-                    load_scan(app, id, number.clamp(1, count) - 1);
-                }
-            });
-        }
-        if let Some(f) = app.files.get_mut(&id) {
-            if let Some(s) = &f.cache.mass_spectrum {
-                ui.label(format!(
-                    "Scan {} · RT {:.5} min",
-                    s.index + 1,
-                    s.retention_time
-                ));
-                let index = s.index;
-                if app
-                    .workspace
-                    .metadata
-                    .as_ref()
-                    .map(|(file, scan, _)| (*file, *scan))
-                    != Some((id, index))
-                {
-                    app.workspace.metadata = f
-                        .data
-                        .scan_metadata(index)
-                        .ok()
-                        .map(|text| (id, index, text));
-                }
-                if let Some((_, _, text)) = &app.workspace.metadata {
-                    egui::CollapsingHeader::new("Acquisition details").show(ui, |ui| {
-                        ui.label(text);
-                    });
-                }
-            }
-        }
-    }
-    ui.separator();
     ui.heading(format!(
         "Measurements ({})",
         app.workspace.measurements.len()
@@ -631,6 +646,75 @@ pub(super) fn inspector(app: &mut MzViewerApp, ui: &mut egui::Ui) {
         ui.ctx()
             .data_mut(|d| d.insert_temp(egui::Id::new("results_open"), true));
     }
+}
+pub(super) fn scan_navigation(app: &mut MzViewerApp, ui: &mut egui::Ui) {
+    let Some(id) = app.active_file_id else { return };
+    let Some(file) = app.files.get(&id) else {
+        return;
+    };
+    let count = file.data.bounds.scan_count;
+    let scan = file.cache.mass_spectrum.as_ref().map(|s| s.index);
+    ui.horizontal_wrapped(|ui| {
+        if ui
+            .add_enabled(scan.is_some_and(|s| s > 0), egui::Button::new("Previous"))
+            .clicked()
+        {
+            navigate(app, -1);
+        }
+        if ui
+            .add_enabled(
+                scan.is_some_and(|s| s + 1 < count),
+                egui::Button::new("Next"),
+            )
+            .clicked()
+        {
+            navigate(app, 1);
+        }
+        if count > 0 {
+            let edit_id = egui::Id::new(("scan_jump", id));
+            let mut number = ui
+                .ctx()
+                .data_mut(|d| *d.get_temp_mut_or(edit_id, scan.unwrap_or(0) + 1));
+            ui.add(
+                egui::DragValue::new(&mut number)
+                    .range(1..=count)
+                    .prefix("Scan "),
+            );
+            ui.ctx().data_mut(|d| d.insert_temp(edit_id, number));
+            if ui.button("Go").clicked() {
+                load_scan(app, id, number.clamp(1, count) - 1);
+            }
+        }
+        if let Some(file) = app.files.get_mut(&id) {
+            if let Some(s) = &file.cache.mass_spectrum {
+                ui.weak(format!("{} / {}", s.index + 1, count));
+                let index = s.index;
+                if app
+                    .workspace
+                    .metadata
+                    .as_ref()
+                    .map(|(file, scan, _)| (*file, *scan))
+                    != Some((id, index))
+                {
+                    app.workspace.metadata = file
+                        .data
+                        .scan_metadata(index)
+                        .ok()
+                        .map(|text| (id, index, text));
+                }
+                if let Some((_, _, text)) = &app.workspace.metadata {
+                    ui.menu_button("Acquisition details…", |ui| {
+                        ui.set_max_width(420.0);
+                        egui::ScrollArea::vertical()
+                            .max_height(300.0)
+                            .show(ui, |ui| {
+                                ui.label(text);
+                            });
+                    });
+                }
+            }
+        }
+    });
 }
 pub(super) fn navigate(app: &mut MzViewerApp, delta: isize) {
     let Some(id) = app.active_file_id else { return };
@@ -723,32 +807,53 @@ pub(super) fn results(app: &mut MzViewerApp, ctx: &Context) {
     ctx.data_mut(|d| d.insert_temp(egui::Id::new("results_open"), open));
 }
 pub(super) fn menu(app: &mut MzViewerApp, ui: &mut egui::Ui) {
-    if app.presets.specs.is_some() && ui.button("Clear shared batch preset").clicked() {
-        if !app.async_state.is_processing {
-            app.presets.specs = None;
-            app.presets.applied.clear();
-            app.presets.failed.clear();
-            app.state_changed = StateChange::Unchanged;
+    ui.menu_button("Viewer presets", |ui| {
+        if app.presets.specs.is_some() && ui.button("Clear shared batch preset").clicked() {
+            if !app.async_state.is_processing {
+                app.presets.specs = None;
+                app.presets.applied.clear();
+                app.presets.failed.clear();
+                app.state_changed = StateChange::Unchanged;
+            }
+            ui.close();
         }
-        ui.close();
-    }
-    if ui.button("Preset editor…").clicked() {
-        app.presets.editor.open = true;
-        ui.close();
-    }
-    if ui.button("Open preset…").clicked() {
-        super::presets::load(app);
-        ui.close();
-    }
-    if ui.button("Save session…  Ctrl+S").clicked() {
+        if ui.button("Preset editor…").clicked() {
+            app.presets.editor.open = true;
+            ui.close();
+        }
+        if ui.button("Open preset…").clicked() {
+            super::presets::load(app);
+            ui.close();
+        }
+    });
+    ui.separator();
+    if ui
+        .button("Save viewer session…")
+        .on_hover_text("Save the viewer workspace (Ctrl+S / Cmd+S)")
+        .clicked()
+    {
         save_session(app, ui.ctx());
         ui.close();
     }
-    if ui.button("Open session…  Ctrl+Shift+O").clicked() {
+    if ui
+        .button("Open viewer session…")
+        .on_hover_text("Restore a viewer workspace (Ctrl+Shift+O / Cmd+Shift+O)")
+        .clicked()
+    {
         open_session(app, ui.ctx());
         ui.close();
     }
+    if ui.button("Integration results…").clicked() {
+        ui.ctx()
+            .data_mut(|d| d.insert_temp(egui::Id::new("results_open"), true));
+        ui.close();
+    }
+}
+pub(super) fn recent_menu(app: &mut MzViewerApp, ui: &mut egui::Ui) {
     ui.menu_button("Recent files", |ui| {
+        if app.workspace.recent.is_empty() {
+            ui.weak("No recent files");
+        }
         for p in app.workspace.recent.clone() {
             if ui
                 .button(p.file_name().unwrap_or_default().to_string_lossy())
@@ -760,8 +865,16 @@ pub(super) fn menu(app: &mut MzViewerApp, ui: &mut egui::Ui) {
             }
         }
     });
-    ui.menu_button("Export figure (SVG)", |ui| {
-        if ui.button("Visible chromatograms…").clicked() {
+}
+pub(super) fn figure_menu(app: &mut MzViewerApp, ui: &mut egui::Ui) {
+    ui.menu_button("Figures (SVG)", |ui| {
+        if ui
+            .add_enabled(
+                !trace_keys(app, true).is_empty(),
+                egui::Button::new("Visible chromatograms…"),
+            )
+            .clicked()
+        {
             export_figure(app, false);
             ui.close();
         }
@@ -778,11 +891,6 @@ pub(super) fn menu(app: &mut MzViewerApp, ui: &mut egui::Ui) {
             ui.close();
         }
     });
-    if ui.button("Integration results…").clicked() {
-        ui.ctx()
-            .data_mut(|d| d.insert_temp(egui::Id::new("results_open"), true));
-        ui.close();
-    }
 }
 pub(super) fn input(app: &mut MzViewerApp, ctx: &Context) {
     app.workspace.reset_plots = ctx
@@ -797,6 +905,10 @@ pub(super) fn input(app: &mut MzViewerApp, ctx: &Context) {
     });
     if !paths.is_empty() {
         super::panels::queue_file_imports(app, paths);
+    }
+    if app.quant.active {
+        super::quant::shortcuts(app, ctx);
+        return;
     }
     if ctx.input_mut(|i| {
         i.consume_shortcut(&KeyboardShortcut::new(
@@ -1008,6 +1120,9 @@ fn escape(s: &str) -> String {
         .replace('"', "&quot;")
 }
 fn figure_svg(app: &MzViewerApp) -> Option<String> {
+    if app.workspace.view.compare_samples {
+        return comparison_svg(app);
+    }
     let mut lines = Vec::new();
     for (id, params) in trace_keys(app, true) {
         let f = &app.files[&id];
@@ -1033,12 +1148,13 @@ fn figure_svg(app: &MzViewerApp) -> Option<String> {
         }
     }
     if !app.workspace.overlay && lines.len() > 1 {
-        return grid_svg(
+        return grid_svg_scaled(
             &lines,
             app.workspace.page,
             app.user_input.line_width,
             app.workspace.view.rows.clamp(1, 8),
             app.workspace.view.columns.clamp(1, 8),
+            shared_intensity_maximum(app),
         );
     }
     if lines.is_empty() {
@@ -1058,7 +1174,8 @@ fn figure_svg(app: &MzViewerApp) -> Option<String> {
         .map(|p| p[0])
         .fold(f64::NEG_INFINITY, f64::max)
         .max(xmin + 0.001);
-    let ymax = points.iter().map(|p| p[1]).fold(1.0, f64::max) * 1.05;
+    let ymax = shared_intensity_maximum(app)
+        .unwrap_or_else(|| points.iter().map(|p| p[1]).fold(1.0, f64::max) * 1.05);
     let legend_lines: usize = lines
         .iter()
         .map(|(name, _, _)| name.chars().count().div_ceil(130).max(1))
@@ -1072,6 +1189,7 @@ fn figure_svg(app: &MzViewerApp) -> Option<String> {
         let y = ymax * i as f64 / 5.0;
         svg.push_str(&format!(r#"<text x="{}" y="505" text-anchor="middle">{x:.3}</text><text x="80" y="{}" text-anchor="end">{y:.2e}</text>"#,90.0+i as f64*214.0,485.0-i as f64*84.0));
     }
+    svg.push_str(r#"<defs><clipPath id="overlay-plot"><rect x="90" y="60" width="1070" height="420"/></clipPath></defs>"#);
     let mut legend_row = 0;
     for (label, data, color) in &lines {
         let c = if *color == LineColor::White {
@@ -1093,7 +1211,7 @@ fn figure_svg(app: &MzViewerApp) -> Option<String> {
             .collect::<Vec<_>>()
             .join(" ");
         svg.push_str(&format!(
-            r#"<polyline fill="none" stroke="{color}" stroke-width="{}" points="{coords}"/>"#,
+            r#"<polyline clip-path="url(#overlay-plot)" fill="none" stroke="{color}" stroke-width="{}" points="{coords}"/>"#,
             app.user_input.line_width
         ));
         let chars: Vec<_> = label.chars().collect();
@@ -1108,6 +1226,68 @@ fn figure_svg(app: &MzViewerApp) -> Option<String> {
         }
     }
     svg.push_str("</g></svg>");
+    Some(svg)
+}
+fn comparison_svg(app: &MzViewerApp) -> Option<String> {
+    let layout = comparison_layout(app);
+    if layout.samples.is_empty() || layout.analytes.is_empty() {
+        return None;
+    }
+    let width = 200 + layout.samples.len() * 1200;
+    let height = 50 + layout.analytes.len() * 340;
+    let mut svg = format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}"><rect width="100%" height="100%" fill="white"/>"#
+    );
+    for (column, id) in layout.samples.iter().enumerate() {
+        svg.push_str(&format!(
+            r#"<text x="{}" y="28" font-family="Arial,sans-serif" font-size="18">{}</text>"#,
+            290 + column * 1200,
+            escape(&app.files[id].name)
+        ));
+    }
+    for (row, (name, params)) in layout.analytes.iter().enumerate() {
+        svg.push_str(&format!(
+            r#"<text x="10" y="{}" font-family="Arial,sans-serif" font-size="16">{}</text>"#,
+            90 + row * 340,
+            escape(name)
+        ));
+        for (column, id) in layout.samples.iter().enumerate() {
+            let file = &app.files[id];
+            let points = if !layout.visible.iter().any(|(f, p)| f == id && p == params) {
+                None
+            } else if file.cache.last_processing_params.as_ref() == Some(params) {
+                file.cache
+                    .plot_data
+                    .as_deref()
+                    .map(|p| (p, file.display.color))
+            } else {
+                app.workspace
+                    .traces
+                    .get(id)
+                    .and_then(|ts| ts.iter().find(|t| &t.params == params))
+                    .map(|t| (t.points.as_slice(), t.color))
+            };
+            let x = 200 + column * 1200;
+            let y = 50 + row * 340;
+            if let Some((points, color)) = points {
+                if let Some(cell) = grid_svg_scaled(
+                    &[(String::new(), points, color)],
+                    0,
+                    app.user_input.line_width,
+                    1,
+                    1,
+                    shared_intensity_maximum(app),
+                ) {
+                    // Unique clip IDs for each embedded plot.
+                    let cell = cell.replace("plot-0", &format!("matrix-{row}-{column}"));
+                    svg.push_str(&cell.replacen("<svg ", &format!("<svg x=\"{x}\" y=\"{y}\" "), 1));
+                }
+            } else {
+                svg.push_str(&format!(r#"<text x="{}" y="{}" font-family="Arial,sans-serif" font-size="16">No visible trace</text>"#, x + 90, y + 100));
+            }
+        }
+    }
+    svg.push_str("</svg>");
     Some(svg)
 }
 #[cfg(test)]
@@ -1125,12 +1305,23 @@ fn stacked_svg(
         if horizontal { 2 } else { 1 },
     )
 }
+#[cfg(test)]
 fn grid_svg(
     lines: &[(String, &[[f64; 2]], LineColor)],
     page: usize,
     line_width: f32,
     rows: usize,
     columns: usize,
+) -> Option<String> {
+    grid_svg_scaled(lines, page, line_width, rows, columns, None)
+}
+fn grid_svg_scaled(
+    lines: &[(String, &[[f64; 2]], LineColor)],
+    page: usize,
+    line_width: f32,
+    rows: usize,
+    columns: usize,
+    shared_maximum: Option<f64>,
 ) -> Option<String> {
     let capacity = rows.clamp(1, 8) * columns.clamp(1, 8);
     let count = lines.len().saturating_sub(page * capacity).min(capacity);
@@ -1163,7 +1354,8 @@ fn grid_svg(
         r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}"><rect width="100%" height="100%" fill="white"/>"#
     );
     for (index, (label, data, color)) in selected.iter().enumerate() {
-        let ymax = data.iter().map(|p| p[1]).fold(1.0, f64::max) * 1.05;
+        let ymax =
+            shared_maximum.unwrap_or_else(|| data.iter().map(|p| p[1]).fold(1.0, f64::max) * 1.05);
         let c = if *color == LineColor::White {
             egui::Color32::BLACK
         } else {
@@ -1196,7 +1388,7 @@ fn grid_svg(
             })
             .collect::<Vec<_>>()
             .join(" ");
-        svg.push_str(&format!(r#"<polyline fill="none" stroke="{color}" stroke-width="{line_width}" points="{coords}"/></g>"#));
+        svg.push_str(&format!(r#"<defs><clipPath id="plot-{index}"><rect x="90" y="80" width="1070" height="180"/></clipPath></defs><polyline clip-path="url(#plot-{index})" fill="none" stroke="{color}" stroke-width="{line_width}" points="{coords}"/></g>"#));
     }
     svg.push_str("</svg>");
     Some(svg)
@@ -1700,6 +1892,9 @@ mod tests {
     #[test]
     fn view_settings_round_trip_and_old_sessions_default_to_visible_panes() {
         let view = ViewSettings {
+            focus_restore: None,
+            intensity_scale: IntensityScale::SharedCustom,
+            intensity_maximum: 12345.0,
             horizontal: true,
             rows: 3,
             columns: 2,
@@ -1714,9 +1909,88 @@ mod tests {
         assert!(!restored.files);
         assert!(!restored.inspector);
         assert!(!restored.spectrum);
+        assert_eq!(restored.intensity_scale, IntensityScale::SharedCustom);
+        assert_eq!(restored.intensity_maximum, 12345.0);
         let old: ViewSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.intensity_scale, IntensityScale::Individual);
         assert!(!old.horizontal);
         assert!(old.files && old.inspector && old.spectrum);
+    }
+    #[test]
+    fn shared_scale_uses_visible_full_resolution_traces_and_custom_limits() {
+        let mut app = app_with_trace();
+        app.workspace.view.intensity_scale = IntensityScale::SharedHighest;
+        // Display decimation must not determine the analytical peak maximum.
+        app.files.get_mut(&7).unwrap().cache.display_data = Some(vec![[1.0, 0.0]]);
+        assert_eq!(shared_intensity_maximum(&app), Some(105.0));
+        app.files.get_mut(&7).unwrap().display.visible = false;
+        assert_eq!(shared_intensity_maximum(&app), Some(1.0));
+        app.workspace.view.intensity_scale = IntensityScale::SharedCustom;
+        app.workspace.view.intensity_maximum = 50.0;
+        assert_eq!(shared_intensity_maximum(&app), Some(50.0));
+        let a = [[0.0, 10.0], [1.0, 100.0]];
+        let b = [[0.0, 10.0], [1.0, 20.0]];
+        let lines = vec![
+            ("a".into(), a.as_slice(), LineColor::Blue),
+            ("b".into(), b.as_slice(), LineColor::Red),
+        ];
+        let svg = grid_svg_scaled(&lines, 0, 2.0, 1, 2, Some(100.0)).unwrap();
+        assert_eq!(svg.matches("1.00e2").count(), 2);
+        assert!(svg.contains("1160.000,224.000"));
+        assert!(svg.contains("clip-path"));
+    }
+    #[test]
+    fn comparison_matrix_aligns_missing_analytes_and_preserves_individual_layout() {
+        let mut app = app_with_trace();
+        let mut other = app_with_trace().files.remove(&7).unwrap();
+        other.id = 8;
+        other.name = "Second sample".into();
+        other
+            .cache
+            .last_processing_params
+            .as_mut()
+            .unwrap()
+            .smoothing = 2;
+        app.files.insert(8, other);
+        app.workspace.view.compare_samples = true;
+        app.workspace.overlay = true;
+        app.workspace.view.rows = 4;
+        app.workspace.view.columns = 3;
+        let layout = comparison_layout(&app);
+        assert_eq!(layout.samples, vec![7, 8]);
+        assert_eq!(layout.analytes.len(), 2);
+        assert_eq!(layout.visible.len(), 2);
+        let svg = figure_svg(&app).unwrap();
+        assert_eq!(svg.matches("No visible trace").count(), 2);
+        assert_eq!(svg.matches("<polyline").count(), 2);
+        assert!(svg.contains("Second sample"));
+        assert_eq!(
+            (app.workspace.view.rows, app.workspace.view.columns),
+            (4, 3)
+        );
+        assert!(app.workspace.overlay);
+        app.files.get_mut(&8).unwrap().display.visible = false;
+        assert_eq!(comparison_layout(&app).samples, vec![7]);
+        app.workspace.view.compare_samples = false;
+        assert!(!figure_svg(&app).unwrap().contains("No visible trace"));
+    }
+    #[test]
+    fn focus_mode_restores_the_previous_panels_after_session_round_trip() {
+        let mut view = ViewSettings {
+            inspector: false,
+            ..Default::default()
+        };
+        view.toggle_focus();
+        assert_eq!([view.files, view.inspector, view.spectrum], [false; 3]);
+        assert_eq!(view.focus_restore, Some([true, false, true]));
+        let mut restored: ViewSettings =
+            serde_json::from_str(&serde_json::to_string(&view).unwrap()).unwrap();
+        restored.toggle_focus();
+        assert_eq!(
+            [restored.files, restored.inspector, restored.spectrum],
+            [true, false, true]
+        );
+        assert!(restored.focus_restore.is_none());
     }
     #[test]
     fn horizontal_figure_uses_columns_and_vertical_figure_uses_rows() {

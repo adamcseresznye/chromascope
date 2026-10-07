@@ -286,6 +286,7 @@ pub struct MzViewerApp {
     pub(crate) plot_properties_open: bool,
     pub(super) presets: super::presets::PresetState,
     pub(super) workspace: super::workspace::Workspace,
+    pub(super) quant: super::quant::QuantState,
     pub(crate) msconvert_path: Option<std::path::PathBuf>,
 }
 
@@ -305,6 +306,7 @@ impl Default for MzViewerApp {
             plot_properties_open: false,
             presets: Default::default(),
             workspace: super::workspace::Workspace::default(),
+            quant: Default::default(),
             msconvert_path: crate::import::discover_msconvert(),
         }
     }

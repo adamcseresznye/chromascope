@@ -104,12 +104,17 @@ use eframe::egui;
 use log::{error, warn};
 
 mod dialogs;
+mod examples;
+mod information;
 mod interactivity;
 mod panels;
 mod plotting;
 mod preset_editor;
 mod presets;
+mod quant;
 mod state;
+#[cfg(test)]
+mod test_render;
 mod workbench;
 mod workspace;
 
@@ -150,6 +155,7 @@ impl MzViewerApp {
             plot_properties_open: false,
             presets: Default::default(),
             workspace: workspace::Workspace::default(),
+            quant: Default::default(),
             msconvert_path: crate::import::discover_msconvert(),
         }
     }
@@ -544,21 +550,27 @@ impl eframe::App for MzViewerApp {
     /// This method does not return any errors. It calls several other functions that may encounter errors, but those errors are handled within the respective functions
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         presets::poll(self, ctx);
-        preset_editor::show(self, ctx);
         workspace::input(self, ctx);
         self.poll_file_loading_result(ctx);
         workspace::restore_loaded(self, ctx);
         self.poll_processing_result(ctx);
         self.process_pending_update();
         panels::update_data_selection_panel(self, ctx);
-        workbench::status(self, ctx);
-        panels::update_file_information_panel(self, ctx);
-        workbench::inspector(self, ctx);
-        panels::update_central_panel(self, ctx);
-        dialogs::render_xic_settings_window(self, ctx);
-        dialogs::render_range_window(self, ctx);
-        dialogs::render_plot_properties_window(self, ctx);
+        quant::poll(self, ctx);
+        if self.quant.active {
+            quant::show(self, ctx);
+        } else {
+            workbench::status(self, ctx);
+            panels::update_file_information_panel(self, ctx);
+            workbench::inspector(self, ctx);
+            panels::update_central_panel(self, ctx);
+            preset_editor::show(self, ctx);
+            dialogs::render_xic_settings_window(self, ctx);
+            dialogs::render_range_window(self, ctx);
+            dialogs::render_plot_properties_window(self, ctx);
+        }
         dialogs::render_error_dialog(self, ctx);
+        information::show(self, ctx);
     }
 }
 

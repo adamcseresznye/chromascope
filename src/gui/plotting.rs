@@ -9,6 +9,7 @@ fn render_chromatogram(
     ui: &mut egui::Ui,
     key: Option<&(super::state::FileId, crate::processing::ProcessingParams)>,
     height: f32,
+    shared_maximum: Option<f64>,
 ) -> (
     egui::Response,
     Option<egui_plot::PlotBounds>,
@@ -39,6 +40,9 @@ fn render_chromatogram(
         .boxed_zoom_pointer_button(egui::PointerButton::Middle);
     if key.is_some() {
         plot = plot.link_axis("stacked_retention_time", [true, false]);
+    }
+    if shared_maximum.is_some() {
+        plot = plot.allow_zoom([true, false]).allow_drag([true, false]);
     }
     if app.workspace.reset_plots {
         plot = plot.reset();
@@ -77,6 +81,9 @@ fn render_chromatogram(
                         .width(app.user_input.line_width),
                     );
                 }
+            }
+            if let Some(maximum) = shared_maximum {
+                plot_ui.set_plot_bounds_y(0.0..=maximum);
             }
             if key.map_or(true, |(id, p)| {
                 app.active_file_id == Some(*id)
@@ -251,9 +258,12 @@ pub fn plot_chromatogram(
     app.poll_processing_result(ctx);
     app.process_pending_update();
     let available_height = ui.available_height().max(130.0);
+    let shared_maximum = super::workspace::shared_intensity_maximum(app);
     let response = ui
         .vertical(|ui| {
-            if app.workspace.overlay {
+            if app.workspace.view.compare_samples {
+                comparison_grid(app, ui, shared_maximum, available_height);
+            } else if app.workspace.overlay {
                 egui::ScrollArea::vertical()
                     .id_salt("overlay_legend")
                     .max_height(100.0)
@@ -269,6 +279,7 @@ pub fn plot_chromatogram(
                     ui,
                     None,
                     (available_height - ui.min_rect().height()).max(120.0),
+                    shared_maximum,
                 );
                 interactions(app, &response, bounds, point, None);
             } else {
@@ -322,7 +333,7 @@ pub fn plot_chromatogram(
                         let card_width = ((width - 8.0 * (columns - 1) as f32) / columns as f32)
                             .clamp(220.0, 760.0);
                         let height = ((available_height - 56.0)
-                            / app.workspace.view.rows.clamp(1, 8) as f32
+                            / selected.len().div_ceil(columns).max(1) as f32
                             - 48.0)
                             .clamp(115.0, 280.0);
                         for row in selected.chunks(columns) {
@@ -353,6 +364,7 @@ pub fn plot_chromatogram(
                                                                     ui,
                                                                     Some(key),
                                                                     height,
+                                                                    shared_maximum,
                                                                 );
                                                             interactions(
                                                                 app,
@@ -377,6 +389,127 @@ pub fn plot_chromatogram(
     app.workspace.apply_bounds = false;
     app.workspace.reset_plots = false;
     response
+}
+fn comparison_grid(
+    app: &mut MzViewerApp,
+    ui: &mut egui::Ui,
+    shared_maximum: Option<f64>,
+    available_height: f32,
+) {
+    let layout = super::workspace::comparison_layout(app);
+    if layout.samples.is_empty() || layout.analytes.is_empty() {
+        ui.weak("Select visible samples and extract traces to compare them.");
+        return;
+    }
+    let cell_width =
+        ((ui.available_width() - 148.0) / layout.samples.len() as f32 - 8.0).clamp(260.0, 760.0);
+    let plot_height =
+        ((available_height - 60.0) / layout.analytes.len() as f32 - 48.0).clamp(130.0, 280.0);
+    egui::ScrollArea::both()
+        .id_salt("sample_analyte_matrix")
+        .max_height(available_height)
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            egui::Grid::new("comparison_grid")
+                .spacing(egui::vec2(8.0, 12.0))
+                .show(ui, |ui| {
+                    ui.allocate_ui(egui::vec2(140.0, 24.0), |ui| {
+                        ui.strong("Analyte / sample");
+                    });
+                    for id in &layout.samples {
+                        ui.allocate_ui(egui::vec2(cell_width, 24.0), |ui| {
+                            let file = &app.files[id];
+                            ui.add(
+                                egui::Label::new(egui::RichText::new(&file.name).strong())
+                                    .truncate(),
+                            )
+                            .on_hover_text(file.cache.source_path.as_deref().unwrap_or(&file.path));
+                        });
+                    }
+                    ui.end_row();
+                    for (name, params) in &layout.analytes {
+                        ui.allocate_ui(egui::vec2(140.0, plot_height + 44.0), |ui| {
+                            ui.add(egui::Label::new(name).wrap());
+                        });
+                        for id in &layout.samples {
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(cell_width, plot_height + 44.0),
+                                egui::Layout::top_down(egui::Align::Min),
+                                |ui| {
+                                    ui.push_id(("compare", *id, format!("{params:?}")), |ui| {
+                                        egui::Frame::group(ui.style()).inner_margin(8.0).show(
+                                            ui,
+                                            |ui| {
+                                                ui.set_width(cell_width - 16.0);
+                                                ui.set_min_height(plot_height + 28.0);
+                                                if layout
+                                                    .visible
+                                                    .iter()
+                                                    .any(|(file, p)| file == id && p == params)
+                                                {
+                                                    let active = app.active_file_id == Some(*id)
+                                                        && app.files[id]
+                                                            .cache
+                                                            .last_processing_params
+                                                            .as_ref()
+                                                            == Some(params);
+                                                    if ui
+                                                        .selectable_label(
+                                                            active,
+                                                            if active {
+                                                                "Active trace"
+                                                            } else {
+                                                                "Select trace"
+                                                            },
+                                                        )
+                                                        .clicked()
+                                                    {
+                                                        super::workspace::select_key(
+                                                            app, *id, params,
+                                                        );
+                                                    }
+                                                    let key = (*id, params.clone());
+                                                    let (response, bounds, point) =
+                                                        render_chromatogram(
+                                                            app,
+                                                            ui,
+                                                            Some(&key),
+                                                            plot_height,
+                                                            shared_maximum,
+                                                        );
+                                                    interactions(
+                                                        app,
+                                                        &response,
+                                                        bounds,
+                                                        point,
+                                                        Some(&key),
+                                                    );
+                                                } else {
+                                                    ui.allocate_ui(
+                                                        egui::vec2(
+                                                            cell_width - 16.0,
+                                                            plot_height + 28.0,
+                                                        ),
+                                                        |ui| {
+                                                            ui.weak("No visible trace");
+                                                            if let Some(error) =
+                                                                app.presets.failed.get(id)
+                                                            {
+                                                                ui.label(error);
+                                                            }
+                                                        },
+                                                    );
+                                                }
+                                            },
+                                        );
+                                    });
+                                },
+                            );
+                        }
+                        ui.end_row();
+                    }
+                });
+        });
 }
 fn interactions(
     app: &mut MzViewerApp,
@@ -429,6 +562,13 @@ fn interactions(
         }
         if ui.button("Plot properties…").clicked() {
             app.plot_properties_open = true;
+            ui.close();
+        }
+        if ui.button("File information…").clicked() {
+            if let Some(id) = key.map(|(id, _)| *id).or(app.active_file_id) {
+                ui.ctx()
+                    .data_mut(|d| d.insert_temp(egui::Id::new("file_info_open"), id));
+            }
             ui.close();
         }
         if ui.button("Load trace preset…").clicked() {

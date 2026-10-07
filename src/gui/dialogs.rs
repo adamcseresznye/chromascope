@@ -9,12 +9,12 @@ use log::error;
 /// The dialog blocks interaction until dismissed by clicking OK.
 pub fn render_error_dialog(app: &mut MzViewerApp, ctx: &egui::Context) {
     if let Some(error) = app.error_message.clone() {
-        egui::Window::new("⚠ Error")
+        egui::Window::new("Error")
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
-                ui.colored_label(egui::Color32::RED, &error);
+                ui.colored_label(ui.visuals().error_fg_color, &error);
                 ui.add_space(10.0);
                 if ui.button("OK").clicked() {
                     app.error_message = None;
@@ -36,7 +36,7 @@ pub fn render_xic_settings_window(app: &mut MzViewerApp, ctx: &egui::Context) {
         egui::Window::new("XIC settings")
             .open(&mut window_open)
             .show(ctx, |ui| {
-                ui.label("Enter m/z and mass tolerance values in ppm:");
+                ui.label("Enter target m/z and tolerance (ppm):");
 
                 ui.add_space(5.0);
                 ui.separator();
@@ -51,7 +51,7 @@ pub fn render_xic_settings_window(app: &mut MzViewerApp, ctx: &egui::Context) {
 
                         // Show m/z range
                         ui.horizontal(|ui| {
-                            ui.label("📊 Valid m/z range:");
+                            ui.label("Valid m/z range:");
                             ui.label(
                                 egui::RichText::new(format!(
                                     "{:.2} - {:.2}",
@@ -63,7 +63,7 @@ pub fn render_xic_settings_window(app: &mut MzViewerApp, ctx: &egui::Context) {
 
                         // Show RT range (informational)
                         ui.horizontal(|ui| {
-                            ui.label("⏱  File RT range:");
+                            ui.label("File RT range:");
                             ui.label(
                                 egui::RichText::new(format!(
                                     "{:.2} - {:.2} min",
@@ -75,7 +75,7 @@ pub fn render_xic_settings_window(app: &mut MzViewerApp, ctx: &egui::Context) {
 
                         // Show scan count
                         ui.horizontal(|ui| {
-                            ui.label("📈 Total scans:");
+                            ui.label("Total scans:");
                             ui.label(
                                 egui::RichText::new(format!("{}", bounds.scan_count))
                                     .color(egui::Color32::from_rgb(100, 149, 237)),

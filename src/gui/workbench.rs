@@ -4,6 +4,33 @@ use crate::plotting_parameters::{LineColor, PlotType};
 use eframe::egui::{self, Color32, Context};
 
 pub fn configure(ctx: &Context, dark: bool) {
+    let mut fonts = egui::FontDefinitions::default();
+    for (name, bytes) in [
+        (
+            "Inter",
+            include_bytes!("../../assets/fonts/inter/Inter-Regular.ttf").as_slice(),
+        ),
+        (
+            "Inter Medium",
+            include_bytes!("../../assets/fonts/inter/Inter-Medium.ttf").as_slice(),
+        ),
+    ] {
+        fonts
+            .font_data
+            .insert(name.into(), egui::FontData::from_static(bytes).into());
+    }
+    // Keep egui's existing fonts behind Inter for symbols and language coverage.
+    let fallback = fonts.families[&egui::FontFamily::Proportional].clone();
+    fonts
+        .families
+        .get_mut(&egui::FontFamily::Proportional)
+        .unwrap()
+        .insert(0, "Inter".into());
+    let heading_family = egui::FontFamily::Name("Inter Medium".into());
+    let mut heading_fonts = vec!["Inter Medium".into()];
+    heading_fonts.extend(fallback);
+    fonts.families.insert(heading_family.clone(), heading_fonts);
+    ctx.set_fonts(fonts);
     let mut visuals = if dark {
         egui::Visuals::dark()
     } else {
@@ -51,9 +78,10 @@ pub fn configure(ctx: &Context, dark: bool) {
         style
             .text_styles
             .insert(egui::TextStyle::Small, egui::FontId::proportional(12.0));
-        style
-            .text_styles
-            .insert(egui::TextStyle::Heading, egui::FontId::proportional(18.0));
+        style.text_styles.insert(
+            egui::TextStyle::Heading,
+            egui::FontId::new(18.0, heading_family),
+        );
     });
 }
 
@@ -92,7 +120,15 @@ pub fn status(app: &MzViewerApp, ctx: &Context) {
                 ui.spinner();
                 ui.small("Updating chromatogram…");
             } else {
-                ui.small(format!("{} files loaded", app.files.len()));
+                ui.small(format!(
+                    "{} {} loaded",
+                    app.files.len(),
+                    if app.files.len() == 1 {
+                        "file"
+                    } else {
+                        "files"
+                    }
+                ));
             }
             ui.separator();
             ui.small("Double-click: spectrum    Right-drag: integrate    Middle-drag: zoom");
@@ -112,12 +148,20 @@ pub fn inspector(app: &mut MzViewerApp, ctx: &Context) {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.heading("Trace settings");
-                    if ui.small_button("Collapse").clicked() {
+                    if ui
+                        .small_button("Hide")
+                        .on_hover_text("Restore this pane with Inspector in the toolbar")
+                        .clicked()
+                    {
                         app.workspace.view.inspector = false;
                     }
                 });
-                let editable = app.presets.specs.is_none();
-                if !editable {
+                let editable = app.presets.specs.is_none()
+                    && app
+                        .active_file_id
+                        .and_then(|id| app.files.get(&id))
+                        .is_some_and(|f| !f.is_loading);
+                if app.presets.specs.is_some() {
                     ui.small("Extraction settings are shared across the batch.");
                     if ui
                         .add_enabled(
@@ -133,6 +177,7 @@ pub fn inspector(app: &mut MzViewerApp, ctx: &Context) {
                     }
                 }
                 ui.add_enabled_ui(editable, |ui| {
+                    ui.label("Acquisition");
                     let previous_mode = app.user_input.acquisition;
                     egui::ComboBox::from_id_salt("acquisition_mode")
                         .selected_text(
@@ -177,7 +222,7 @@ pub fn inspector(app: &mut MzViewerApp, ctx: &Context) {
                     ui.label("Smoothing");
                     if ui
                         .add(
-                            egui::Slider::new(&mut app.user_input.smoothing, 0..=10).text("points"),
+                            egui::Slider::new(&mut app.user_input.smoothing, 0..=10).text("radius"),
                         )
                         .changed()
                     {
@@ -186,12 +231,15 @@ pub fn inspector(app: &mut MzViewerApp, ctx: &Context) {
                     if app.user_input.smoothing == 0 {
                         ui.small("Off · original trace");
                     } else {
-                        ui.small("Applied to calculation and export data");
+                        ui.small(format!(
+                            "{} scans per window; used for calculation and export",
+                            2 * u16::from(app.user_input.smoothing) + 1
+                        ));
                     }
                 });
                 ui.add_space(10.0);
                 egui::CollapsingHeader::new("Appearance")
-                    .default_open(true)
+                    .default_open(false)
                     .show(ui, |ui| {
                         ui.add(
                             egui::Slider::new(&mut app.user_input.line_width, 0.5..=4.0)
@@ -245,7 +293,6 @@ pub fn inspector(app: &mut MzViewerApp, ctx: &Context) {
                             }
                         }
                     });
-                ui.separator();
                 super::workspace::inspector(app, ui);
                 ui.heading("Selection");
                 if let Some(rt) = app.user_input.retention_time_ms_spectrum {
@@ -268,24 +315,6 @@ pub fn inspector(app: &mut MzViewerApp, ctx: &Context) {
                     app.integration = Default::default();
                 }
                 ui.small("Right-drag across a peak to integrate.");
-                ui.separator();
-                egui::CollapsingHeader::new("File information").show(ui, |ui| {
-                    if let Some(file) = app.active_file_id.and_then(|id| app.files.get(&id)) {
-                        ui.label(&file.name);
-                        ui.small(format!("{} scans", file.data.bounds.scan_count));
-                        ui.small(format!(
-                            "RT: {:.2}–{:.2} min",
-                            file.data.bounds.min_rt, file.data.bounds.max_rt
-                        ));
-                        ui.small(format!(
-                            "m/z: {:.2}–{:.2}",
-                            file.data.bounds.min_mz, file.data.bounds.max_mz
-                        ));
-                        ui.small(file.cache.source_path.as_deref().unwrap_or(&file.path));
-                    } else {
-                        ui.small("Open a dataset to see its acquisition information.");
-                    }
-                });
             });
         });
 }
@@ -349,6 +378,13 @@ mod tests {
             ("dark", true, 920.0, true),
             ("horizontal", true, 1280.0, true),
             ("full-chromatograms", false, 1280.0, true),
+            ("file-menu", false, 1280.0, true),
+            ("grid-menu", true, 920.0, true),
+            ("preset-editor", false, 920.0, true),
+            ("about", true, 920.0, true),
+            ("shared-scale", true, 1280.0, true),
+            ("comparison", true, 1280.0, true),
+            ("readme", true, 1280.0, true),
         ] {
             let ctx = Context::default();
             configure(&ctx, dark);
@@ -420,7 +456,12 @@ mod tests {
                 app.active_file_id = Some(0);
                 app.user_input.retention_time_ms_spectrum = Some(4.82);
             }
-            if name == "horizontal" || name == "full-chromatograms" {
+            if name == "horizontal"
+                || name == "full-chromatograms"
+                || name == "shared-scale"
+                || name == "comparison"
+                || name == "readme"
+            {
                 app.workspace.view.horizontal = name == "horizontal";
                 app.workspace.view.spectrum = false;
                 app.workspace.view.files = false;
@@ -449,9 +490,99 @@ mod tests {
                         },
                     );
                 }
+                if name == "shared-scale" {
+                    app.workspace.view.intensity_scale =
+                        super::super::workspace::IntensityScale::SharedHighest;
+                    for (i, trace) in app
+                        .workspace
+                        .traces
+                        .get_mut(&0)
+                        .unwrap()
+                        .iter_mut()
+                        .enumerate()
+                    {
+                        for point in &mut trace.points {
+                            point[1] /= (i + 2) as f64;
+                        }
+                        trace.display_points = trace.points.clone();
+                    }
+                }
+                if name == "comparison" || name == "readme" {
+                    app.workspace.traces.get_mut(&0).unwrap().truncate(2);
+                    app.workspace.view.compare_samples = true;
+                    let params = app.files[&0].cache.last_processing_params.clone();
+                    let points = app.files[&0].cache.plot_data.clone();
+                    app.files.insert(
+                        1,
+                        OpenFile {
+                            id: 1,
+                            name: "Comparison sample 02.mzML".into(),
+                            path: "sample02.mzML".into(),
+                            data: crate::parser::MzData::new(),
+                            display: FileDisplaySettings {
+                                color: LineColor::Orange,
+                                visible: true,
+                            },
+                            is_loading: false,
+                            cache: FileCache {
+                                plot_data: points.clone(),
+                                display_data: points,
+                                last_processing_params: params,
+                                ..Default::default()
+                            },
+                        },
+                    );
+                }
             }
             let height = if width < 1000.0 { 600.0 } else { 820.0 };
-            let input = egui::RawInput {
+            if name == "readme" {
+                app.workspace.traces.get_mut(&0).unwrap().truncate(1);
+                app.files.get_mut(&0).unwrap().name = "Sample 01.mzML".into();
+                app.files.get_mut(&1).unwrap().name = "Sample 02.mzML".into();
+                app.workspace.view.intensity_scale =
+                    super::super::workspace::IntensityScale::SharedHighest;
+                for (i, trace) in app
+                    .workspace
+                    .traces
+                    .get_mut(&0)
+                    .unwrap()
+                    .iter_mut()
+                    .enumerate()
+                {
+                    trace.params.plot_type = PlotType::Xic;
+                    trace.params.smoothing = 0;
+                    trace.params.xic_params = Some(
+                        crate::validation::XicParams::new(
+                            483.0 + i as f64 * 4.0,
+                            app.user_input.polarity,
+                            10.0,
+                            &crate::validation::DataBounds::unrestricted(),
+                        )
+                        .unwrap(),
+                    );
+                    for point in &mut trace.points {
+                        point[1] *= 0.5 / (i + 1) as f64;
+                    }
+                    trace.display_points = trace.points.clone();
+                }
+                let mut traces = app.workspace.traces[&0].clone();
+                for trace in &mut traces {
+                    trace.color = LineColor::Orange;
+                    for point in &mut trace.points {
+                        point[1] *= 0.7;
+                    }
+                    trace.display_points = trace.points.clone();
+                }
+                app.workspace.traces.insert(1, traces);
+            }
+            if name == "preset-editor" {
+                app.presets.editor.open = true;
+            }
+            if name == "about" {
+                ctx.data_mut(|d| d.insert_temp(egui::Id::new("about_open"), true));
+            }
+            let height = if name == "readme" { 1000.0 } else { height };
+            let mut input = egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
                     egui::vec2(width, height),
@@ -459,14 +590,47 @@ mod tests {
                 ..Default::default()
             };
             let mut atlas = egui::ColorImage::new([1, 1], vec![Color32::WHITE]);
+            let mut outputs = Vec::new();
             for frame in 0..3 {
+                input.time = Some(frame as f64 * 0.2);
                 let output = ctx.run(input.clone(), |ctx| {
                     panels::update_data_selection_panel(&mut app, ctx);
                     status(&app, ctx);
                     panels::update_file_information_panel(&mut app, ctx);
                     inspector(&mut app, ctx);
                     panels::update_central_panel(&mut app, ctx);
+                    super::super::information::show(&app, ctx);
+                    if name == "preset-editor" {
+                        super::super::preset_editor::show(&mut app, ctx);
+                    }
                 });
+                input.events.clear();
+                if frame == 0 {
+                    let target = match name {
+                        "file-menu" => Some("File"),
+                        "grid-menu" => Some("Grid layout…"),
+                        _ => None,
+                    };
+                    if let Some(target) = target {
+                        let pos = super::super::test_render::text_center(&output.shapes, target)
+                            .expect("menu button must be visible");
+                        input.events = vec![
+                            egui::Event::PointerMoved(pos),
+                            egui::Event::PointerButton {
+                                pos,
+                                button: egui::PointerButton::Primary,
+                                pressed: true,
+                                modifiers: egui::Modifiers::NONE,
+                            },
+                            egui::Event::PointerButton {
+                                pos,
+                                button: egui::PointerButton::Primary,
+                                pressed: false,
+                                modifiers: egui::Modifiers::NONE,
+                            },
+                        ];
+                    }
+                }
                 for (_, delta) in &output.textures_delta.set {
                     let egui::ImageData::Color(image) = &delta.image;
                     if let Some([x, y]) = delta.pos {
@@ -479,6 +643,7 @@ mod tests {
                         atlas = (**image).clone();
                     }
                 }
+                outputs.push(output.clone());
                 let meshes = ctx.tessellate(output.shapes, output.pixels_per_point);
                 assert!(!meshes.is_empty());
                 for primitive in &meshes {
@@ -490,6 +655,12 @@ mod tests {
                 if frame == 2 {
                     if let Ok(directory) = std::env::var("CHROMASCOPE_PREVIEW_DIR") {
                         save_mesh_preview(&directory, name, width, height, &atlas, &meshes);
+                        super::super::test_render::save(
+                            &ctx,
+                            outputs.clone(),
+                            &std::path::Path::new(&directory).join(format!("{name}.png")),
+                            egui::vec2(width, height),
+                        );
                     }
                 }
             }
