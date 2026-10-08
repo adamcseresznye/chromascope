@@ -59,7 +59,7 @@ pub(super) fn png(
         let Primitive::Mesh(mesh) = clipped.primitive else {
             continue;
         };
-        for ids in mesh.indices.chunks_exact(3) {
+        for ids in mesh.indices.as_chunks::<3>().0 {
             let v = [
                 mesh.vertices[ids[0] as usize],
                 mesh.vertices[ids[1] as usize],
