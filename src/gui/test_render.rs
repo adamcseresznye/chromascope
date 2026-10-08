@@ -2,6 +2,7 @@
 //! No native application or desktop capture is needed.
 use eframe::egui::{self, epaint::Primitive};
 use std::collections::HashMap;
+#[cfg(test)]
 pub(super) fn text_center(shapes: &[egui::epaint::ClippedShape], text: &str) -> Option<egui::Pos2> {
     fn find(shape: &egui::Shape, text: &str) -> Option<egui::Pos2> {
         match shape {
@@ -15,12 +16,22 @@ pub(super) fn text_center(shapes: &[egui::epaint::ClippedShape], text: &str) -> 
     shapes.iter().find_map(|s| find(&s.shape, text))
 }
 
+#[cfg(test)]
 pub(super) fn save(
     ctx: &egui::Context,
-    mut outputs: Vec<egui::FullOutput>,
+    outputs: Vec<egui::FullOutput>,
     path: &std::path::Path,
     size: egui::Vec2,
 ) {
+    let bytes = png(ctx, outputs, size).unwrap();
+    std::fs::write(path, bytes).unwrap();
+}
+
+pub(super) fn png(
+    ctx: &egui::Context,
+    mut outputs: Vec<egui::FullOutput>,
+    size: egui::Vec2,
+) -> Result<Vec<u8>, image::ImageError> {
     let mut textures: HashMap<egui::TextureId, egui::ColorImage> = HashMap::new();
     for output in &outputs {
         for (id, delta) in &output.textures_delta.set {
@@ -125,5 +136,7 @@ pub(super) fn save(
             }
         }
     }
-    canvas.save(path).unwrap();
+    let mut buffer = std::io::Cursor::new(Vec::new());
+    canvas.write_to(&mut buffer, image::ImageFormat::Png)?;
+    Ok(buffer.into_inner())
 }

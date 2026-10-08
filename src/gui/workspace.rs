@@ -1119,7 +1119,7 @@ fn escape(s: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
 }
-fn figure_svg(app: &MzViewerApp) -> Option<String> {
+pub(super) fn figure_svg(app: &MzViewerApp) -> Option<String> {
     if app.workspace.view.compare_samples {
         return comparison_svg(app);
     }
@@ -1393,7 +1393,7 @@ fn grid_svg_scaled(
     svg.push_str("</svg>");
     Some(svg)
 }
-fn spectrum_svg(app: &MzViewerApp) -> Option<String> {
+pub(super) fn spectrum_svg(app: &MzViewerApp) -> Option<String> {
     let f = app.files.get(&app.active_file_id?)?;
     let scan = f.cache.mass_spectrum.as_ref()?;
     let peaks: Vec<_> = scan

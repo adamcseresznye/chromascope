@@ -136,7 +136,7 @@ pub(crate) enum StateChange {
 }
 
 /// Holds all state for the peak integration feature.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(crate) struct IntegrationState {
     /// RT where the user started right-click dragging (minutes)
     pub(crate) start_rt: Option<f64>,
@@ -262,6 +262,8 @@ impl AsyncState {
 }
 
 pub struct MzViewerApp {
+    #[cfg(feature = "mcp")]
+    pub(crate) remote: Option<crate::mcp::GuiBridge>,
     /// Collection of opened mzML files, keyed by stable FileId
     pub(crate) files: HashMap<FileId, OpenFile>,
     /// FileId of the currently active/selected file for analysis
@@ -308,6 +310,8 @@ impl Default for MzViewerApp {
             workspace: super::workspace::Workspace::default(),
             quant: Default::default(),
             msconvert_path: crate::import::discover_msconvert(),
+            #[cfg(feature = "mcp")]
+            remote: None,
         }
     }
 }

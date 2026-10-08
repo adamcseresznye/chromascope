@@ -46,6 +46,17 @@ Chromascope is designed to be highly interactive and easy to use. Here is what y
 
 ## Usage
 
+### MCP and external AI clients
+
+Build `chromascope-mcp` with `cargo build --release --features mcp --bin chromascope-mcp`
+to expose the analytical engine and a live GUI through local MCP stdio. Clients can
+extract and inspect chromatograms/spectra, retrieve PNG plots, control views, integrate
+peaks, and run the existing batch quantification workflow. Authorized directory roots
+are required; changes and exports are opt-in. See [the MCP guide](docs/MCP.md) for
+architecture, tools, configuration, security, limitations, and a runnable visual workflow.
+
+### Standalone GUI
+
 1. **Launch Chromascope**:
    - Run the application by executing the binary or running `cargo run` from the project directory.
 

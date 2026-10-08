@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "chromascope": {
+      "command": "C:\\tools\\chromascope-mcp.exe",
+      "args": ["--allow-root", "C:\\MSData", "--allow-root", "C:\\Reports", "--allow-changes", "--allow-exports"]
+    }
+  }
+}
