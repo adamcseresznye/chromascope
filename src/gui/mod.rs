@@ -112,8 +112,10 @@ mod plotting;
 mod preset_editor;
 mod presets;
 mod quant;
-mod state;
-#[cfg(test)]
+#[cfg(feature = "mcp")]
+pub(crate) mod remote;
+pub(crate) mod state;
+#[cfg(any(test, feature = "mcp"))]
 mod test_render;
 mod workbench;
 mod workspace;
@@ -157,6 +159,8 @@ impl MzViewerApp {
             workspace: workspace::Workspace::default(),
             quant: Default::default(),
             msconvert_path: crate::import::discover_msconvert(),
+            #[cfg(feature = "mcp")]
+            remote: None,
         }
     }
     /// Resets the internal state of the instance.
@@ -423,7 +427,7 @@ impl MzViewerApp {
     fn repair_active_file(&mut self) {
         if self
             .active_file_id
-            .map_or(true, |id| !self.files.contains_key(&id))
+            .is_none_or(|id| !self.files.contains_key(&id))
         {
             self.active_file_id = self.files.keys().min().copied();
         }
@@ -549,6 +553,8 @@ impl eframe::App for MzViewerApp {
     ///
     /// This method does not return any errors. It calls several other functions that may encounter errors, but those errors are handled within the respective functions
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        #[cfg(feature = "mcp")]
+        self.poll_remote(ctx);
         presets::poll(self, ctx);
         workspace::input(self, ctx);
         self.poll_file_loading_result(ctx);

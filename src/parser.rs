@@ -416,10 +416,10 @@ impl MzData {
         let mut results: Vec<(f32, f32, f32, usize)> = reader
             .iter()
             .filter(|s| {
-                acquisition_filter.map_or(true, |mode| mode.matches(&s.description))
+                acquisition_filter.is_none_or(|mode| mode.matches(&s.description))
                     && s.description.ms_level == ms_level
                     && s.description.polarity == polarity
-                    && precursor_mz.map_or(true, |target| {
+                    && precursor_mz.is_none_or(|target| {
                         s.description
                             .precursor
                             .first()
@@ -514,10 +514,10 @@ impl MzData {
             results = reader
                 .iter()
                 .filter(|s| {
-                    acquisition_filter.map_or(true, |mode| mode.matches(&s.description))
+                    acquisition_filter.is_none_or(|mode| mode.matches(&s.description))
                         && s.description.ms_level == ms_level
                         && s.description.polarity == polarity
-                        && precursor_mz.map_or(true, |target| {
+                        && precursor_mz.is_none_or(|target| {
                             s.description
                                 .precursor
                                 .first()
@@ -603,10 +603,10 @@ impl MzData {
         let mut results: Vec<(f32, f32, usize)> = reader
             .iter()
             .filter(|s| {
-                acquisition_filter.map_or(true, |mode| mode.matches(&s.description))
+                acquisition_filter.is_none_or(|mode| mode.matches(&s.description))
                     && s.description.ms_level == ms_level
                     && s.description.polarity == polarity
-                    && precursor_mz.map_or(true, |target| {
+                    && precursor_mz.is_none_or(|target| {
                         s.description
                             .precursor
                             .first()
@@ -671,10 +671,10 @@ impl MzData {
             results = reader
                 .iter()
                 .filter(|s| {
-                    acquisition_filter.map_or(true, |mode| mode.matches(&s.description))
+                    acquisition_filter.is_none_or(|mode| mode.matches(&s.description))
                         && s.description.ms_level == ms_level
                         && s.description.polarity == polarity
-                        && precursor_mz.map_or(true, |target| {
+                        && precursor_mz.is_none_or(|target| {
                             s.description
                                 .precursor
                                 .first()
@@ -762,10 +762,10 @@ impl MzData {
         let spectra: Vec<_> = reader
             .iter()
             .filter(|s| {
-                acquisition_filter.map_or(true, |mode| mode.matches(&s.description))
+                acquisition_filter.is_none_or(|mode| mode.matches(&s.description))
                     && s.description.ms_level == ms_level
                     && s.description.polarity == polarity
-                    && precursor_mz.map_or(true, |target| {
+                    && precursor_mz.is_none_or(|target| {
                         s.description
                             .precursor
                             .first()
@@ -921,6 +921,26 @@ impl MzData {
     }
 
     /// Human-readable native scan and acquisition metadata, without decoding peak arrays.
+    /// Machine-readable acquisition metadata. Uses metadata-only reading and restores full detail.
+    pub fn scan_metadata_structured(&mut self, index: usize) -> Result<serde_json::Value> {
+        let reader = self
+            .msfile
+            .as_mut()
+            .ok_or_else(|| ChromascopeError::FileNotOpened("No file opened".into()))?;
+        reader.set_detail_level(DetailLevel::MetadataOnly);
+        let spectrum = reader.get_spectrum_by_index(index);
+        reader.set_detail_level(DetailLevel::Full);
+        let spectrum =
+            spectrum.ok_or_else(|| ChromascopeError::MzDataError(format!("No scan {index}")))?;
+        let d = &spectrum.description;
+        let parameters = |params: &[mzdata::params::Param]| {
+            params.iter().map(|p| serde_json::json!({"name":p.name,"accession":p.accession,"value":p.value.to_string(),"unit":p.unit.to_string()})).collect::<Vec<_>>()
+        };
+        Ok(
+            serde_json::json!({"index":index,"native_id":d.id,"ms_level":d.ms_level,"polarity":format!("{:?}",d.polarity),"representation":format!("{:?}",d.signal_continuity),"retention_time_minutes":spectrum.start_time(),"precursors":d.precursor.iter().map(|p|serde_json::json!({"parent_scan":p.precursor_id,"isolation_window":{"target_mz":p.isolation_window.target,"lower":p.isolation_window.lower_bound,"upper":p.isolation_window.upper_bound,"representation":format!("{:?}",p.isolation_window.flags)},"ions":p.ions.iter().map(|i|serde_json::json!({"mz":i.mz,"intensity":i.intensity,"charge":i.charge})).collect::<Vec<_>>(),"activation":{"methods":format!("{:?}",p.activation.methods()),"energy":p.activation.energy,"parameters":parameters(&p.activation.params)}})).collect::<Vec<_>>(),"scans":d.acquisition.scans.iter().map(|s|serde_json::json!({"retention_time_minutes":s.start_time,"injection_time_ms":s.injection_time,"instrument_configuration_id":s.instrument_configuration_id,"windows":s.scan_windows.iter().map(|w|serde_json::json!({"lower_mz":w.lower_bound,"upper_mz":w.upper_bound})).collect::<Vec<_>>()})).collect::<Vec<_>>(),"parameters":parameters(&d.params)}),
+        )
+    }
+
     pub fn scan_metadata(&mut self, index: usize) -> Result<String> {
         let reader = self
             .msfile

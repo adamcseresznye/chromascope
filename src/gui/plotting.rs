@@ -85,7 +85,7 @@ fn render_chromatogram(
             if let Some(maximum) = shared_maximum {
                 plot_ui.set_plot_bounds_y(0.0..=maximum);
             }
-            if key.map_or(true, |(id, p)| {
+            if key.is_none_or(|(id, p)| {
                 app.active_file_id == Some(*id)
                     && app
                         .files

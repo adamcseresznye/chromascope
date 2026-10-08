@@ -8,6 +8,8 @@ pub mod error;
 pub mod export;
 pub mod gui;
 pub mod import;
+#[cfg(feature = "mcp")]
+pub mod mcp;
 pub mod parser;
 pub mod plotting_parameters;
 pub mod processing;

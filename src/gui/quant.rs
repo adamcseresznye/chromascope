@@ -275,6 +275,8 @@ enum MethodAction {
     New,
 }
 pub(super) struct QuantState {
+    #[cfg(feature = "mcp")]
+    remote_job_id: u64,
     pub active: bool,
     method: Method,
     method_path: Option<PathBuf>,
@@ -301,6 +303,8 @@ pub(super) struct QuantState {
 impl Default for QuantState {
     fn default() -> Self {
         Self {
+            #[cfg(feature = "mcp")]
+            remote_job_id: 0,
             active: false,
             method: Method::default(),
             method_path: None,
@@ -804,7 +808,7 @@ pub(super) fn show(app: &mut MzViewerApp, ctx: &egui::Context) {
                             );
                             if q.restore_samples
                                 .as_ref()
-                                .map_or(true, |samples| samples.contains(&key))
+                                .is_none_or(|samples| samples.contains(&key))
                             {
                                 q.selected_samples.insert(id);
                             }
@@ -1212,7 +1216,7 @@ fn review(q: &mut QuantState, ui: &mut egui::Ui) {
     let draft_changed = r
         .peak
         .as_ref()
-        .map_or(true, |p| p.start != q.start || p.end != q.end);
+        .is_none_or(|p| p.start != q.start || p.end != q.end);
     if let Some(p) = &r.peak {
         ui.horizontal_wrapped(|ui| {
             ui.strong(format!("Recorded area: {:.4e} a.u.·min", p.area));
@@ -1379,6 +1383,111 @@ fn review(q: &mut QuantState, ui: &mut egui::Ui) {
             Err(e) => q.message = e,
         }
     }
+}
+
+#[cfg(feature = "mcp")]
+pub(super) fn remote_start(
+    app: &mut MzViewerApp,
+    text: &str,
+    ids: Vec<usize>,
+) -> Result<(), String> {
+    if app.quant.rx.is_some() {
+        return Err("Batch already running".into());
+    }
+    let method: Method = toml::from_str(text).map_err(|e| e.to_string())?;
+    validate(&method)?;
+    if ids.is_empty() || ids.iter().any(|id| !app.files.contains_key(id)) {
+        return Err("Select existing dataset IDs".into());
+    }
+    app.quant.method = method;
+    app.quant.selected_samples = ids.into_iter().collect();
+    run(app)?;
+    app.quant.remote_job_id += 1;
+    Ok(())
+}
+#[cfg(feature = "mcp")]
+pub(super) fn remote_status(app: &MzViewerApp) -> serde_json::Value {
+    let q = &app.quant;
+    serde_json::json!({"job_id":format!("quantification:{}",q.remote_job_id),"running":q.rx.is_some(),"completed":q.completed,"total":q.total,"message":q.message,"method":signature(&q.method),"results":q.results.iter().enumerate().map(|(i,r)|serde_json::json!({"result_index":i,"sample":r.sample,"source":r.source,"run":r.run,"analyte":r.analyte,"parameters":r.params,"method":r.method,"automatic":r.automatic,"peak":r.peak,"automatic_status":r.automatic_status,"status":r.status,"diagnostic":r.diagnostic,"point_count":r.trace.len()})).collect::<Vec<_>>()})
+}
+#[cfg(feature = "mcp")]
+pub(super) fn remote_cancel(app: &MzViewerApp) {
+    app.quant.cancel.store(true, Ordering::Relaxed);
+}
+#[cfg(feature = "mcp")]
+pub(super) fn remote_review(
+    app: &mut MzViewerApp,
+    index: usize,
+    start: Option<f64>,
+    end: Option<f64>,
+    reviewed: bool,
+) -> Result<(), String> {
+    if reviewed {
+        return Err("Human review must be recorded through the GUI".into());
+    }
+    if app.quant.rx.is_some() {
+        return Err("Wait for batch completion".into());
+    }
+    let signature = signature(&app.quant.method);
+    let r = app
+        .quant
+        .results
+        .get_mut(index)
+        .ok_or("Unknown result index")?;
+    if r.method != signature {
+        return Err("Method changed; rerun before reviewing".into());
+    }
+    match (start, end) {
+        (Some(a), Some(z)) => {
+            if !a.is_finite() || !z.is_finite() {
+                return Err("Finite boundaries required".into());
+            }
+            r.peak = Some(measure(&r.trace, a, z)?);
+            r.status = Status::Manual;
+        }
+        (None, None) => {}
+        _ => return Err("Both boundaries are required".into()),
+    }
+    select(&mut app.quant, index);
+    Ok(())
+}
+
+#[cfg(feature = "mcp")]
+pub(super) fn remote_trace(
+    app: &MzViewerApp,
+    index: usize,
+    offset: usize,
+    limit: usize,
+) -> Result<serde_json::Value, String> {
+    let r = app.quant.results.get(index).ok_or("Unknown result index")?;
+    Ok(
+        serde_json::json!({"result_index":index,"parameters":r.params,"method":r.method,"total":r.trace.len(),"offset":offset,"points":r.trace.iter().skip(offset).take(limit).collect::<Vec<_>>(),"units":["minutes","arbitrary units"],"smoothing":0}),
+    )
+}
+#[cfg(feature = "mcp")]
+pub(super) fn remote_csv(app: &MzViewerApp) -> Result<String, String> {
+    if app.quant.rx.is_some() {
+        return Err("Wait for batch completion before exporting".into());
+    }
+    if app.quant.results.is_empty() {
+        return Err("No batch results".into());
+    }
+    Ok(csv(&app.quant.results, &app.quant.method))
+}
+#[cfg(feature = "mcp")]
+pub(super) fn remote_reset(app: &mut MzViewerApp, index: usize) -> Result<(), String> {
+    if app.quant.rx.is_some() {
+        return Err("Wait for batch completion".into());
+    }
+    let r = app
+        .quant
+        .results
+        .get_mut(index)
+        .ok_or("Unknown result index")?;
+    r.peak = r.automatic.clone();
+    r.status = r.automatic_status.clone();
+    select(&mut app.quant, index);
+    Ok(())
 }
 
 #[cfg(test)]
