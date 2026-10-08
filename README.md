@@ -15,11 +15,28 @@ Explore, visualize, process, and quantify mass spectrometry data through an inte
 
 [Quick start](#quick-start) · [User guide](docs/USER_GUIDE.md) · [MCP guide](docs/MCP.md) · [Releases](https://github.com/adamcseresznye/chromascope/releases)
 
-<img src="assets/chromascope-0.3.0.png" alt="Chromascope comparing LC–MS samples in an analyte-by-sample matrix with shared intensity scaling" width="1100" />
-
-<sub>Sample comparison with aligned analytes and shared intensity scaling · illustrative data</sub>
-
 </div>
+
+## AI-powered LC–MS workflows with MCP
+
+Chromascope exposes its analytical capabilities through the **Model Context Protocol (MCP)**, allowing compatible AI agents to interact directly with the live application.
+
+In this 30-second demonstration, an AI agent using OpenCode autonomously:
+
+- Opens an mzML dataset.
+- Extracts an ion chromatogram at m/z 258.1109.
+- Applies smoothing and adjusts the chromatogram view.
+- Inspects the peak and proposes integration boundaries.
+- Calculates the integrated peak area without modifying the original results.
+
+**Watch the demonstration:**
+
+<!-- For inline playback on GitHub, upload assets/demo.mp4 as an issue or discussion attachment and replace the link below with the hosted video URL. -->
+[Watch the demonstration](assets/demo.mp4)
+
+Chromascope's optional MCP server provides **32 tools** for data exploration, chromatogram extraction, mass spectral inspection, visualization, integration, and batch quantification.
+
+For installation, configuration, and the complete tool reference, see the [MCP documentation](docs/MCP.md).
 
 ## Key features
 
