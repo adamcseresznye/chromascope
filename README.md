@@ -31,8 +31,7 @@ In this 30-second demonstration, an AI agent using OpenCode autonomously:
 
 **Watch the demonstration:**
 
-<!-- For inline playback on GitHub, upload assets/demo.mp4 as an issue or discussion attachment and replace the link below with the hosted video URL. -->
-[Watch the demonstration](assets/demo.mp4)
+[[Watch the demonstration](assets/demo.mp4)](https://github.com/user-attachments/assets/c63ba973-85a4-4c73-a3ed-e9ed462cfda1)
 
 Chromascope's optional MCP server provides **32 tools** for data exploration, chromatogram extraction, mass spectral inspection, visualization, integration, and batch quantification.
 
