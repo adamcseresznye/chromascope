@@ -545,7 +545,7 @@ pub(super) fn show(app: &mut MzViewerApp, ctx: &egui::Context) {
     let mut editor = std::mem::replace(&mut app.presets.editor, EditorState::empty());
     let mut open = editor.open;
     let mut apply = None;
-    egui::Window::new("Viewer extraction preset").open(&mut open).default_size(egui::vec2(900.0,650.0)).resizable(true).show(ctx,|ui|{
+    egui::Window::new("Viewer extraction preset").max_height((ctx.content_rect().height()-60.0).max(120.0)).vscroll(true).open(&mut open).default_size(egui::vec2(900.0,650.0)).resizable(true).show(ctx,|ui|{
         ui.horizontal_wrapped(|ui|{
             if ui.button("New").clicked(){editor.replace(Draft::default());}
             if ui.button("Open…").clicked(){if let Some(path)=rfd::FileDialog::new().add_filter("Chromascope preset",&["toml"]).pick_file(){match Draft::read(path){Ok(d)=>editor.replace(d),Err(e)=>editor.error=Some(e)}}}
@@ -574,6 +574,8 @@ pub(super) fn show(app: &mut MzViewerApp, ctx: &egui::Context) {
     editor.open = open;
     if editor.pending.is_some() {
         egui::Window::new("Unsaved preset changes")
+            .max_height((ctx.content_rect().height() - 60.0).max(120.0))
+            .vscroll(true)
             .collapsible(false)
             .resizable(false)
             .show(ctx, |ui| {

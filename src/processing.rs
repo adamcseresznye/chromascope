@@ -34,6 +34,8 @@ use std::path::PathBuf;
 ///     precursor_mz: None,
 /// };
 /// ```
+#[cfg_attr(feature = "mcp-headless", derive(rmcp::schemars::JsonSchema))]
+#[cfg_attr(feature = "mcp-headless", schemars(crate = "rmcp::schemars"))]
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct ProcessingParams {
     #[serde(default)]
@@ -43,6 +45,10 @@ pub struct ProcessingParams {
     /// MS level filter (e.g., 1 for MS1, 2 for MS2)
     pub ms_level: u8,
     /// Ion polarity filter (Positive, Negative, or Unknown)
+    #[cfg_attr(
+        feature = "mcp-headless",
+        schemars(with = "crate::processing::PolaritySchema")
+    )]
     #[serde(with = "crate::processing::polarity_serde")]
     pub polarity: ScanPolarity,
     /// Smoothing window size (0-10, where 0 means no smoothing)
@@ -271,6 +277,7 @@ pub fn process_chromatogram(
     data: &mut MzData,
     params: &ProcessingParams,
 ) -> Result<(Vec<[f64; 2]>, ChromatogramData)> {
+    crate::engine::validate_params(params)?;
     data.acquisition_filter = params.acquisition;
     // Step 1: Extract raw chromatogram based on type, returning owned ChromatogramData
     let chromatogram = match params.plot_type {
@@ -322,6 +329,15 @@ pub fn prepare_chromatogram_for_plot(chrom: &ChromatogramData) -> Result<Vec<[f6
     use log::{debug, info, trace};
     info!("Starting to prepare data for plotting");
 
+    if chrom.retention_time.len() != chrom.intensity.len()
+        || chrom.retention_time.iter().any(|v| !v.is_finite())
+        || chrom.intensity.iter().any(|v| !v.is_finite())
+        || chrom.retention_time.windows(2).any(|w| w[0] > w[1])
+    {
+        return Err(ChromascopeError::MzDataError(
+            "Invalid chromatogram arrays".into(),
+        ));
+    }
     if chrom.retention_time.is_empty() {
         return Ok(Vec::new());
     }
@@ -542,7 +558,9 @@ pub fn interpolate_at(data: &[[f64; 2]], rt: f64) -> f64 {
 /// - `InvalidIntegrationRange` if `start_rt >= end_rt`
 /// - `InvalidIntegrationRange` if the window cannot yield at least 2 integration points
 pub fn integrate_peak(data: &[[f64; 2]], start_rt: f64, end_rt: f64) -> Result<f64> {
-    if start_rt >= end_rt {
+    crate::engine::validate_points(data)
+        .map_err(|e| ChromascopeError::InvalidIntegrationRange(e.to_string()))?;
+    if !start_rt.is_finite() || !end_rt.is_finite() || start_rt >= end_rt {
         return Err(ChromascopeError::InvalidIntegrationRange(format!(
             "start ({:.4}) must be less than end ({:.4})",
             start_rt, end_rt
@@ -1043,6 +1061,8 @@ pub(crate) mod polarity_serde {
 }
 
 /// Acquisition types are matched from spectrum CV metadata, rather than inferred from MS level alone.
+#[cfg_attr(feature = "mcp-headless", derive(rmcp::schemars::JsonSchema))]
+#[cfg_attr(feature = "mcp-headless", schemars(crate = "rmcp::schemars"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum AcquisitionMode {
     FS,
@@ -1130,4 +1150,14 @@ mod acquisition_tests {
         let (_, unfiltered) = process_chromatogram(&mut data, &params).unwrap();
         assert_eq!(unfiltered.index, full.index);
     }
+}
+
+#[cfg(feature = "mcp-headless")]
+#[derive(rmcp::schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(rename_all = "snake_case")]
+pub enum PolaritySchema {
+    Positive,
+    Negative,
+    Unknown,
 }

@@ -25,11 +25,17 @@ fn render_chromatogram(
     let id = key
         .map(|(id, p)| format!("chromatogram_{id}_{p:?}"))
         .unwrap_or_else(|| "chromatogram_overlay".into());
-    let mut plot = egui_plot::Plot::new(id)
+    let controls_top = ui.cursor().top();
+    let plot = super::plot_controls::plot(ui, id);
+    let remaining_height = (height - (ui.cursor().top() - controls_top)).max(150.0);
+    let mut plot = plot
         .width(ui.available_width())
-        .height(height.max(100.0))
+        .height(remaining_height)
         .x_axis_label("Retention time (min)")
-        .y_axis_label("Intensity (a.u.)")
+        .y_axis_label(
+            "Intensity
+(instrument units)",
+        )
         .show_background(false)
         .show_grid([false, true])
         .allow_double_click_reset(false)
@@ -63,6 +69,40 @@ fn render_chromatogram(
                 }
                 let file = &app.files[&id];
                 if file.cache.last_processing_params.as_ref() == Some(&params) {
+                    if params.smoothing > 0 && ui_raw_enabled(plot_ui.ctx()) {
+                        let cache_key =
+                            egui::Id::new(("unsmoothed_display", id, format!("{params:?}")));
+                        let cached = plot_ui
+                            .ctx()
+                            .data(|d| d.get_temp::<std::sync::Arc<Vec<[f64; 2]>>>(cache_key));
+                        let raw = cached.or_else(|| {
+                            let raw = crate::processing::prepare_chromatogram_for_plot(
+                                file.cache.chromatogram.as_ref()?,
+                            )
+                            .ok()?;
+                            let points =
+                                std::sync::Arc::new(crate::processing::decimate_for_display(&raw));
+                            plot_ui
+                                .ctx()
+                                .data_mut(|d| d.insert_temp(cache_key, points.clone()));
+                            Some(points)
+                        });
+                        if let Some(raw) = raw {
+                            plot_ui.line(
+                                Line::new(
+                                    format!("{} · unsmoothed", file.name),
+                                    raw.as_ref().clone(),
+                                )
+                                .color(if plot_ui.ctx().style().visuals.dark_mode {
+                                    egui::Color32::LIGHT_GRAY
+                                } else {
+                                    egui::Color32::DARK_GRAY
+                                })
+                                .width(1.0_f32)
+                                .style(egui_plot::LineStyle::Dashed { length: 6. }),
+                            );
+                        }
+                    }
                     if let Some(points) = &file.cache.display_data {
                         plot_ui.line(create_line_for_file(app, file, points));
                     }
@@ -103,6 +143,11 @@ fn render_chromatogram(
         app.workspace.bounds = Some([b.min(), b.max()]);
     }
     (response, plot_bounds, pointer_coord)
+}
+
+fn ui_raw_enabled(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<bool>(egui::Id::new("show_unsmoothed_trace")))
+        .unwrap_or(true)
 }
 
 /// Creates a styled Line widget for a file's chromatogram data.
@@ -223,10 +268,14 @@ pub fn render_integration_overlay(app: &MzViewerApp, plot_ui: &mut egui_plot::Pl
         );
     }
 
-    // Draw the baseline chord as a dashed yellow line so the user can see
+    // Use a contrasting baseline in both themes so the user can see
     // exactly where the integration baseline sits.
     let baseline = egui_plot::Line::new("Baseline chord", vec![[s, i_start], [e, i_end]])
-        .color(egui::Color32::YELLOW)
+        .color(if plot_ui.ctx().style().visuals.dark_mode {
+            egui::Color32::from_rgb(245, 195, 90)
+        } else {
+            egui::Color32::from_rgb(140, 85, 15)
+        })
         .width(1.5_f32)
         .style(egui_plot::LineStyle::Dashed { length: 6.0 });
     plot_ui.line(baseline);
@@ -666,11 +715,20 @@ pub fn plot_mass_spectrum(app: &mut MzViewerApp, ui: &mut egui::Ui) -> egui::Res
                     .flatten();
                 app.workspace.apply_spectrum_bounds = false;
                 let mut spectrum_bounds = None;
-                let response = egui_plot::Plot::new("mass_spectrum")
+                let full_resolution: Vec<_> = mz
+                    .iter()
+                    .zip(&intensity)
+                    .map(|(&mz, &intensity)| [mz, intensity as f64])
+                    .collect();
+                super::plot_controls::export_spectrum(ui, &full_resolution, "Instrument intensity");
+                let response = super::plot_controls::plot(ui, "mass_spectrum")
                     .width(ui.available_width() * 0.99)
                     .height(ui.available_height())
-                    .x_axis_label("m/z")
-                    .y_axis_label("Intensity (a.u.)")
+                    .x_axis_label("m/z (Th)")
+                    .y_axis_label(
+                        "Intensity
+(instrument units)",
+                    )
                     .show_background(false)
                     .show_grid([false, true])
                     .grid_spacing(egui::Rangef::new(12.0, 1800.0))
@@ -735,5 +793,33 @@ pub fn format_intensity_axis(
         format!("{:.2}e{}", mantissa, exp)
     } else {
         format!("{:.3}e{}", mantissa, exp)
+    }
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+    #[test]
+    fn wrapped_plot_controls_leave_axes_inside_card_height() {
+        for width in [280.0, 760.0] {
+            let ctx = egui::Context::default();
+            super::super::workbench::configure(&ctx, true);
+            let mut app = MzViewerApp::default();
+            for _ in 0..3 {
+                let _ = ctx.run(egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width + 16.0, 400.0))),
+                    ..Default::default()
+                }, |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        ui.set_max_width(width);
+                        let top = ui.cursor().top();
+                        let (response, _, _) = render_chromatogram(&mut app, ui, None, 260.0, None);
+                        assert!(response.rect.bottom() <= top + 261.0, "wrapped controls must not push scientific axes outside the plot card");
+                        // PlotResponse covers the drawing canvas, excluding labelled axes.
+                        assert!(response.rect.height() >= 100.0);
+                    });
+                });
+            }
+        }
     }
 }

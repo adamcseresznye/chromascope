@@ -1,0 +1,30 @@
+{
+  "generator": "Python stdlib Decimal exhaustive CHNO and unique-mass dot product",
+  "massbank_cross_energy": [
+    {
+      "relative_threshold": 0.0,
+      "cosine": 0.9093622549721259,
+      "matches": 18
+    },
+    {
+      "relative_threshold": 0.01,
+      "cosine": 0.9092429627473966,
+      "matches": 16
+    },
+    {
+      "relative_threshold": 0.1,
+      "cosine": 0.8836983698213137,
+      "matches": 6
+    }
+  ],
+  "formulas": [
+    {
+      "formula": "C8H10N4O2",
+      "adduct": "[M+H]+",
+      "neutral_mass_da": 194.08037557916,
+      "predicted_mz": 195.087652045781,
+      "dbe": 6.0
+    }
+  ],
+  "carbon10_m1_relative_to_m0": 0.10815728292732235
+}

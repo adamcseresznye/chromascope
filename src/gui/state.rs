@@ -289,6 +289,12 @@ pub struct MzViewerApp {
     pub(super) presets: super::presets::PresetState,
     pub(super) workspace: super::workspace::Workspace,
     pub(super) quant: super::quant::QuantState,
+    pub(super) spectral: super::spectral::State,
+    pub(super) untargeted: super::untargeted::State,
+    pub(super) statistics: super::statistics::State,
+    pub(super) delivery: super::delivery::State,
+    pub(super) project: super::project_workbench::State,
+    pub(super) ai: super::ai_review::State,
     pub(crate) msconvert_path: Option<std::path::PathBuf>,
 }
 
@@ -309,6 +315,12 @@ impl Default for MzViewerApp {
             presets: Default::default(),
             workspace: super::workspace::Workspace::default(),
             quant: Default::default(),
+            spectral: Default::default(),
+            untargeted: Default::default(),
+            statistics: Default::default(),
+            delivery: Default::default(),
+            project: Default::default(),
+            ai: Default::default(),
             msconvert_path: crate::import::discover_msconvert(),
             #[cfg(feature = "mcp")]
             remote: None,

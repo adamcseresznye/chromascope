@@ -3,6 +3,197 @@ use super::{panels, state::StateChange, MzViewerApp};
 use crate::plotting_parameters::{LineColor, PlotType};
 use eframe::egui::{self, Color32, Context};
 
+// Shared dimensions keep controls legible at native and scaled display sizes.
+const BODY_SIZE: f32 = 14.0;
+const SMALL_SIZE: f32 = 12.0;
+const CONTROL_HEIGHT: f32 = 28.0;
+const PANEL_WIDTH: f32 = 270.0;
+
+/// Workflow launchers stay in one place; analytical windows retain their state.
+pub fn navigation(app: &mut MzViewerApp, ui: &mut egui::Ui) {
+    let destinations = [
+        "Data explorer",
+        "Quant/QC",
+        "Identification",
+        "Untargeted",
+        "Statistics",
+        "Reports",
+        "AI review",
+    ];
+    let mut selected = if app.quant.active {
+        1
+    } else if app.spectral.open {
+        2
+    } else if app.untargeted.open {
+        3
+    } else if app.statistics.open {
+        4
+    } else if app.delivery.open {
+        5
+    } else if ui
+        .ctx()
+        .data(|d| d.get_temp::<bool>(egui::Id::new("activity_open")))
+        .unwrap_or(false)
+    {
+        6
+    } else {
+        0
+    };
+    ui.horizontal_wrapped(|ui| {
+        for (index, label) in destinations.iter().enumerate() {
+            if ui.selectable_label(selected == index, *label).clicked() {
+                selected = index;
+            }
+        }
+    });
+    ui.ctx().input(|input| {
+        for (index, key) in [
+            egui::Key::Num1,
+            egui::Key::Num2,
+            egui::Key::Num3,
+            egui::Key::Num4,
+            egui::Key::Num5,
+            egui::Key::Num6,
+            egui::Key::Num7,
+        ]
+        .iter()
+        .enumerate()
+        {
+            if input.events.iter().any(|event| matches!(event, egui::Event::Key { key: pressed_key, pressed: true, modifiers, .. } if pressed_key == key && (modifiers.alt || modifiers.ctrl))) {
+                selected = index;
+            }
+        }
+    });
+    app.quant.active = selected == 1;
+    app.spectral.open = selected == 2;
+    app.untargeted.open = selected == 3;
+    app.statistics.open = selected == 4;
+    app.delivery.open = selected == 5;
+    ui.ctx().data_mut(|d| {
+        d.insert_temp(egui::Id::new("activity_open"), selected == 6);
+        d.insert_temp(egui::Id::new("central_workspaces"), true);
+    });
+}
+
+/// Analytical content uses the full remaining viewport in the application.
+/// Standalone module render tests can still exercise a window without a shell.
+pub(super) fn analytical_panel(
+    ctx: &Context,
+    title: &str,
+    open: &mut bool,
+    contents: impl FnOnce(&mut egui::Ui),
+) {
+    if !*open {
+        return;
+    }
+    if ctx
+        .data(|d| d.get_temp::<bool>(egui::Id::new("central_workspaces")))
+        .unwrap_or(false)
+    {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.heading(title);
+            egui::ScrollArea::both().id_salt(title).show(ui, |ui| {
+                contents(ui);
+                scroll_new_focus(ui);
+            });
+        });
+    } else {
+        egui::Window::new(title)
+            .open(open)
+            .default_width(1050.0)
+            .vscroll(true)
+            .show(ctx, |ui| {
+                contents(ui);
+                scroll_new_focus(ui);
+            });
+    }
+}
+
+/// Bring a newly keyboard/accessibility-focused control into its workspace viewport.
+/// Run inside the scroll area so wheel scrolling is unaffected on later frames.
+pub(super) fn scroll_new_focus(ui: &egui::Ui) {
+    if let Some(id) = ui.ctx().memory(|memory| memory.focused()) {
+        if let Some(response) = ui.ctx().read_response(id) {
+            if response.gained_focus() && response.rect.intersects(ui.min_rect()) {
+                response.scroll_to_me(Some(egui::Align::Center));
+            }
+        }
+    }
+}
+
+pub(super) fn advanced_active(app: &MzViewerApp, ctx: &Context) -> bool {
+    app.spectral.open
+        || app.untargeted.open
+        || app.statistics.open
+        || app.delivery.open
+        || ctx
+            .data(|d| d.get_temp::<bool>(egui::Id::new("activity_open")))
+            .unwrap_or(false)
+}
+
+pub fn activity(app: &mut MzViewerApp, ctx: &Context) {
+    let id = egui::Id::new("activity_open");
+    let mut open = ctx.data(|d| d.get_temp::<bool>(id)).unwrap_or(false);
+    analytical_panel(ctx, "AI / MCP activity", &mut open, |ui| {
+        super::ai_review::panel(app, ui);
+        ui.separator();
+        #[cfg(feature = "mcp")]
+        if let Some(bridge) = &app.remote {
+            ui.heading("Connected MCP session");
+            ui.label(format!("{} completed requests", bridge.history.len()));
+            ui.label(format!(
+                "Analytical changes: {} · Exports: {}",
+                if bridge.policy.allow_changes {
+                    "Allowed"
+                } else {
+                    "Blocked"
+                },
+                if bridge.policy.allow_exports {
+                    "Allowed"
+                } else {
+                    "Blocked"
+                }
+            ));
+            if bridge.pending.is_some() {
+                ui.spinner();
+                ui.label("Reading or extracting dataset data…");
+            }
+            ui.label("Legacy requests execute under server launch permissions. Revision-bound suggestions use the review proposal controls above; approval and rejection retain separate attributed decisions.");
+            for entry in bridge.history.iter().rev().take(100) {
+                let success = entry["success"].as_bool().unwrap_or(false);
+                let request = &entry["request"];
+                let tool = request["operation"].as_str().unwrap_or("MCP request");
+                ui.collapsing(
+                    format!(
+                        "{} · {} · {}",
+                        entry["sequence"],
+                        tool,
+                        if success { "Completed" } else { "Failed" }
+                    ),
+                    |ui| {
+                        if let Some(error) = entry["error"].as_str() {
+                            ui.label(error);
+                        }
+                        ui.label("Request details (data, parameters and requested changes)");
+                        ui.monospace(serde_json::to_string_pretty(request).unwrap_or_default());
+                    },
+                );
+            }
+            ui.small("Showing the latest 100 requests. Peak corrections and engine revisions retain their own scientific review history.");
+        } else {
+            ui.label("No MCP client is connected.");
+            ui.label("Launch chromascope-mcp from your client to inspect session activity here.");
+        }
+        #[cfg(not(feature = "mcp"))]
+        {
+            let _ = app;
+            ui.label("This desktop build runs without MCP.");
+            ui.label("Use the MCP-enabled executable to connect an external agent. Numerical analysis remains available in this workbench.");
+        }
+    });
+    ctx.data_mut(|d| d.insert_temp(id, open));
+}
+
 pub fn configure(ctx: &Context, dark: bool) {
     let mut fonts = egui::FontDefinitions::default();
     for (name, bytes) in [
@@ -64,20 +255,35 @@ pub fn configure(ctx: &Context, dark: bool) {
     } else {
         Color32::from_rgb(220, 226, 233)
     };
+    visuals.override_text_color = Some(if dark {
+        Color32::from_rgb(231, 235, 241)
+    } else {
+        Color32::from_rgb(28, 37, 49)
+    });
+    visuals.weak_text_color = Some(if dark {
+        Color32::from_rgb(184, 196, 210)
+    } else {
+        Color32::from_rgb(75, 87, 104)
+    });
+    visuals.warn_fg_color = super::plot_controls::scientific_color(dark, 2);
+    visuals.error_fg_color = super::plot_controls::scientific_color(dark, 4);
+    visuals.hyperlink_color = super::plot_controls::scientific_color(dark, 1);
     ctx.set_visuals(visuals);
     ctx.style_mut(|style| {
         style.spacing.item_spacing = egui::vec2(8.0, 8.0);
         style.spacing.button_padding = egui::vec2(10.0, 6.0);
-        style.spacing.interact_size.y = 28.0;
+        style.spacing.interact_size.y = CONTROL_HEIGHT;
         style
             .text_styles
-            .insert(egui::TextStyle::Body, egui::FontId::proportional(14.0));
-        style
-            .text_styles
-            .insert(egui::TextStyle::Button, egui::FontId::proportional(14.0));
-        style
-            .text_styles
-            .insert(egui::TextStyle::Small, egui::FontId::proportional(12.0));
+            .insert(egui::TextStyle::Body, egui::FontId::proportional(BODY_SIZE));
+        style.text_styles.insert(
+            egui::TextStyle::Button,
+            egui::FontId::proportional(BODY_SIZE),
+        );
+        style.text_styles.insert(
+            egui::TextStyle::Small,
+            egui::FontId::proportional(SMALL_SIZE),
+        );
         style.text_styles.insert(
             egui::TextStyle::Heading,
             egui::FontId::new(18.0, heading_family),
@@ -130,8 +336,13 @@ pub fn status(app: &MzViewerApp, ctx: &Context) {
                     }
                 ));
             }
+            let low_contrast = app.files.values().any(|file| file.display.visible && contrast_ratio(file.display.color.to_egui(),ui.visuals().panel_fill)<3.0)
+                || app.workspace.traces.values().flatten().any(|trace|trace.visible && contrast_ratio(trace.color.to_egui(),ui.visuals().panel_fill)<3.0);
+            if low_contrast { ui.colored_label(ui.visuals().warn_fg_color,"Low-contrast trace color · adjust Appearance or switch theme"); }
             ui.separator();
-            ui.small("Double-click: spectrum    Right-drag: integrate    Middle-drag: zoom");
+            if advanced_active(app,ctx) || app.quant.active {
+                ui.small("Alt/Ctrl+1–7: workspace · Tab: next control · Enter/Space: activate · Plot controls: zoom, pan, reset");
+            } else { ui.small("Double-click: spectrum · Right-drag: integrate · Middle-drag: zoom · Numeric alternatives in Selection"); }
         });
     });
 }
@@ -141,7 +352,7 @@ pub fn inspector(app: &mut MzViewerApp, ctx: &Context) {
         return;
     }
     egui::SidePanel::right("workbench_inspector")
-        .default_width(250.0)
+        .default_width(PANEL_WIDTH)
         .width_range(220.0..=380.0)
         .resizable(true)
         .show(ctx, |ui| {
@@ -220,6 +431,10 @@ pub fn inspector(app: &mut MzViewerApp, ctx: &Context) {
                     }
                     ui.separator();
                     ui.label("Smoothing");
+                    let raw_id=egui::Id::new("show_unsmoothed_trace");
+                    let mut show_raw=ctx.data(|d|d.get_temp::<bool>(raw_id)).unwrap_or(true);
+                    ui.checkbox(&mut show_raw,"Overlay unsmoothed trace");
+                    ctx.data_mut(|d|d.insert_temp(raw_id,show_raw));
                     if ui
                         .add(
                             egui::Slider::new(&mut app.user_input.smoothing, 0..=10).text("radius"),
@@ -232,7 +447,7 @@ pub fn inspector(app: &mut MzViewerApp, ctx: &Context) {
                         ui.small("Off · original trace");
                     } else {
                         ui.small(format!(
-                            "{} scans per window; used for calculation and export",
+                            "Up to {} trace points per moving-average window; used for calculation and export",
                             2 * u16::from(app.user_input.smoothing) + 1
                         ));
                     }
@@ -245,6 +460,13 @@ pub fn inspector(app: &mut MzViewerApp, ctx: &Context) {
                             egui::Slider::new(&mut app.user_input.line_width, 0.5..=4.0)
                                 .text("Line width"),
                         );
+                        if contrast_ratio(app.user_input.line_color.to_egui(), ui.visuals().panel_fill) < 3.0 {
+                            ui.label("Trace color has low contrast in this theme.");
+                            if ui.button("Use visible trace color").clicked() {
+                                app.user_input.line_color = if ui.visuals().dark_mode { LineColor::Cyan } else { LineColor::Blue };
+                                if let Some(file) = app.active_file_id.and_then(|id| app.files.get_mut(&id)) { file.display.color = app.user_input.line_color; }
+                            }
+                        }
                         let previous = app.user_input.line_color;
                         ui.horizontal_wrapped(|ui| {
                             for (color, name) in [
@@ -295,6 +517,7 @@ pub fn inspector(app: &mut MzViewerApp, ctx: &Context) {
                     });
                 super::workspace::inspector(app, ui);
                 ui.heading("Selection");
+                numeric_spectrum(app,ui);
                 if let Some(rt) = app.user_input.retention_time_ms_spectrum {
                     ui.label(format!("Retention time: {rt:.3} min"));
                 } else {
@@ -309,14 +532,112 @@ pub fn inspector(app: &mut MzViewerApp, ctx: &Context) {
                     ));
                 }
                 if let Some(area) = app.integration.result {
-                    ui.label(format!("Area: {area:.4e} a.u.·min"));
+                    ui.label(format!("Area: {area:.4e} intensity·min"));
                 }
                 if app.integration.start_rt.is_some() && ui.button("Clear integration").clicked() {
                     app.integration = Default::default();
                 }
                 ui.small("Right-drag across a peak to integrate.");
+                numeric_integration(app, ui);
+                if let Some(points)=app.active_file_id.and_then(|id|app.files.get(&id)).and_then(|file|file.cache.plot_data.as_ref()) {
+                    super::plot_controls::export(ui,points,"Retention time (min)","Intensity (instrument units)");
+                }
+                ui.small("Integration uses the full-resolution processed trace and a straight line between endpoints as baseline. Set smoothing to 0 to inspect unsmoothed data.");
             });
         });
+}
+
+fn numeric_spectrum(app: &mut MzViewerApp, ui: &mut egui::Ui) {
+    let Some(file_id) = app.active_file_id else {
+        return;
+    };
+    let key = egui::Id::new(("numeric_spectrum", file_id));
+    let mut rt = ui
+        .ctx()
+        .data(|d| d.get_temp::<f64>(key))
+        .unwrap_or_else(|| app.user_input.retention_time_ms_spectrum.unwrap_or(0.) as f64);
+    ui.horizontal_wrapped(|ui| {
+        ui.label("Spectrum at RT (min)");
+        ui.add(egui::DragValue::new(&mut rt).speed(0.01));
+    });
+    if ui.button("Inspect nearest acquired scan").clicked() {
+        let domain = app
+            .files
+            .get(&file_id)
+            .and_then(|file| file.cache.chromatogram.as_ref())
+            .and_then(|raw| {
+                let low = raw.retention_time.iter().copied().reduce(f32::min)?;
+                let high = raw.retention_time.iter().copied().reduce(f32::max)?;
+                Some([low as f64, high as f64])
+            });
+        if rt.is_finite() && domain.is_some_and(|bounds| rt >= bounds[0] && rt <= bounds[1]) {
+            if let Some(file) = app.files.get_mut(&file_id) {
+                if let Some(index) =
+                    file.cache.chromatogram.as_ref().and_then(|raw| {
+                        crate::processing::find_closest_spectrum_index(raw, rt as f32)
+                    })
+                {
+                    match file.data.get_mass_spectrum_by_index(index) {
+                        Ok(spectrum) => {
+                            app.user_input.retention_time_ms_spectrum =
+                                Some(spectrum.retention_time);
+                            file.cache.mass_spectrum = Some(spectrum);
+                            app.workspace.view.spectrum = true;
+                        }
+                        Err(error) => app.error_message = Some(error.to_string()),
+                    }
+                }
+            }
+        } else {
+            app.error_message =
+                Some("Retention time must lie within the acquired chromatogram range".into());
+        }
+    }
+    ui.ctx().data_mut(|d| d.insert_temp(key, rt));
+}
+fn numeric_integration(app: &mut MzViewerApp, ui: &mut egui::Ui) {
+    let Some(file_id) = app.active_file_id else {
+        return;
+    };
+    let Some(points) = app
+        .files
+        .get(&file_id)
+        .and_then(|f| f.cache.plot_data.as_ref())
+    else {
+        return;
+    };
+    let (Some(first), Some(last)) = (points.first(), points.last()) else {
+        return;
+    };
+    let domain = [first[0], last[0]];
+    // Include extraction parameters so drafts cannot leak across different traces.
+    let id = egui::Id::new((
+        "numeric_integration",
+        file_id,
+        format!("{:?}", app.files[&file_id].cache.last_processing_params),
+    ));
+    let mut bounds = ui
+        .ctx()
+        .data(|d| d.get_temp::<[f64; 2]>(id))
+        .unwrap_or(domain);
+    ui.collapsing("Enter integration boundaries", |ui| {
+        ui.horizontal(|ui| {
+            ui.label("Start (min)");
+            ui.add(egui::DragValue::new(&mut bounds[0]).speed(0.001).max_decimals(5));
+        });
+        ui.horizontal(|ui| {
+            ui.label("End (min)");
+            ui.add(egui::DragValue::new(&mut bounds[1]).speed(0.001).max_decimals(5));
+        });
+        let valid = bounds.iter().all(|x| x.is_finite()) && bounds[0] >= domain[0] && bounds[1] <= domain[1] && bounds[0] < bounds[1];
+        if !valid { ui.label(format!("Use increasing boundaries within {:.5}–{:.5} min.", domain[0], domain[1])); }
+        if ui.add_enabled(valid && !app.async_state.is_processing, egui::Button::new("Integrate and record area")).clicked() {
+            app.integration = super::state::IntegrationState { start_rt: Some(bounds[0]), end_rt: Some(bounds[1]), ..Default::default() };
+            super::interactivity::compute_integration(app);
+        }
+        ui.small("Creates an exploratory measurement. Batch results are reviewed in Quantification and QC.");
+    });
+    ui.ctx().data_mut(|d| d.insert_temp(id, bounds));
 }
 
 fn xic_controls(app: &mut MzViewerApp, ui: &mut egui::Ui) {
@@ -360,6 +681,23 @@ fn xic_controls(app: &mut MzViewerApp, ui: &mut egui::Ui) {
             }
         }
     }
+}
+
+pub(super) fn contrast_ratio(a: egui::Color32, b: egui::Color32) -> f64 {
+    fn luminance(c: egui::Color32) -> f64 {
+        let linear = |v: u8| {
+            let v = v as f64 / 255.;
+            if v <= 0.04045 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * linear(c.r()) + 0.7152 * linear(c.g()) + 0.0722 * linear(c.b())
+    }
+    let a = luminance(a);
+    let b = luminance(b);
+    (a.max(b) + 0.05) / (a.min(b) + 0.05)
 }
 
 #[cfg(test)]
@@ -608,7 +946,7 @@ mod tests {
                 if frame == 0 {
                     let target = match name {
                         "file-menu" => Some("File"),
-                        "grid-menu" => Some("Grid layout…"),
+                        "grid-menu" => Some("Plot options"),
                         _ => None,
                     };
                     if let Some(target) = target {
@@ -722,5 +1060,101 @@ mod tests {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod keyboard_contract_tests {
+    use super::*;
+    #[test]
+    fn navigation_uses_key_event_modifiers_after_modifier_release() {
+        let mut app = MzViewerApp::default();
+        let ctx = egui::Context::default();
+        let _ = ctx.run(
+            egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key: egui::Key::Num4,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers {
+                        alt: true,
+                        ..Default::default()
+                    },
+                }],
+                modifiers: Default::default(),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| navigation(&mut app, ui));
+            },
+        );
+        assert!(app.untargeted.open);
+        assert!(!app.quant.active && !app.spectral.open && !app.statistics.open);
+    }
+    #[test]
+    fn theme_text_and_secondary_text_meet_readability_contrast() {
+        for dark in [false, true] {
+            let ctx = egui::Context::default();
+            configure(&ctx, dark);
+            let visuals = ctx.style().visuals.clone();
+            assert!(contrast_ratio(visuals.text_color(), visuals.panel_fill) >= 4.5);
+            assert!(contrast_ratio(visuals.weak_text_color(), visuals.panel_fill) >= 4.5);
+            for color in [
+                visuals.warn_fg_color,
+                visuals.error_fg_color,
+                visuals.hyperlink_color,
+            ] {
+                assert!(contrast_ratio(color, visuals.panel_fill) >= 4.5);
+            }
+            for role in 0..5 {
+                assert!(
+                    contrast_ratio(
+                        super::super::plot_controls::scientific_color(dark, role),
+                        visuals.panel_fill
+                    ) >= 4.5
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod focus_scroll_tests {
+    use super::*;
+    #[test]
+    fn lower_workspace_controls_scroll_into_view_when_focused() {
+        let ctx = egui::Context::default();
+        ctx.style_mut(|style| style.animation_time = 0.0);
+        ctx.data_mut(|data| data.insert_temp(egui::Id::new("central_workspaces"), true));
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(920.0, 600.0));
+        let mut last = egui::Rect::NOTHING;
+        for frame in 0..4 {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    time: Some(frame as f64 * 0.25),
+                    ..Default::default()
+                },
+                |ctx| {
+                    analytical_panel(ctx, "Focus regression", &mut true, |ui| {
+                        for row in 0..40 {
+                            let response = ui.button(format!("Review evidence {row}"));
+                            if row == 39 {
+                                last = response.rect;
+                                if frame == 0 {
+                                    response.request_focus();
+                                }
+                            }
+                        }
+                    });
+                },
+            );
+        }
+        assert!(
+            last.bottom() <= screen.bottom(),
+            "the focused review control must be visible without a mouse wheel: {last:?}"
+        );
+        assert!(last.top() >= screen.top());
     }
 }

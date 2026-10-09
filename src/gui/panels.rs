@@ -30,9 +30,6 @@ use mzdata::spectrum::ScanPolarity;
 pub fn update_data_selection_panel(app: &mut MzViewerApp, ctx: &Context) {
     egui::TopBottomPanel::top("data_selection_panel").show(ctx, |ui| {
         ui.horizontal_wrapped(|ui| {
-            ui.selectable_value(&mut app.quant.active, false, "Viewer");
-            ui.selectable_value(&mut app.quant.active, true, "Batch Quantification");
-            ui.separator();
             ui.menu_button("File", |ui| {
                 if ui.button("Open data…").on_hover_text("Open one or more data files").clicked() {
                     debug!("File open button clicked.");
@@ -126,39 +123,38 @@ pub fn update_data_selection_panel(app: &mut MzViewerApp, ctx: &Context) {
                 }
             });
 
-            if !app.quant.active {
-                ui.menu_button("Display", |ui| {
-                    debug!("Display menu button clicked.");
+            super::project_workbench::menu(app, ui);
+            ui.menu_button("View", |ui| {
+                if !app.quant.active && !super::workbench::advanced_active(app, ctx) {
                     add_display_options(app, ui);
-                    info!("Display options added.");
-                });
-            }
-
-            {
-                let is_dark = ui.visuals().dark_mode;
-                if ui
-                    .button(if is_dark { "Light theme" } else { "Dark theme" })
-                    .clicked()
-                {
-                    debug!("Visuals toggle button clicked.");
-                    super::workbench::configure(ctx, !is_dark);
-                    info!("Visuals updated.");
+                    ui.separator();
+                    let changed = ui.checkbox(&mut app.workspace.view.files, "Data files").changed()
+                        | ui.checkbox(&mut app.workspace.view.inspector, "Trace settings").changed()
+                        | ui.checkbox(&mut app.workspace.view.spectrum, "Mass spectrum").changed();
+                    if changed { app.workspace.view.focus_restore = None; }
+                    ui.separator();
                 }
-            }
-        });
-        if !app.quant.active {
+                let dark = ui.visuals().dark_mode;
+                if ui.button(if dark { "Light theme" } else { "Dark theme" }).clicked() {
+                    super::workbench::configure(ctx, !dark);
+                    ui.close();
+                }
+            });
             ui.separator();
-            ui.horizontal_wrapped(|ui| {
-                let loaded=app.active_file_id.and_then(|id|app.files.get(&id)).is_some_and(|f|!f.is_loading);
-                ui.add_enabled_ui(loaded,|ui|super::workbench::trace_buttons(app,ui));
+            super::workbench::navigation(app, ui);
+        });
+        if !app.quant.active && !super::workbench::advanced_active(app, ctx) {
+            ui.horizontal(|ui| {
+                let loaded = app.active_file_id.and_then(|id| app.files.get(&id)).is_some_and(|f| !f.is_loading);
+                ui.add_enabled_ui(loaded, |ui| super::workbench::trace_buttons(app, ui));
                 ui.separator();
-                ui.weak("Panels:");
-                let panels_changed = ui.toggle_value(&mut app.workspace.view.files, "Data files").on_hover_text("Show or hide the left panel for selecting samples, managing visible files, and cancelling imports").clicked()
-                    | ui.toggle_value(&mut app.workspace.view.inspector, "Trace settings").on_hover_text("Show or hide the right panel for extraction filters, smoothing, trace appearance, and measurements").clicked()
-                    | ui.toggle_value(&mut app.workspace.view.spectrum, "Mass spectrum").on_hover_text("Show or hide the lower spectrum plot and scan navigation; hiding preserves the selected scan").clicked();
-                if panels_changed { app.workspace.view.focus_restore = None; }
-                ui.separator();
-                if ui.selectable_label(app.workspace.view.focus_restore.is_some(), "Focus mode").on_hover_text("Hide all three panels to focus on chromatograms. Turn off to restore your previous panel setup. Opening a panel leaves focus mode.").clicked() {
+                ui.add_enabled_ui(!app.workspace.view.compare_samples, |ui| {
+                    ui.selectable_value(&mut app.workspace.overlay, false, "Grid");
+                    ui.selectable_value(&mut app.workspace.overlay, true, "Overlay");
+                });
+                ui.menu_button("Plot options", |ui| plot_options(app, ui));
+                if ui.selectable_label(app.workspace.view.focus_restore.is_some(), "Focus")
+                    .on_hover_text("Focus on chromatograms; toggle to restore data files, trace settings and spectrum panels.").clicked() {
                     app.workspace.view.toggle_focus();
                 }
                 if let Some(file) = app.active_file_id.and_then(|id| app.files.get(&id)) {
@@ -668,61 +664,6 @@ pub fn update_central_panel(app: &mut MzViewerApp, ctx: &Context) {
                 });
                 return;
             }
-            ui.horizontal_wrapped(|ui| {
-                ui.strong("Chromatograms");
-                if let Some(specs) = &app.presets.specs {
-                    ui.small(format!("Shared preset · {} analytes", specs.len()));
-                }
-
-                ui.add_enabled_ui(!app.workspace.view.compare_samples, |ui| {
-                ui.selectable_value(&mut app.workspace.overlay, false, "Grid");
-                ui.selectable_value(&mut app.workspace.overlay, true, "Overlay");
-                if !app.workspace.overlay {
-                    ui.menu_button("Grid layout…", |ui| {
-                        egui::Grid::new("grid_layout_controls").show(ui, |ui| {
-                            ui.label("Rows");
-                            ui.add(egui::DragValue::new(&mut app.workspace.view.rows).range(1..=8));
-                            if ui.small_button("+ Row").clicked() {
-                                app.workspace.view.rows = (app.workspace.view.rows + 1).min(8);
-                            }
-                            ui.end_row();
-                            ui.label("Columns");
-                            ui.add(
-                                egui::DragValue::new(&mut app.workspace.view.columns).range(1..=8),
-                            );
-                            if ui.small_button("+ Column").clicked() {
-                                app.workspace.view.columns =
-                                    (app.workspace.view.columns + 1).min(8);
-                            }
-                            ui.end_row();
-                        });
-                    });
-                }
-                });
-                ui.checkbox(&mut app.workspace.view.compare_samples, "Compare samples")
-                    .on_hover_text("Samples become columns and analytes become rows. Turn off to restore your individual grid or overlay layout.");
-                if app.workspace.view.compare_samples { ui.weak("Samples × analytes"); }
-                use super::workspace::IntensityScale;
-                let previous = (app.workspace.view.intensity_scale, app.workspace.view.intensity_maximum);
-                egui::ComboBox::from_id_salt("intensity_scale")
-                    .selected_text(match app.workspace.view.intensity_scale {
-                        IntensityScale::Individual => "Scale: Individual",
-                        IntensityScale::SharedHighest => "Scale: Shared highest peak",
-                        IntensityScale::SharedCustom => "Scale: Shared custom maximum",
-                    })
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut app.workspace.view.intensity_scale, IntensityScale::Individual, "Individual");
-                        ui.selectable_value(&mut app.workspace.view.intensity_scale, IntensityScale::SharedHighest, "Shared highest peak");
-                        ui.selectable_value(&mut app.workspace.view.intensity_scale, IntensityScale::SharedCustom, "Shared custom maximum");
-                    }).response.on_hover_text("Shared scales use the same intensity axis for every visible trace; data is not normalized. The automatic maximum includes all visible traces across grid pages.");
-                if app.workspace.view.intensity_scale == IntensityScale::SharedCustom {
-                    ui.label("Maximum (a.u.)");
-                    ui.add(egui::DragValue::new(&mut app.workspace.view.intensity_maximum).range(1.0..=f64::MAX).speed(1000.0));
-                }
-                if previous != (app.workspace.view.intensity_scale, app.workspace.view.intensity_maximum) {
-                    app.workspace.reset_plots = true;
-                }
-            });
             let divider_id = egui::Id::new("workbench_plot_split");
             let mut fraction = ctx.data_mut(|data| *data.get_temp_mut_or(divider_id, 0.58_f32));
             let available = ui.available_size();
@@ -987,4 +928,121 @@ pub fn add_plot_type_options(app: &mut MzViewerApp, ui: &mut Ui) {
             app.options_window_open = true;
         }
     });
+}
+
+fn plot_options(app: &mut MzViewerApp, ui: &mut Ui) {
+    if let Some(specs) = &app.presets.specs {
+        ui.small(format!("Shared preset: {} analytes", specs.len()));
+    }
+    if !app.workspace.overlay {
+        ui.menu_button("Grid layout…", |ui| {
+            egui::Grid::new("grid_layout_controls").show(ui, |ui| {
+                ui.label("Rows");
+                ui.add(egui::DragValue::new(&mut app.workspace.view.rows).range(1..=8));
+                if ui.small_button("+ Row").clicked() {
+                    app.workspace.view.rows = (app.workspace.view.rows + 1).min(8);
+                }
+                ui.end_row();
+                ui.label("Columns");
+                ui.add(egui::DragValue::new(&mut app.workspace.view.columns).range(1..=8));
+                if ui.small_button("+ Column").clicked() {
+                    app.workspace.view.columns = (app.workspace.view.columns + 1).min(8);
+                }
+                ui.end_row();
+            });
+        });
+    }
+    ui.checkbox(&mut app.workspace.view.compare_samples, "Compare samples")
+                    .on_hover_text("Samples become columns and analytes become rows. Turn off to restore your individual grid or overlay layout.");
+    if app.workspace.view.compare_samples {
+        ui.weak("Samples × analytes");
+    }
+    use super::workspace::IntensityScale;
+    let previous = (
+        app.workspace.view.intensity_scale,
+        app.workspace.view.intensity_maximum,
+    );
+    egui::ComboBox::from_id_salt("intensity_scale")
+                    .selected_text(match app.workspace.view.intensity_scale {
+                        IntensityScale::Individual => "Scale: Individual",
+                        IntensityScale::SharedHighest => "Scale: Shared highest peak",
+                        IntensityScale::SharedCustom => "Scale: Shared custom maximum",
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut app.workspace.view.intensity_scale, IntensityScale::Individual, "Individual");
+                        ui.selectable_value(&mut app.workspace.view.intensity_scale, IntensityScale::SharedHighest, "Shared highest peak");
+                        ui.selectable_value(&mut app.workspace.view.intensity_scale, IntensityScale::SharedCustom, "Shared custom maximum");
+                    }).response.on_hover_text("Shared scales use the same intensity axis for every visible trace; data is not normalized. The automatic maximum includes all visible traces across grid pages.");
+    if app.workspace.view.intensity_scale == IntensityScale::SharedCustom {
+        ui.label("Maximum (a.u.)");
+        ui.add(
+            egui::DragValue::new(&mut app.workspace.view.intensity_maximum)
+                .range(1.0..=f64::MAX)
+                .speed(1000.0),
+        );
+    }
+    if previous
+        != (
+            app.workspace.view.intensity_scale,
+            app.workspace.view.intensity_maximum,
+        )
+    {
+        app.workspace.reset_plots = true;
+    }
+}
+
+#[cfg(test)]
+mod compact_header_tests {
+    use super::*;
+    #[test]
+    fn header_fits_two_rows_at_minimum_width_without_repeated_brand() {
+        for dark in [false, true] {
+            for width in [920.0, 1280.0] {
+                let ctx = egui::Context::default();
+                super::super::workbench::configure(&ctx, dark);
+                let mut app = MzViewerApp::default();
+                for frame in 0..3 {
+                    let output = ctx.run(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(width, 600.0),
+                            )),
+                            time: Some(frame as f64 * 0.2),
+                            ..Default::default()
+                        },
+                        |ctx| {
+                            update_data_selection_panel(&mut app, ctx);
+                            assert!(
+                                ctx.available_rect().top() <= 76.0,
+                                "the header must leave plot space at minimum width: {}",
+                                ctx.available_rect().top()
+                            );
+                        },
+                    );
+                    assert!(
+                        super::super::test_render::text_center(&output.shapes, "Chromascope")
+                            .is_none()
+                    );
+                    for label in [
+                        "File",
+                        "Project",
+                        "View",
+                        "Data explorer",
+                        "Quant/QC",
+                        "Identification",
+                        "Untargeted",
+                        "Statistics",
+                        "Reports",
+                        "AI review",
+                    ] {
+                        assert!(
+                            super::super::test_render::text_center(&output.shapes, label).is_some(),
+                            "missing compact header control {label}"
+                        );
+                    }
+                }
+            }
+        }
+    }
 }

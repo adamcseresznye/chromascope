@@ -1,0 +1,16 @@
+{
+  "precursor_tolerance": {
+    "value": 10.0,
+    "unit": "ppm"
+  },
+  "fragment_tolerance": {
+    "value": 0.02,
+    "unit": "da"
+  },
+  "minimum_matches": 3,
+  "minimum_cosine": 0.7,
+  "maximum_candidates": 20,
+  "allow_missing_metadata": false,
+  "require_same_instrument": true,
+  "energy_tolerance": 5.0
+}
