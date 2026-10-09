@@ -26,6 +26,20 @@ impl State {
         self.selected = self.reports.len() - 1;
         Ok(())
     }
+    pub(super) fn report_count(&self) -> usize {
+        self.reports.len()
+    }
+    /// Latest batch verdict, using only the configured rules in the retained report.
+    pub(super) fn latest_status(&self) -> Option<qc::Status> {
+        self.reports.last().map(|r| r.status.clone())
+    }
+    /// Reports whose review queue still has unacknowledged rules.
+    pub(super) fn pending_review_count(&self) -> usize {
+        self.reports
+            .iter()
+            .filter(|r| r.reviews.len() < r.review_queue.len())
+            .count()
+    }
 }
 fn execute(operation: crate::domain::Operation) -> Result<qc::Report, String> {
     let request = crate::domain::Request {

@@ -43,3 +43,5 @@ docs/performance/*
 !docs/performance/2026-10-08/
 
 !docs/UX_UI_REMEDIATION.md
+!docs/USABILITY_VISUAL_REVIEW.md
+!docs/FINAL_ACCEPTANCE_TESTS.md

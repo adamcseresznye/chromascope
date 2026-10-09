@@ -9,7 +9,33 @@ pub(super) fn typed<T: DeserializeOwned + Serialize>(
     title: &str,
     text: &mut String,
 ) {
-    egui::CollapsingHeader::new(title).id_salt(title).default_open(false).show(ui, |ui| {
+    body::<T>(ui, title, None, text, false);
+}
+
+/// Guided routine form: open by default with a one-line scientific
+/// orientation. Values map faithfully onto the same typed operation
+/// configuration as the advanced editor; invalid edits are rejected with
+/// the engine's explanation and the draft is left unchanged.
+pub(super) fn guided<T: DeserializeOwned + Serialize>(
+    ui: &mut egui::Ui,
+    title: &str,
+    help: &str,
+    text: &mut String,
+) {
+    body::<T>(ui, title, Some(help), text, true);
+}
+
+fn body<T: DeserializeOwned + Serialize>(
+    ui: &mut egui::Ui,
+    title: &str,
+    help: Option<&str>,
+    text: &mut String,
+    default_open: bool,
+) {
+    egui::CollapsingHeader::new(title).id_salt(title).default_open(default_open).show(ui, |ui| {
+        if let Some(help) = help {
+            ui.small(help);
+        }
         let Ok(draft)=serde_json::from_str::<T>(text) else { ui.label("Load or prepare a valid draft to edit this form. The advanced editor retains invalid input for correction.");return; };
         let Ok(mut value)=serde_json::to_value(draft) else {return;};
         let roles = if std::any::type_name::<T>().contains("::untargeted::") { &["sample", "blank", "qc"][..] } else if std::any::type_name::<T>().contains("::targeted::") { &["standard", "blank", "qc", "unknown"][..] } else { &[] };

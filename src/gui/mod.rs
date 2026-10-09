@@ -128,6 +128,7 @@ mod table;
 mod test_render;
 mod untargeted;
 mod workbench;
+mod workflow;
 mod workspace;
 
 use state::{AsyncState, FileValidity, IntegrationState, StateChange};

@@ -159,19 +159,21 @@ pub(super) fn show(app: &mut super::MzViewerApp, ctx: &egui::Context) {
                     .unwrap_or_else(|| "Input loaded; edit metadata and explicit settings".into());
             }
         }
+        step_navigator(ctx, ui, s);
         super::forms::typed::<Table>(
             ui,
-            "Sample design, metadata and original quantities",
+            "Advanced sample design and quantity editor",
             &mut s.draft,
         );
         super::forms::typed::<Settings>(
             ui,
-            "Filters, exclusions and comparison groups",
+            "Advanced filters, exclusions and comparison groups",
             &mut s.settings,
         );
         ui.collapsing(
-            "Advanced original quantitative table JSON (sample-major)",
+            "Advanced quantitative table JSON — expert exact-table audit",
             |ui| {
+                ui.small("Routine loading happens in step 1 above. This text is retained so the exact frozen table can be audited; null means unavailable, never zero.");
                 ui.add(
                     egui::TextEdit::multiline(&mut s.draft)
                         .code_editor()
@@ -181,8 +183,9 @@ pub(super) fn show(app: &mut super::MzViewerApp, ctx: &egui::Context) {
             },
         );
         ui.collapsing(
-            "Analysis settings, filters, exclusions and group definitions",
+            "Advanced settings JSON — expert exact-parameter audit",
             |ui| {
+                ui.small("Routine settings live in steps 2–4 above. This text is retained for exact-parameter review and reproducibility.");
                 ui.add(
                     egui::TextEdit::multiline(&mut s.settings)
                         .code_editor()
@@ -191,101 +194,781 @@ pub(super) fn show(app: &mut super::MzViewerApp, ctx: &egui::Context) {
                 );
             },
         );
-        settings_controls(ui, &mut s.settings);
-        if ui
-            .add_enabled(
-                s.pending.is_none(),
-                egui::Button::new("Analyze and retain new revision"),
-            )
-            .clicked()
-        {
-            let input = serde_json::from_str::<Table>(&s.draft)
-                .and_then(|t| serde_json::from_str::<Settings>(&s.settings).map(|cfg| (t, cfg)));
-            match input {
-                Ok((t, cfg)) => {
-                    let (tx, rx) = std::sync::mpsc::channel();
-                    s.pending = Some((s.selected, rx));
-                    s.control = JobControl::default();
-                    let control = s.control.clone();
-                    std::thread::spawn(move || {
-                        let request = Request {
-                            version: 1,
-                            operation_id: Default::default(),
-                            actor: "desktop".into(),
-                            operation: Operation::AnalyzeStatistics {
-                                table: Box::new(t),
-                                settings: cfg,
-                            },
-                        };
-                        let _ = tx.send(crate::engine::execute(
-                            std::path::Path::new("-"),
-                            request,
-                            &control,
-                        ));
-                    });
-                }
-                Err(e) => s.message = e.to_string(),
+        if onboarding_step(ctx) == 4 {
+            ui.strong("Step 5 — Run the analysis and inspect the results");
+            let readiness = precheck(s);
+            for issue in &readiness {
+                ui.colored_label(ui.visuals().error_fg_color, format!("Blocked — {issue}"));
             }
-        }
-        if s.pending.is_some() && ui.button("Cancel statistics").clicked() {
-            s.control.cancel();
-        }
-        ui.label(&s.message);
-        egui::ComboBox::from_label("Retained analysis revision")
-            .selected_text(format!("{}", s.selected + 1))
-            .show_ui(ui, |ui| {
-                for (i, r) in s.history.iter().enumerate() {
-                    ui.selectable_value(&mut s.selected, i, r.result_id.0.to_string());
+            if readiness.is_empty() {
+                if let (Ok(table), Ok(settings)) = (parsed_table(s), parsed_settings(s)) {
+                    let (reference, comparison, _) = group_counts(&table, &settings);
+                    ui.small(format!(
+                    "Ready to run: {} samples · {} features · groups {reference} vs {comparison} · missing “{}” · {} transform · {} correction",
+                    table.samples.len(),
+                    table.features.len(),
+                    settings.missing,
+                    settings.transform,
+                    settings.fdr
+                ));
                 }
-            });
-        if let Some(response) = s.history.get(s.selected) {
-            if let Output::Statistics { report } = &response.output {
-                ui.horizontal(|ui| {
-                    if ui
-                        .button("Restore this revision's settings and original table")
-                        .clicked()
-                    {
-                        s.draft = serde_json::to_string_pretty(&report.table).unwrap();
-                        s.settings = serde_json::to_string_pretty(&report.settings).unwrap();
+            }
+            if ui
+                .add_enabled(
+                    s.pending.is_none() && readiness.is_empty(),
+                    egui::Button::new(
+                        egui::RichText::new("Analyze and retain new revision").strong(),
+                    )
+                    .fill(ui.visuals().selection.bg_fill),
+                )
+                .on_hover_text(if readiness.is_empty() {
+                    "Run the combined PCA, clustering, and group-comparison analysis"
+                } else {
+                    "Resolve the blocked item(s) above — see steps 1–4"
+                })
+                .clicked()
+            {
+                let input = serde_json::from_str::<Table>(&s.draft).and_then(|t| {
+                    serde_json::from_str::<Settings>(&s.settings).map(|cfg| (t, cfg))
+                });
+                match input {
+                    Ok((t, cfg)) => {
+                        let (tx, rx) = std::sync::mpsc::channel();
+                        s.pending = Some((s.selected, rx));
+                        s.control = JobControl::default();
+                        let control = s.control.clone();
+                        std::thread::spawn(move || {
+                            let request = Request {
+                                version: 1,
+                                operation_id: Default::default(),
+                                actor: "desktop".into(),
+                                operation: Operation::AnalyzeStatistics {
+                                    table: Box::new(t),
+                                    settings: cfg,
+                                },
+                            };
+                            let _ = tx.send(crate::engine::execute(
+                                std::path::Path::new("-"),
+                                request,
+                                &control,
+                            ));
+                        });
                     }
-                    if ui.button("Save full reproducible JSON").clicked() {
-                        s.message = save(&serde_json::to_vec_pretty(response).unwrap())
-                            .err()
-                            .unwrap_or_else(|| "Saved".into());
-                    }
-                    if ui.button("Export statistical CSV").clicked() {
-                        s.message = crate::statistics::export_csv(report)
-                            .map_err(|e| e.to_string())
-                            .and_then(|csv| save(csv.as_bytes()))
-                            .err()
-                            .unwrap_or_else(|| "Saved".into());
+                    Err(e) => s.message = e.to_string(),
+                }
+            }
+            if s.pending.is_some() && ui.button("Cancel statistics").clicked() {
+                s.control.cancel();
+            }
+            ui.label(&s.message);
+            egui::ComboBox::from_label("Retained analysis revision")
+                .selected_text(format!("{}", s.selected + 1))
+                .show_ui(ui, |ui| {
+                    for (i, r) in s.history.iter().enumerate() {
+                        ui.selectable_value(&mut s.selected, i, r.result_id.0.to_string());
                     }
                 });
-                plots(ui, report, &mut s.sample, &mut s.feature);
+            if let Some(response) = s.history.get(s.selected) {
+                if let Output::Statistics { report } = &response.output {
+                    ui.horizontal(|ui| {
+                        if ui
+                            .button("Restore this revision's settings and original table")
+                            .clicked()
+                        {
+                            s.draft = serde_json::to_string_pretty(&report.table).unwrap();
+                            s.settings = serde_json::to_string_pretty(&report.settings).unwrap();
+                        }
+                        if ui.button("Save full reproducible JSON").clicked() {
+                            s.message = save(&serde_json::to_vec_pretty(response).unwrap())
+                                .err()
+                                .unwrap_or_else(|| "Saved".into());
+                        }
+                        if ui.button("Export statistical CSV").clicked() {
+                            s.message = crate::statistics::export_csv(report)
+                                .map_err(|e| e.to_string())
+                                .and_then(|csv| save(csv.as_bytes()))
+                                .err()
+                                .unwrap_or_else(|| "Saved".into());
+                        }
+                    });
+                    plots(ui, report, &mut s.sample, &mut s.feature);
+                }
             }
         }
     });
     s.open = open;
 }
-fn settings_controls(ui: &mut egui::Ui, text: &mut String) {
-    ui.collapsing("Preprocessing and comparison controls",|ui|{
-        let Ok(mut cfg)=serde_json::from_str::<Settings>(text)else{ui.label("Correct the settings JSON to use these controls");return;};
-        let original=serde_json::to_string(&cfg).unwrap();
-        for (label,value,choices) in [
-            ("Missing values",&mut cfg.missing,&["reject","median","half_minimum","complete_features"][..]),
-            ("Normalization",&mut cfg.normalization,&["none","total","median","internal_standard"][..]),
-            ("Transformation",&mut cfg.transform,&["none","log2","log10","sqrt"][..]),
-            ("Scaling",&mut cfg.scaling,&["none","center","autoscale","pareto"][..]),
-            ("Euclidean linkage",&mut cfg.linkage,&["average","complete","single","ward"][..]),
-            ("FDR adjustment",&mut cfg.fdr,&["bh","by"][..]),
-        ]{egui::ComboBox::from_label(label).selected_text(value.as_str()).show_ui(ui,|ui|{for &choice in choices{ui.selectable_value(value,choice.into(),choice);}});}
-        ui.horizontal(|ui|{ui.label("Maximum missing fraction");ui.add(egui::DragValue::new(&mut cfg.max_missing_fraction).range(0. ..=1.).speed(0.01));ui.label("Explicit pseudocount (original feature units)");ui.add(egui::DragValue::new(&mut cfg.pseudocount).range(0. ..=f64::MAX).speed(0.01));});
-        if cfg.normalization=="internal_standard"{ui.horizontal(|ui|{ui.label("Internal-standard feature ID");ui.text_edit_singleline(cfg.internal_standard.get_or_insert_with(String::new));});}
-        let mut compare=cfg.groups.is_some();ui.checkbox(&mut compare,"Compare two independent groups");
-        if compare{let groups=cfg.groups.get_or_insert_with(||crate::statistics::Groups{metadata_key:"group".into(),reference:String::new(),comparison:String::new()});ui.horizontal(|ui|{ui.label("Metadata key");ui.text_edit_singleline(&mut groups.metadata_key);ui.label("Reference");ui.text_edit_singleline(&mut groups.reference);ui.label("Comparison");ui.text_edit_singleline(&mut groups.comparison);});ui.horizontal(|ui|{ui.label("Confidence level");ui.add(egui::DragValue::new(&mut cfg.confidence).range(0.001..=0.999).speed(0.001));});}else{cfg.groups=None;}
-        ui.label("Preprocessing order: exclusions → missingness filter → imputation → normalization → transformation → scaling. Welch tests use the pre-scaling values. BH assumes independence or suitable positive dependence; BY is more conservative.");
-        if serde_json::to_string(&cfg).unwrap()!=original{*text=serde_json::to_string_pretty(&cfg).unwrap();}
+fn onboarding_step(ctx: &egui::Context) -> usize {
+    ctx.data(|d| d.get_temp::<usize>(egui::Id::new("statistics_onboarding_step")))
+        .unwrap_or(0)
+}
+
+/// Five-step guided onboarding: load → groups → analysis → review → run.
+/// Power controls stay one level down in Advanced; JSON editors are the
+/// intentional expert capability for exact-table and exact-parameter audit.
+fn step_navigator(ctx: &egui::Context, ui: &mut egui::Ui, s: &mut State) {
+    let mut step = onboarding_step(ctx);
+    ui.horizontal_wrapped(|ui| {
+        for (index, label) in [
+            "1 · Load table",
+            "2 · Sample groups",
+            "3 · Analysis",
+            "4 · Review",
+            "5 · Run and inspect",
+        ]
+        .iter()
+        .enumerate()
+        {
+            ui.selectable_value(&mut step, index, *label);
+        }
     });
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new("statistics_onboarding_step"), step));
+    match step {
+        0 => step_load(ui, s),
+        1 => step_groups(ui, s),
+        2 => step_analysis(ui, s),
+        3 => step_review(ui, s),
+        _ => {
+            ui.small("Run the analysis below and inspect the retained revision. Restore any earlier revision to undo preprocessing.");
+        }
+    }
+    ui.separator();
+    if step < 4 {
+        ui.horizontal_wrapped(|ui| {
+            if step > 0 && ui.small_button("← Back").clicked() {
+                ctx.data_mut(|d| {
+                    d.insert_temp(egui::Id::new("statistics_onboarding_step"), step - 1)
+                });
+            }
+            if ui
+                .add(
+                    egui::Button::new(egui::RichText::new("Continue →").strong())
+                        .fill(ui.visuals().selection.bg_fill),
+                )
+                .clicked()
+            {
+                ctx.data_mut(|d| {
+                    d.insert_temp(egui::Id::new("statistics_onboarding_step"), step + 1)
+                });
+            }
+        });
+        ui.separator();
+    }
+}
+
+fn parsed_table(s: &State) -> Result<Table, String> {
+    serde_json::from_str(&s.draft).map_err(|e| e.to_string())
+}
+
+fn parsed_settings(s: &State) -> Result<Settings, String> {
+    serde_json::from_str(&s.settings).map_err(|e| e.to_string())
+}
+
+/// Step 1: what is loaded, in one glance.
+fn step_load(ui: &mut egui::Ui, s: &mut State) {
+    ui.strong("Step 1 — Load or select the feature table");
+    ui.small("Use the buttons above (feature matrix, targeted concentrations, or a saved table). Original quantities are retained; null means unavailable, never zero.");
+    match parsed_table(s) {
+        Ok(table) => {
+            let missing = table
+                .values
+                .iter()
+                .flatten()
+                .filter(|v| v.is_none())
+                .count();
+            let total = table.values.iter().map(Vec::len).sum::<usize>();
+            ui.label(format!(
+                "{} samples · {} features · {} of {} values missing ({:.1}%)",
+                table.samples.len(),
+                table.features.len(),
+                missing,
+                total,
+                if total > 0 {
+                    missing as f64 / total as f64 * 100.0
+                } else {
+                    0.0
+                }
+            ));
+            let keys: std::collections::BTreeSet<_> = table
+                .samples
+                .iter()
+                .flat_map(|x| x.metadata.keys().cloned())
+                .collect();
+            if keys.is_empty() {
+                ui.small("No sample metadata yet — step 2 will ask for group columns. Add metadata through the advanced table editor below.");
+            } else {
+                ui.small(format!(
+                    "Sample metadata columns: {}",
+                    keys.into_iter().collect::<Vec<_>>().join(", ")
+                ));
+            }
+            if table.values.len() != table.samples.len() {
+                ui.colored_label(
+                    ui.visuals().error_fg_color,
+                    "Table rows do not match the sample list — reload the table.",
+                );
+            }
+        }
+        Err(error) => {
+            ui.colored_label(
+                ui.visuals().error_fg_color,
+                format!("No valid feature table yet: {error}"),
+            );
+        }
+    }
+}
+
+/// Issues with the two-group definition, in understandable language.
+fn group_issues(table: &Table, settings: &Settings) -> Vec<String> {
+    let mut issues = Vec::new();
+    let Some(groups) = &settings.groups else {
+        return issues;
+    };
+    if groups.metadata_key.trim().is_empty() {
+        issues.push("Choose the metadata column that defines the two groups.".into());
+    }
+    if groups.reference.trim().is_empty() || groups.comparison.trim().is_empty() {
+        issues.push("Name both the reference and the comparison group.".into());
+    }
+    if !groups.reference.trim().is_empty() && groups.reference == groups.comparison {
+        issues.push("Reference and comparison must be different groups.".into());
+    }
+    if issues.is_empty() {
+        let (reference, comparison, unassigned) = group_counts(table, settings);
+        if reference == 0 || comparison == 0 {
+            issues.push(format!(
+                "Each group must match at least one included sample (now {reference} vs {comparison}, {unassigned} unassigned)."
+            ));
+        }
+        if reference < 2 || comparison < 2 {
+            issues.push(format!(
+                "Small groups ({reference} vs {comparison}): comparisons report unavailable statistics rather than guessing — add independent replicates for inference."
+            ));
+        }
+    }
+    issues
+}
+
+/// Included samples per group: `(reference, comparison, unassigned)`.
+fn group_counts(table: &Table, settings: &Settings) -> (usize, usize, usize) {
+    let Some(groups) = &settings.groups else {
+        return (0, 0, 0);
+    };
+    let mut counts = (0, 0, 0);
+    for sample in &table.samples {
+        if settings.excluded_samples.contains_key(&sample.id) {
+            continue;
+        }
+        match sample
+            .metadata
+            .get(&groups.metadata_key)
+            .map(String::as_str)
+        {
+            Some(value) if value == groups.reference => counts.0 += 1,
+            Some(value) if value == groups.comparison => counts.1 += 1,
+            _ => counts.2 += 1,
+        }
+    }
+    counts
+}
+
+/// Step 2: define groups and review every sample assignment.
+fn step_groups(ui: &mut egui::Ui, s: &mut State) {
+    ui.strong("Step 2 — Define sample groups and review assignments");
+    ui.small("Group tests assume independent samples. Imputation can bias inference, and no sample is ever excluded automatically.");
+    let mut settings = match parsed_settings(s) {
+        Ok(settings) => settings,
+        Err(error) => {
+            ui.colored_label(
+                ui.visuals().error_fg_color,
+                format!("Fix the analysis settings first: {error}"),
+            );
+            return;
+        }
+    };
+    let table = match parsed_table(s) {
+        Ok(table) => table,
+        Err(_) => {
+            ui.small("Load a feature table in step 1 first.");
+            return;
+        }
+    };
+    let original = serde_json::to_string(&settings).unwrap();
+    let mut compare = settings.groups.is_some();
+    ui.checkbox(&mut compare, "Compare two independent groups");
+    if compare {
+        let groups = settings
+            .groups
+            .get_or_insert_with(|| crate::statistics::Groups {
+                metadata_key: "group".into(),
+                reference: String::new(),
+                comparison: String::new(),
+            });
+        let keys: std::collections::BTreeSet<_> = table
+            .samples
+            .iter()
+            .flat_map(|x| x.metadata.keys().cloned())
+            .collect();
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Metadata column");
+            egui::ComboBox::from_id_salt("stats_group_key")
+                .selected_text(groups.metadata_key.as_str())
+                .show_ui(ui, |ui| {
+                    for key in &keys {
+                        ui.selectable_value(&mut groups.metadata_key, key.clone(), key);
+                    }
+                });
+            ui.label("Reference");
+            ui.text_edit_singleline(&mut groups.reference);
+            ui.label("Comparison");
+            ui.text_edit_singleline(&mut groups.comparison);
+        });
+        if keys.is_empty() {
+            ui.small("The loaded table has no metadata columns — add them in the advanced table editor below, then return here.");
+        }
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Confidence level");
+            ui.add(
+                egui::DragValue::new(&mut settings.confidence)
+                    .range(0.001..=0.999)
+                    .speed(0.001),
+            );
+        });
+    } else {
+        settings.groups = None;
+    }
+    if serde_json::to_string(&settings).unwrap() != original {
+        s.settings = serde_json::to_string_pretty(&settings).unwrap();
+    }
+    // Assignment review.
+    if let Some(groups) = &settings.groups {
+        let (reference, comparison, unassigned) = group_counts(&table, &settings);
+        ui.label(format!(
+            "Reference “{}” ({reference}) vs comparison “{}” ({comparison}) · {unassigned} unassigned or excluded",
+            groups.reference, groups.comparison
+        ));
+        egui::Grid::new("stats_assignments")
+            .num_columns(3)
+            .striped(true)
+            .show(ui, |ui| {
+                ui.label("Sample");
+                ui.label(groups.metadata_key.as_str());
+                ui.label("Assignment");
+                ui.end_row();
+                for sample in &table.samples {
+                    ui.label(sample.id.as_str());
+                    ui.label(
+                        sample
+                            .metadata
+                            .get(&groups.metadata_key)
+                            .map(String::as_str)
+                            .unwrap_or("—"),
+                    );
+                    if let Some(reason) = settings.excluded_samples.get(&sample.id) {
+                        ui.small(format!("Excluded: {reason}"));
+                    } else {
+                        match sample
+                            .metadata
+                            .get(&groups.metadata_key)
+                            .map(String::as_str)
+                        {
+                            Some(value) if value == groups.reference => {
+                                ui.small("Reference");
+                            }
+                            Some(value) if value == groups.comparison => {
+                                ui.small("Comparison");
+                            }
+                            _ => {
+                                ui.small("Unassigned — ignored by the comparison");
+                            }
+                        }
+                    }
+                    ui.end_row();
+                }
+            });
+    } else {
+        ui.small(
+            "No group comparison — the analysis still reports the PCA overview and clustering.",
+        );
+    }
+    for issue in group_issues(&table, &settings) {
+        ui.colored_label(
+            ui.visuals().warn_fg_color,
+            format!(" Needs attention — {issue}"),
+        );
+    }
+}
+
+/// Step 3: the one genuinely implemented analysis plus routine parameters.
+fn step_analysis(ui: &mut egui::Ui, s: &mut State) {
+    ui.strong("Step 3 — Select the analysis and configure routine parameters");
+    ui.small("This workspace runs one combined, replayable analysis: a PCA overview, hierarchical clustering, and — when two groups are defined in step 2 — Welch group comparisons. No other statistical methods are implemented here.");
+    python_status(ui);
+    ui.small("Preprocessing order: exclusions → missingness filter → imputation → normalization → transformation → scaling. Welch tests use the pre-scaling values.");
+    settings_controls_open(ui, &mut s.settings);
+}
+
+/// Compatibility wrapper: the existing collapsed power controls, opened.
+fn settings_controls_open(ui: &mut egui::Ui, text: &mut String) {
+    egui::CollapsingHeader::new("Routine preprocessing and comparison controls")
+        .id_salt("stats_routine_controls")
+        .default_open(true)
+        .show(ui, |ui| {
+            settings_fields(ui, text);
+        });
+    ui.collapsing("Advanced preprocessing controls", |ui| {
+        ui.small("The same settings as above, exposed for exact review. Routine work never requires this section.");
+        settings_controls(ui, text);
+    });
+}
+
+/// Step 4: everything visible before execution.
+fn step_review(ui: &mut egui::Ui, s: &mut State) {
+    ui.strong("Step 4 — Review assumptions, handling, and corrections");
+    let table = match parsed_table(s) {
+        Ok(table) => table,
+        Err(error) => {
+            ui.colored_label(
+                ui.visuals().error_fg_color,
+                format!("Load a valid feature table first: {error}"),
+            );
+            return;
+        }
+    };
+    let settings = match parsed_settings(s) {
+        Ok(settings) => settings,
+        Err(error) => {
+            ui.colored_label(
+                ui.visuals().error_fg_color,
+                format!("Fix the analysis settings first: {error}"),
+            );
+            return;
+        }
+    };
+    ui.label(format!(
+        "Dataset: {} samples · {} features",
+        table.samples.len(),
+        table.features.len()
+    ));
+    if let Some(groups) = &settings.groups {
+        let (reference, comparison, unassigned) = group_counts(&table, &settings);
+        ui.label(format!(
+            "Groups (column “{}”): “{}” {reference} vs “{}” {comparison} · {unassigned} unassigned or excluded",
+            groups.metadata_key, groups.reference, groups.comparison
+        ));
+    } else {
+        ui.label("Groups: none — overview only, no group comparisons.");
+    }
+    ui.label(format!(
+        "Missing values: “{}” (at most {:.0}% missing per feature) · normalization “{}”{} · transformation “{}” · scaling “{}”",
+        settings.missing,
+        settings.max_missing_fraction * 100.0,
+        settings.normalization,
+        settings
+            .internal_standard
+            .as_ref()
+            .map(|id| format!(" on {id}"))
+            .unwrap_or_default(),
+        settings.transform,
+        settings.scaling
+    ));
+    ui.small("Assumptions: samples are independent; imputed values can bias inference; Welch tests run on pre-scaling values; no sample is excluded without your explicit reason below.");
+    ui.label(format!(
+        "Multiple-testing correction: {} ({})",
+        settings.fdr,
+        if settings.fdr == "by" {
+            "Benjamini–Yekutieli, conservative under arbitrary dependence"
+        } else {
+            "Benjamini–Hochberg, assumes independence or suitable positive dependence"
+        }
+    ));
+    exclusions_editor(ui, s, &table);
+    // Pre-execution validation with the engine's own checks.
+    let mut issues = group_issues(&table, &settings);
+    if let Err(error) = crate::statistics::validate(&table, &settings) {
+        issues.push(error.to_string());
+    }
+    if issues.is_empty() {
+        ui.colored_label(
+            super::plot_controls::scientific_color(ui.visuals().dark_mode, 3),
+            "Ready — the configuration passes all checks. Continue to step 5 to run.",
+        );
+    } else {
+        for issue in issues {
+            ui.colored_label(ui.visuals().error_fg_color, format!("Blocked — {issue}"));
+        }
+    }
+}
+
+/// Explicit sample/feature exclusions with mandatory reasons.
+fn exclusions_editor(ui: &mut egui::Ui, s: &mut State, table: &Table) {
+    ui.strong("Exclusions (explicit, with reasons)");
+    let mut settings = match parsed_settings(s) {
+        Ok(settings) => settings,
+        Err(_) => return,
+    };
+    let original = serde_json::to_string(&settings).unwrap();
+    let mut remove_sample = None;
+    for (id, reason) in settings.excluded_samples.iter_mut() {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(format!("Sample {id}"));
+            ui.text_edit_singleline(reason);
+            if ui.small_button("Include again").clicked() {
+                remove_sample = Some(id.clone());
+            }
+        });
+    }
+    if let Some(id) = remove_sample {
+        settings.excluded_samples.remove(&id);
+    }
+    let mut remove_feature = None;
+    for (id, reason) in settings.excluded_features.iter_mut() {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(format!("Feature {id}"));
+            ui.text_edit_singleline(reason);
+            if ui.small_button("Include again").clicked() {
+                remove_feature = Some(id.clone());
+            }
+        });
+    }
+    if let Some(id) = remove_feature {
+        settings.excluded_features.remove(&id);
+    }
+    // Add-sample row with a mandatory reason.
+    let reason_id = egui::Id::new("stats_exclusion_reason");
+    let sample_id = egui::Id::new("statistics_exclusion_sample");
+    let mut reason = ui
+        .ctx()
+        .data(|d| d.get_temp::<String>(reason_id))
+        .unwrap_or_default();
+    let mut chosen = ui
+        .ctx()
+        .data(|d| d.get_temp::<usize>(sample_id))
+        .unwrap_or(0);
+    let candidates: Vec<_> = table
+        .samples
+        .iter()
+        .filter(|x| !settings.excluded_samples.contains_key(&x.id))
+        .collect();
+    ui.horizontal_wrapped(|ui| {
+        if candidates.is_empty() {
+            ui.small("Every sample already has an exclusion entry.");
+        } else {
+            if chosen >= candidates.len() {
+                chosen = 0;
+            }
+            egui::ComboBox::from_id_salt("stats_exclude_sample")
+                .selected_text(candidates[chosen].id.as_str())
+                .show_ui(ui, |ui| {
+                    for (index, sample) in candidates.iter().enumerate() {
+                        ui.selectable_value(&mut chosen, index, sample.id.as_str());
+                    }
+                });
+            ui.label("Reason");
+            ui.text_edit_singleline(&mut reason);
+            if ui
+                .add_enabled(
+                    !reason.trim().is_empty(),
+                    egui::Button::new("Exclude sample"),
+                )
+                .on_hover_text("Exclusions require a reason; they are never inferred")
+                .clicked()
+            {
+                settings
+                    .excluded_samples
+                    .insert(candidates[chosen].id.clone(), reason.trim().to_owned());
+                reason.clear();
+            }
+        }
+    });
+    ui.ctx().data_mut(|d| {
+        d.insert_temp(reason_id, reason);
+        d.insert_temp(sample_id, chosen);
+    });
+    if serde_json::to_string(&settings).unwrap() != original {
+        s.settings = serde_json::to_string_pretty(&settings).unwrap();
+    }
+}
+
+/// Shared pre-execution checks: parsing, group assignment, engine validation.
+fn precheck(s: &State) -> Vec<String> {
+    let table = match parsed_table(s) {
+        Ok(table) => table,
+        Err(error) => return vec![format!("Load a valid feature table first: {error}")],
+    };
+    let settings = match parsed_settings(s) {
+        Ok(settings) => settings,
+        Err(error) => return vec![format!("Fix the analysis settings first: {error}")],
+    };
+    let mut issues = group_issues(&table, &settings);
+    if let Err(error) = crate::statistics::validate(&table, &settings) {
+        issues.push(error.to_string());
+    }
+    issues
+}
+
+/// Cached local-Python availability; the engine needs NumPy and SciPy.
+fn python_status(ui: &mut egui::Ui) {
+    let id = egui::Id::new("statistics_python_status");
+    let status: Option<String> = ui.ctx().data(|d| d.get_temp(id));
+    ui.horizontal_wrapped(|ui| {
+        if ui
+            .button("Check Python environment")
+            .on_hover_text("Statistics run in a local Python with NumPy and SciPy")
+            .clicked()
+        {
+            ui.ctx().data_mut(|d| {
+                d.insert_temp(
+                    id,
+                    "Checking for local Python with NumPy and SciPy…".to_owned(),
+                )
+            });
+            let ctx = ui.ctx().clone();
+            std::thread::spawn(move || {
+                ctx.data_mut(|d| d.insert_temp(id, check_python()));
+                ctx.request_repaint();
+            });
+        }
+        ui.small(
+            status
+                .as_deref()
+                .unwrap_or("Statistics run in local Python with NumPy and SciPy — check availability before a long run."),
+        );
+    });
+}
+
+fn check_python() -> String {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let python: std::path::PathBuf = std::env::var_os("CHROMASCOPE_STATS_PYTHON")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| "python".into());
+    std::thread::spawn(move || {
+        let result = std::process::Command::new(&python)
+            .args([
+                "-E",
+                "-P",
+                "-c",
+                "import numpy, scipy; print(numpy.__version__, scipy.__version__)",
+            ])
+            .output();
+        let _ = tx.send(result);
+    });
+    match rx.recv_timeout(std::time::Duration::from_secs(20)) {
+        Ok(Ok(output)) if output.status.success() => format!(
+            "Python ready — NumPy/SciPy {}",
+            String::from_utf8_lossy(&output.stdout).trim()
+        ),
+        Ok(Ok(output)) => format!(
+            "Python found, but NumPy/SciPy failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+                .chars()
+                .take(300)
+                .collect::<String>()
+        ),
+        Ok(Err(error)) => format!(
+            "No usable Python ({error}). Set CHROMASCOPE_STATS_PYTHON or install Python with NumPy and SciPy."
+        ),
+        Err(_) => "Python check timed out after 20 s.".into(),
+    }
+}
+fn settings_controls(ui: &mut egui::Ui, text: &mut String) {
+    ui.collapsing("Preprocessing and comparison controls", |ui| {
+        settings_fields(ui, text);
+    });
+}
+fn settings_fields(ui: &mut egui::Ui, text: &mut String) {
+    let Ok(mut cfg) = serde_json::from_str::<Settings>(text) else {
+        ui.label("Correct the settings JSON to use these controls");
+        return;
+    };
+    let original = serde_json::to_string(&cfg).unwrap();
+    for (label, value, choices) in [
+        (
+            "Missing values",
+            &mut cfg.missing,
+            &["reject", "median", "half_minimum", "complete_features"][..],
+        ),
+        (
+            "Normalization",
+            &mut cfg.normalization,
+            &["none", "total", "median", "internal_standard"][..],
+        ),
+        (
+            "Transformation",
+            &mut cfg.transform,
+            &["none", "log2", "log10", "sqrt"][..],
+        ),
+        (
+            "Scaling",
+            &mut cfg.scaling,
+            &["none", "center", "autoscale", "pareto"][..],
+        ),
+        (
+            "Euclidean linkage",
+            &mut cfg.linkage,
+            &["average", "complete", "single", "ward"][..],
+        ),
+        ("FDR adjustment", &mut cfg.fdr, &["bh", "by"][..]),
+    ] {
+        egui::ComboBox::from_label(label)
+            .selected_text(value.as_str())
+            .show_ui(ui, |ui| {
+                for &choice in choices {
+                    ui.selectable_value(value, choice.into(), choice);
+                }
+            });
+    }
+    ui.horizontal(|ui| {
+        ui.label("Maximum missing fraction");
+        ui.add(
+            egui::DragValue::new(&mut cfg.max_missing_fraction)
+                .range(0. ..=1.)
+                .speed(0.01),
+        );
+        ui.label("Explicit pseudocount (original feature units)");
+        ui.add(
+            egui::DragValue::new(&mut cfg.pseudocount)
+                .range(0. ..=f64::MAX)
+                .speed(0.01),
+        );
+    });
+    if cfg.normalization == "internal_standard" {
+        ui.horizontal(|ui| {
+            ui.label("Internal-standard feature ID");
+            ui.text_edit_singleline(cfg.internal_standard.get_or_insert_with(String::new));
+        });
+    }
+    let mut compare = cfg.groups.is_some();
+    ui.checkbox(&mut compare, "Compare two independent groups");
+    if compare {
+        let groups = cfg.groups.get_or_insert_with(|| crate::statistics::Groups {
+            metadata_key: "group".into(),
+            reference: String::new(),
+            comparison: String::new(),
+        });
+        ui.horizontal(|ui| {
+            ui.label("Metadata key");
+            ui.text_edit_singleline(&mut groups.metadata_key);
+            ui.label("Reference");
+            ui.text_edit_singleline(&mut groups.reference);
+            ui.label("Comparison");
+            ui.text_edit_singleline(&mut groups.comparison);
+        });
+        ui.horizontal(|ui| {
+            ui.label("Confidence level");
+            ui.add(
+                egui::DragValue::new(&mut cfg.confidence)
+                    .range(0.001..=0.999)
+                    .speed(0.001),
+            );
+        });
+    } else {
+        cfg.groups = None;
+    }
+    ui.label("Preprocessing order: exclusions → missingness filter → imputation → normalization → transformation → scaling. Welch tests use the pre-scaling values. BH assumes independence or suitable positive dependence; BY is more conservative.");
+    if serde_json::to_string(&cfg).unwrap() != original {
+        *text = serde_json::to_string_pretty(&cfg).unwrap();
+    }
 }
 fn scatter(
     ui: &mut egui::Ui,
@@ -721,6 +1404,93 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// The five-step onboarding renders at minimum and desktop sizes in both
+    /// themes, with each step heading reachable and the run gate visible.
+    #[test]
+    fn onboarding_renders_all_five_steps_without_panic() {
+        let headings = [
+            "Step 1 — Load or select the feature table",
+            "Step 2 — Define sample groups and review assignments",
+            "Step 3 — Select the analysis and configure routine parameters",
+            "Step 4 — Review assumptions, handling, and corrections",
+            "Step 5 — Run the analysis and inspect the results",
+        ];
+        for dark in [false, true] {
+            for (width, height) in [(920.0, 620.0), (1280.0, 800.0)] {
+                for (step, heading) in headings.iter().enumerate() {
+                    // Fresh context per step keeps each preview self-contained
+                    // (font atlas uploads stay inside its own frame set).
+                    let ctx = egui::Context::default();
+                    super::super::workbench::configure(&ctx, dark);
+                    let mut app = crate::gui::MzViewerApp::default();
+                    app.statistics.open = true;
+                    // Synthetic but valid table so steps 2-4 exercise group and
+                    // review logic instead of the empty-state branch.
+                    app.statistics.draft = serde_json::to_string_pretty(&serde_json::json!({
+                        "samples": [
+                            {"id": "a", "metadata": {"group": "control"}},
+                            {"id": "b", "metadata": {"group": "control"}},
+                            {"id": "c", "metadata": {"group": "case"}},
+                            {"id": "d", "metadata": {"group": "case"}}
+                        ],
+                        "features": [{"id": "x", "unit": "ng/mL"}],
+                        "values": [[1.0], [2.0], [3.0], [4.0]],
+                        "provenance": {"synthetic": true}
+                    }))
+                    .unwrap();
+                    ctx.data_mut(|d| {
+                        d.insert_temp(egui::Id::new("statistics_onboarding_step"), step)
+                    });
+                    // The standalone window needs layout passes before its
+                    // text stabilizes; assert on the settled frame.
+                    let mut frames = Vec::new();
+                    for frame in 0..3 {
+                        frames.push(ctx.run(
+                            egui::RawInput {
+                                screen_rect: Some(egui::Rect::from_min_size(
+                                    egui::Pos2::ZERO,
+                                    egui::vec2(width, height),
+                                )),
+                                time: Some(frame as f64 * 0.2),
+                                ..Default::default()
+                            },
+                            |ctx| show(&mut app, ctx),
+                        ));
+                    }
+                    let output = frames.last().unwrap();
+                    assert!(
+                        crate::gui::test_render::text_center(&output.shapes, heading).is_some(),
+                        "missing {heading} at step {step} ({width}x{height}, dark={dark})"
+                    );
+                    if std::env::var_os("CHROMASCOPE_STATISTICS_PREVIEW").is_some()
+                        && !dark
+                        && (width, height) == (1280.0, 800.0)
+                    {
+                        crate::gui::test_render::save(
+                            &ctx,
+                            frames.clone(),
+                            std::path::Path::new(&format!(
+                                "target/statistics-onboarding-{step}.png"
+                            )),
+                            egui::vec2(width, height),
+                        );
+                    }
+                    for label in [
+                        "1 · Load table",
+                        "2 · Sample groups",
+                        "3 · Analysis",
+                        "4 · Review",
+                        "5 · Run and inspect",
+                    ] {
+                        assert!(
+                            crate::gui::test_render::text_center(&output.shapes, label).is_some(),
+                            "missing navigator {label} at step {step}"
+                        );
+                    }
+                }
+            }
+        }
+    }
     #[test]
     fn heatmap_selection_and_software_plot_render() {
         let table:Table=serde_json::from_value(serde_json::json!({"samples":[{"id":"a","metadata":{"group":"control"}},{"id":"b","metadata":{"group":"control"}},{"id":"c","metadata":{"group":"case"}}],"features":[{"id":"x","unit":"ng/mL"},{"id":"y","unit":"ng/mL"}],"values":[[1,2],[2,4],[3,6]],"provenance":{"synthetic":true}})).unwrap();

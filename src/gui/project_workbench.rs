@@ -434,6 +434,16 @@ impl State {
     pub(super) fn revision(&self) -> Option<u64> {
         self.project.as_ref().map(|p| p.revision)
     }
+    pub(super) fn has_project(&self) -> bool {
+        self.project.is_some()
+    }
+    pub(super) fn root_label(&self) -> String {
+        if self.root.as_os_str().is_empty() {
+            String::new()
+        } else {
+            self.root.display().to_string()
+        }
+    }
 }
 
 fn route_result(app: &mut MzViewerApp, response: crate::engine::Response) {

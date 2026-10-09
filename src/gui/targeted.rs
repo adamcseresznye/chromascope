@@ -32,6 +32,49 @@ impl UiState {
     pub(super) fn latest(&self) -> Option<&crate::targeted::BatchResult> {
         self.history.get(self.current_batch)
     }
+    pub(super) fn batch_count(&self) -> usize {
+        self.history.len()
+    }
+    /// Per-target calibration outcome of the current batch.
+    /// Returns `(fitted_targets, errored_targets, total_targets)` using only
+    /// the engine's own calibration maps — no independent acceptance policy.
+    pub(super) fn calibration_summary(&self) -> (usize, usize, usize) {
+        let Some(batch) = self.history.get(self.current_batch) else {
+            return (0, 0, 0);
+        };
+        let total = batch.request.targets.len();
+        let fitted = batch.calibrations.len();
+        let errored = batch.calibration_errors.len();
+        (fitted, errored, total)
+    }
+    /// Concentration results that are not successfully quantified in the
+    /// current batch (missing, rejected, below/above limits, failed, ambiguous).
+    pub(super) fn invalid_result_count(&self) -> usize {
+        use crate::targeted::State as TState;
+        self.history
+            .get(self.current_batch)
+            .map(|batch| {
+                batch
+                    .results
+                    .iter()
+                    .filter(|r| !matches!(r.state, TState::Present))
+                    .count()
+            })
+            .unwrap_or(0)
+    }
+    /// Results explicitly reviewed by a scientist in the current batch.
+    pub(super) fn reviewed_result_count(&self) -> usize {
+        self.history
+            .get(self.current_batch)
+            .map(|batch| batch.results.iter().filter(|r| r.reviewed).count())
+            .unwrap_or(0)
+    }
+    pub(super) fn total_result_count(&self) -> usize {
+        self.history
+            .get(self.current_batch)
+            .map(|batch| batch.results.len())
+            .unwrap_or(0)
+    }
 }
 impl UiState {
     pub(super) fn retain(&mut self, batch: crate::targeted::BatchResult) -> Result<(), String> {
@@ -64,6 +107,15 @@ impl UiState {
     }
     pub(super) fn qc_panel(&mut self, ui: &mut egui::Ui) {
         super::qc::panel(&mut self.qc, self.history.get(self.current_batch), ui);
+    }
+    pub(super) fn qc_report_count(&self) -> usize {
+        self.qc.report_count()
+    }
+    pub(super) fn qc_latest_status(&self) -> Option<crate::qc::Status> {
+        self.qc.latest_status()
+    }
+    pub(super) fn qc_pending_reviews(&self) -> usize {
+        self.qc.pending_review_count()
     }
 }
 fn write_new(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
@@ -107,7 +159,8 @@ pub(super) fn panel(
         });
         if let Ok(mut request) = serde_json::from_str::<t::BatchRequest>(&state.draft) {
             let mut changed = false;
-            ui.collapsing("Sample sheet", |ui| {
+            ui.collapsing("Sample sheet — roles, order, dilution, nominal levels", |ui| {
+                ui.small("Assign each injection its role and nominal level. Unknown samples are quantified; standards and QCs calibrate and verify.");
                 egui::ScrollArea::horizontal().show(ui, |ui| {
                     egui::Grid::new("targeted_sheet").striped(true).show(ui, |ui| {
                         for label in ["Sample ID / source", "Role", "Injection order", "Dilution"] { ui.label(label); }
