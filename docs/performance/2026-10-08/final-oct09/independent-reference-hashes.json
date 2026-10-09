@@ -1,0 +1,32 @@
+[
+  {
+    "reference": "targeted",
+    "numeric_json_equal": true,
+    "generator_sha256": "ad361a24a42f16570670bfb77c755bcdb9c5a98cf4a431456b583dc1205c6024",
+    "retained_reference_sha256": "b9cc01ba00f83602edc1f8a82e13246c1313b47dfd6f504ed751f1115b530b95"
+  },
+  {
+    "reference": "qc",
+    "numeric_json_equal": true,
+    "generator_sha256": "e3ea9e5c02635b58f8d09c067ad566f2a94a0fb237d3b00b93f8d53a43bca8f6",
+    "retained_reference_sha256": "7e59c80110bd1bbf320eed5a36887d6268251590a7fe2e9e04e1c5d10032578c"
+  },
+  {
+    "reference": "spectral",
+    "numeric_json_equal": true,
+    "generator_sha256": "34dce1fc9ee2ccb2b37bca41c5254b5849d2873da7d8f0d3768cd824c8c1fdf7",
+    "retained_reference_sha256": "a9a0435cc9e59c4fdd9a4bce61bbca96f397c0421a9d39a0ed387dc5f467cc4f"
+  },
+  {
+    "reference": "statistics",
+    "numeric_json_equal": true,
+    "generator_sha256": "e016550420e20a279e5303046f1d0d87768f5b116f545830ffe457bb5b331449",
+    "retained_reference_sha256": "287c045798a42a395370af7e8602e1f81934cae73c6cc83d7866a6520c77f520"
+  },
+  {
+    "reference": "chromatography",
+    "numeric_json_equal": true,
+    "generator_sha256": "2e6d0a4c4a8dcc6232c737bcad04c110c32540aec1dd8bf1e3a4e818cdca2d4d",
+    "retained_reference_sha256": "8b3bd8faa24e89034eaf8a851ac8e0e8c51048360307d2b3b16af70ce1be0417"
+  }
+]

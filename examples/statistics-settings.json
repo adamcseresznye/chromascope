@@ -1,0 +1,9 @@
+{
+  "missing": "reject",
+  "normalization": "none",
+  "transform": "none",
+  "scaling": "center",
+  "groups": {"metadata_key": "group", "reference": "control", "comparison": "case"},
+  "confidence": 0.95,
+  "fdr": "bh"
+}

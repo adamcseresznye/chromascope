@@ -103,20 +103,30 @@ use std::sync::mpsc;
 use eframe::egui;
 use log::{error, warn};
 
+mod ai_review;
+mod annotation;
+mod delivery;
 mod dialogs;
 mod examples;
+mod forms;
 mod information;
 mod interactivity;
 mod panels;
+mod plot_controls;
 mod plotting;
 mod preset_editor;
 mod presets;
+mod project_workbench;
 mod quant;
 #[cfg(feature = "mcp")]
 pub(crate) mod remote;
+mod spectral;
 pub(crate) mod state;
+mod statistics;
+mod table;
 #[cfg(any(test, feature = "mcp"))]
 mod test_render;
+mod untargeted;
 mod workbench;
 mod workspace;
 
@@ -158,6 +168,12 @@ impl MzViewerApp {
             presets: Default::default(),
             workspace: workspace::Workspace::default(),
             quant: Default::default(),
+            spectral: Default::default(),
+            untargeted: Default::default(),
+            statistics: Default::default(),
+            delivery: Default::default(),
+            project: Default::default(),
+            ai: Default::default(),
             msconvert_path: crate::import::discover_msconvert(),
             #[cfg(feature = "mcp")]
             remote: None,
@@ -553,6 +569,8 @@ impl eframe::App for MzViewerApp {
     ///
     /// This method does not return any errors. It calls several other functions that may encounter errors, but those errors are handled within the respective functions
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        project_workbench::poll(self, ctx);
+        ai_review::poll(self, ctx);
         #[cfg(feature = "mcp")]
         self.poll_remote(ctx);
         presets::poll(self, ctx);
@@ -563,7 +581,9 @@ impl eframe::App for MzViewerApp {
         self.process_pending_update();
         panels::update_data_selection_panel(self, ctx);
         quant::poll(self, ctx);
-        if self.quant.active {
+        if workbench::advanced_active(self, ctx) {
+            workbench::status(self, ctx);
+        } else if self.quant.active {
             quant::show(self, ctx);
         } else {
             workbench::status(self, ctx);
@@ -575,6 +595,11 @@ impl eframe::App for MzViewerApp {
             dialogs::render_range_window(self, ctx);
             dialogs::render_plot_properties_window(self, ctx);
         }
+        spectral::show(self, ctx);
+        untargeted::show(self, ctx);
+        statistics::show(self, ctx);
+        delivery::show(self, ctx);
+        workbench::activity(self, ctx);
         dialogs::render_error_dialog(self, ctx);
         information::show(self, ctx);
     }
@@ -1329,3 +1354,6 @@ mod tests {
         assert_eq!(contents.lines().count(), 5002);
     }
 }
+
+mod qc;
+mod targeted;

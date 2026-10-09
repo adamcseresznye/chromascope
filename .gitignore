@@ -15,8 +15,31 @@ target_wasm
 # data and target folder and their content
 data/
 target/
-docs/
+__pycache__/
+docs/*
+!docs/ARCHITECTURE.md
+!docs/IMPLEMENTATION_ROADMAP.md
+!docs/VALIDATION_REPORT.md
+!docs/SESSION_HANDOFF.md
 # mass spectrometry files
 .mzML
 .raw
 .mzXML
+
+!docs/MCP_ANALYSIS.md
+!docs/FEATURE_STATUS.md
+!docs/ENGINE_OPERATIONS.md
+!docs/RELEASE_NOTES.md
+!docs/RELEASE_BACKLOG.md
+!docs/PROJECT_DELIVERY.md
+!docs/PERFORMANCE_VALIDATION.md
+!docs/REMAINING_DEFECTS.md
+!docs/UX_UI_AUDIT.md
+!docs/ux-evidence/
+
+# Compact retained performance evidence; raw acquisitions remain outside Git.
+!docs/performance/
+docs/performance/*
+!docs/performance/2026-10-08/
+
+!docs/UX_UI_REMEDIATION.md

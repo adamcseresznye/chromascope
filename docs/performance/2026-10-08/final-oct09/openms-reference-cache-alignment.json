@@ -1,0 +1,71 @@
+{
+  "command": [
+    "C:\\Users\\s0212777\\OneDrive - Universiteit Antwerpen\\Bureaublad\\projects\\chromascope\\target\\performance-finalized-oct09-measurements\\measured-executable.exe",
+    "openms_workloads",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+  ],
+  "scans": 0,
+  "exit_code": 0,
+  "wall_seconds": 6.1499851999979,
+  "sample_interval_seconds": 0.01,
+  "sampled_peak_tree_rss_bytes": 137621504,
+  "last_observed_process_counters": {
+    "40188": {
+      "cpu_seconds": 0.203125,
+      "read_bytes": 36804615,
+      "write_bytes": 60383
+    },
+    "27712": {
+      "cpu_seconds": 0.171875,
+      "read_bytes": 14896830,
+      "write_bytes": 6077640
+    },
+    "22144": {
+      "cpu_seconds": 15.109375,
+      "read_bytes": 34935811,
+      "write_bytes": 547648
+    },
+    "35372": {
+      "cpu_seconds": 0.0,
+      "read_bytes": 0,
+      "write_bytes": 0
+    },
+    "36692": {
+      "cpu_seconds": 4.59375,
+      "read_bytes": 27643650,
+      "write_bytes": 169218
+    },
+    "44632": {
+      "cpu_seconds": 0.0,
+      "read_bytes": 0,
+      "write_bytes": 0
+    }
+  },
+  "workloads": [
+    {
+      "seconds": 2.5918099,
+      "started_unix_seconds": 1791552269.3654222,
+      "units": 6,
+      "workload": "openms_detect_align_cold_6_samples",
+      "profile_samples": 115,
+      "sampled_peak_tree_rss_bytes": 137621504,
+      "sampled_cpu_seconds": 15.203125,
+      "sampled_read_bytes": 51362978,
+      "sampled_write_bytes": 575235
+    },
+    {
+      "seconds": 1.9852178,
+      "started_unix_seconds": 1791552271.9572875,
+      "units": 6,
+      "workload": "openms_checkpoint_reuse_align_6_samples",
+      "profile_samples": 80,
+      "sampled_peak_tree_rss_bytes": 133976064,
+      "sampled_cpu_seconds": 4.703125,
+      "sampled_read_bytes": 44146896,
+      "sampled_write_bytes": 196918
+    }
+  ],
+  "limits": "CPU/I/O counters can miss final activity of short-lived children; RSS is sampled, includes fixture generation, and is not per-workload. OS file cache is uncontrolled; repeats are not an application cache. Test profile is not release."
+}

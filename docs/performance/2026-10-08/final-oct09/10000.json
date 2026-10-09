@@ -1,0 +1,266 @@
+{
+  "command": [
+    "C:\\Users\\s0212777\\OneDrive - Universiteit Antwerpen\\Bureaublad\\projects\\chromascope\\target\\performance-finalized-oct09-measurements\\measured-executable.exe",
+    "analytical_workloads",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+  ],
+  "scans": 10000,
+  "exit_code": 0,
+  "wall_seconds": 16.170855400006985,
+  "sample_interval_seconds": 0.01,
+  "sampled_peak_tree_rss_bytes": 90456064,
+  "last_observed_process_counters": {
+    "35732": {
+      "cpu_seconds": 11.484375,
+      "read_bytes": 9658804383,
+      "write_bytes": 231544332
+    }
+  },
+  "workloads": [
+    {
+      "build": "test profile; dependencies opt-level=2, core unoptimized",
+      "bytes": 231436084,
+      "peaks_per_scan": 1024,
+      "scans": 10000,
+      "synthetic": true,
+      "workload": "dataset"
+    },
+    {
+      "seconds": 0.6458559,
+      "started_unix_seconds": 1791552251.8524842,
+      "units": 10000,
+      "workload": "source_sha256",
+      "profile_samples": 31,
+      "sampled_peak_tree_rss_bytes": 17915904,
+      "sampled_cpu_seconds": 0.1875,
+      "sampled_read_bytes": 224657408,
+      "sampled_write_bytes": 0
+    },
+    {
+      "seconds": 0.4932148,
+      "started_unix_seconds": 1791552252.6927507,
+      "units": 10000,
+      "workload": "reader_iteration_Full",
+      "profile_samples": 24,
+      "sampled_peak_tree_rss_bytes": 19410944,
+      "sampled_cpu_seconds": 0.453125,
+      "sampled_read_bytes": 388920000,
+      "sampled_write_bytes": 0
+    },
+    {
+      "seconds": 0.4574941,
+      "started_unix_seconds": 1791552253.402242,
+      "units": 10000,
+      "workload": "reader_iteration_Lazy",
+      "profile_samples": 22,
+      "sampled_peak_tree_rss_bytes": 19484672,
+      "sampled_cpu_seconds": 0.390625,
+      "sampled_read_bytes": 381640000,
+      "sampled_write_bytes": 0
+    },
+    {
+      "seconds": 0.387616,
+      "started_unix_seconds": 1791552254.0608666,
+      "units": 10000,
+      "workload": "reader_iteration_MetadataOnly",
+      "profile_samples": 18,
+      "sampled_peak_tree_rss_bytes": 19505152,
+      "sampled_cpu_seconds": 0.375,
+      "sampled_read_bytes": 376710000,
+      "sampled_write_bytes": 0
+    },
+    {
+      "seconds": 1.1315797,
+      "started_unix_seconds": 1791552254.4489963,
+      "units": 10000,
+      "workload": "open_bounds",
+      "profile_samples": 49,
+      "sampled_peak_tree_rss_bytes": 19828736,
+      "sampled_cpu_seconds": 1.0625,
+      "sampled_read_bytes": 853325688,
+      "sampled_write_bytes": 0
+    },
+    {
+      "seconds": 0.7252886,
+      "started_unix_seconds": 1791552255.5823154,
+      "units": 10000,
+      "workload": "xic_repeat_0",
+      "profile_samples": 35,
+      "sampled_peak_tree_rss_bytes": 19779584,
+      "sampled_cpu_seconds": 0.640625,
+      "sampled_read_bytes": 387440000,
+      "sampled_write_bytes": 0
+    },
+    {
+      "seconds": 0.7242301,
+      "started_unix_seconds": 1791552256.3078086,
+      "units": 10000,
+      "workload": "xic_repeat_1",
+      "profile_samples": 34,
+      "sampled_peak_tree_rss_bytes": 19836928,
+      "sampled_cpu_seconds": 0.640625,
+      "sampled_read_bytes": 391733173,
+      "sampled_write_bytes": 0
+    },
+    {
+      "seconds": 0.7096726,
+      "started_unix_seconds": 1791552257.032236,
+      "units": 10000,
+      "workload": "xic_repeat_2",
+      "profile_samples": 34,
+      "sampled_peak_tree_rss_bytes": 19832832,
+      "sampled_cpu_seconds": 0.703125,
+      "sampled_read_bytes": 385280000,
+      "sampled_write_bytes": 0
+    },
+    {
+      "seconds": 1.1247238,
+      "started_unix_seconds": 1791552257.742109,
+      "units": 10000,
+      "workload": "tic_missing_metadata",
+      "profile_samples": 54,
+      "sampled_peak_tree_rss_bytes": 20156416,
+      "sampled_cpu_seconds": 1.0625,
+      "sampled_read_bytes": 783733173,
+      "sampled_write_bytes": 0
+    },
+    {
+      "seconds": 1.2485626,
+      "started_unix_seconds": 1791552258.8669698,
+      "units": 10000,
+      "workload": "bpc_missing_metadata",
+      "profile_samples": 56,
+      "sampled_peak_tree_rss_bytes": 20226048,
+      "sampled_cpu_seconds": 1.140625,
+      "sampled_read_bytes": 785173173,
+      "sampled_write_bytes": 0
+    },
+    {
+      "seconds": 0.4175588,
+      "started_unix_seconds": 1791552260.1157708,
+      "units": 1000,
+      "workload": "batch_integration_1000",
+      "profile_samples": 19,
+      "sampled_peak_tree_rss_bytes": 20135936,
+      "sampled_cpu_seconds": 0.34375,
+      "sampled_read_bytes": 0,
+      "sampled_write_bytes": 0
+    },
+    {
+      "seconds": 0.46844,
+      "started_unix_seconds": 1791552260.5334032,
+      "units": 10001,
+      "workload": "chromatography_sg_chord",
+      "profile_samples": 21,
+      "sampled_peak_tree_rss_bytes": 22061056,
+      "sampled_cpu_seconds": 0.40625,
+      "sampled_read_bytes": 0,
+      "sampled_write_bytes": 0
+    },
+    {
+      "seconds": 0.4337666,
+      "started_unix_seconds": 1791552261.0019937,
+      "units": 1000,
+      "workload": "calibration_1000_fits",
+      "profile_samples": 20,
+      "sampled_peak_tree_rss_bytes": 20152320,
+      "sampled_cpu_seconds": 0.375,
+      "sampled_read_bytes": 0,
+      "sampled_write_bytes": 0
+    },
+    {
+      "seconds": 0.2483365,
+      "started_unix_seconds": 1791552261.445887,
+      "units": 64,
+      "workload": "targeted_64_samples_calibration",
+      "profile_samples": 11,
+      "sampled_peak_tree_rss_bytes": 21622784,
+      "sampled_cpu_seconds": 0.15625,
+      "sampled_read_bytes": 18251032,
+      "sampled_write_bytes": 0
+    },
+    {
+      "seconds": 0.2652108,
+      "started_unix_seconds": 1791552261.7128775,
+      "units": 10000,
+      "workload": "library_import_10000",
+      "profile_samples": 11,
+      "sampled_peak_tree_rss_bytes": 54779904,
+      "sampled_cpu_seconds": 0.21875,
+      "sampled_read_bytes": 0,
+      "sampled_write_bytes": 0
+    },
+    {
+      "seconds": 0.3664586,
+      "started_unix_seconds": 1791552261.978156,
+      "units": 10000,
+      "workload": "spectral_search_10000",
+      "profile_samples": 17,
+      "sampled_peak_tree_rss_bytes": 90456064,
+      "sampled_cpu_seconds": 0.3125,
+      "sampled_read_bytes": 0,
+      "sampled_write_bytes": 0
+    },
+    {
+      "seconds": 0.1925342,
+      "started_unix_seconds": 1791552262.3516119,
+      "units": 10000,
+      "workload": "project_register_large_source",
+      "profile_samples": 9,
+      "sampled_peak_tree_rss_bytes": 22003712,
+      "sampled_cpu_seconds": 0.171875,
+      "sampled_read_bytes": 202833920,
+      "sampled_write_bytes": 0
+    },
+    {
+      "seconds": 1.7310232,
+      "started_unix_seconds": 1791552262.544182,
+      "units": 100,
+      "workload": "project_100_commits",
+      "profile_samples": 71,
+      "sampled_peak_tree_rss_bytes": 22028288,
+      "sampled_cpu_seconds": 0.046875,
+      "sampled_read_bytes": 52617,
+      "sampled_write_bytes": 53200
+    },
+    {
+      "seconds": 0.0105593,
+      "started_unix_seconds": 1791552264.2752864,
+      "units": 100,
+      "workload": "project_open_100_revisions",
+      "profile_samples": 1,
+      "sampled_peak_tree_rss_bytes": 22016000,
+      "sampled_cpu_seconds": 0.0,
+      "sampled_read_bytes": 0,
+      "sampled_write_bytes": 0
+    },
+    {
+      "seconds": 0.0136577,
+      "started_unix_seconds": 1791552264.285892,
+      "units": 1,
+      "workload": "project_restore_revision",
+      "profile_samples": 0
+    },
+    {
+      "seconds": 2.1836529000000002,
+      "started_unix_seconds": 1791552264.2996125,
+      "units": 20000,
+      "workload": "concurrent_xic_2_readers",
+      "profile_samples": 86,
+      "sampled_peak_tree_rss_bytes": 25186304,
+      "sampled_cpu_seconds": 0.546875,
+      "sampled_read_bytes": 2498566330,
+      "sampled_write_bytes": 0
+    },
+    {
+      "seconds": 0.0006023,
+      "started_unix_seconds": 1791552267.743886,
+      "units": 1,
+      "workload": "running_xic_cancellation_latency",
+      "profile_samples": 0
+    }
+  ],
+  "limits": "CPU/I/O counters can miss final activity of short-lived children; RSS is sampled, includes fixture generation, and is not per-workload. OS file cache is uncontrolled; repeats are not an application cache. Test profile is not release."
+}

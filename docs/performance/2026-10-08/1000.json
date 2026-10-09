@@ -1,0 +1,266 @@
+{
+  "command": [
+    "C:\\Users\\s0212777\\OneDrive - Universiteit Antwerpen\\Bureaublad\\projects\\chromascope\\target\\debug\\deps\\performance-a2056ce861a75ce2.exe",
+    "analytical_workloads",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+  ],
+  "scans": 1000,
+  "exit_code": 0,
+  "wall_seconds": 5.270923199976096,
+  "sample_interval_seconds": 0.01,
+  "sampled_peak_tree_rss_bytes": 81113088,
+  "last_observed_process_counters": {
+    "32740": {
+      "cpu_seconds": 2.6875,
+      "read_bytes": 889652419,
+      "write_bytes": 23243878
+    }
+  },
+  "workloads": [
+    {
+      "build": "test profile; dependencies opt-level=2, core unoptimized",
+      "bytes": 23141162,
+      "peaks_per_scan": 1024,
+      "scans": 1000,
+      "synthetic": true,
+      "workload": "dataset"
+    },
+    {
+      "seconds": 0.1644871,
+      "started_unix_seconds": 1791516688.9251347,
+      "units": 1000,
+      "workload": "source_sha256",
+      "profile_samples": 7,
+      "sampled_peak_tree_rss_bytes": 4919296,
+      "sampled_cpu_seconds": 0.0,
+      "sampled_read_bytes": 0,
+      "sampled_write_bytes": 0
+    },
+    {
+      "seconds": 0.0457401,
+      "started_unix_seconds": 1791516689.1106358,
+      "units": 1000,
+      "workload": "reader_iteration_Full",
+      "profile_samples": 2,
+      "sampled_peak_tree_rss_bytes": 6733824,
+      "sampled_cpu_seconds": 0.03125,
+      "sampled_read_bytes": 21130000,
+      "sampled_write_bytes": 0
+    },
+    {
+      "seconds": 0.0386251,
+      "started_unix_seconds": 1791516689.176079,
+      "units": 1000,
+      "workload": "reader_iteration_Lazy",
+      "profile_samples": 2,
+      "sampled_peak_tree_rss_bytes": 6975488,
+      "sampled_cpu_seconds": 0.015625,
+      "sampled_read_bytes": 24720000,
+      "sampled_write_bytes": 0
+    },
+    {
+      "seconds": 0.0362779,
+      "started_unix_seconds": 1791516689.234942,
+      "units": 1000,
+      "workload": "reader_iteration_MetadataOnly",
+      "profile_samples": 2,
+      "sampled_peak_tree_rss_bytes": 6955008,
+      "sampled_cpu_seconds": 0.03125,
+      "sampled_read_bytes": 25760000,
+      "sampled_write_bytes": 0
+    },
+    {
+      "seconds": 0.0572715,
+      "started_unix_seconds": 1791516689.271413,
+      "units": 1000,
+      "workload": "open_bounds",
+      "profile_samples": 2,
+      "sampled_peak_tree_rss_bytes": 7049216,
+      "sampled_cpu_seconds": 0.03125,
+      "sampled_read_bytes": 28481362,
+      "sampled_write_bytes": 0
+    },
+    {
+      "seconds": 0.0672855,
+      "started_unix_seconds": 1791516689.3291068,
+      "units": 1000,
+      "workload": "xic_repeat_0",
+      "profile_samples": 3,
+      "sampled_peak_tree_rss_bytes": 7344128,
+      "sampled_cpu_seconds": 0.03125,
+      "sampled_read_bytes": 29050000,
+      "sampled_write_bytes": 0
+    },
+    {
+      "seconds": 0.066309,
+      "started_unix_seconds": 1791516689.3965,
+      "units": 1000,
+      "workload": "xic_repeat_1",
+      "profile_samples": 3,
+      "sampled_peak_tree_rss_bytes": 7442432,
+      "sampled_cpu_seconds": 0.03125,
+      "sampled_read_bytes": 30190000,
+      "sampled_write_bytes": 0
+    },
+    {
+      "seconds": 0.0659881,
+      "started_unix_seconds": 1791516689.4628856,
+      "units": 1000,
+      "workload": "xic_repeat_2",
+      "profile_samples": 3,
+      "sampled_peak_tree_rss_bytes": 7442432,
+      "sampled_cpu_seconds": 0.046875,
+      "sampled_read_bytes": 26220000,
+      "sampled_write_bytes": 0
+    },
+    {
+      "seconds": 0.1039145,
+      "started_unix_seconds": 1791516689.5289266,
+      "units": 1000,
+      "workload": "tic_missing_metadata",
+      "profile_samples": 5,
+      "sampled_peak_tree_rss_bytes": 7516160,
+      "sampled_cpu_seconds": 0.109375,
+      "sampled_read_bytes": 67503170,
+      "sampled_write_bytes": 0
+    },
+    {
+      "seconds": 0.1199408,
+      "started_unix_seconds": 1791516689.632883,
+      "units": 1000,
+      "workload": "bpc_missing_metadata",
+      "profile_samples": 5,
+      "sampled_peak_tree_rss_bytes": 7532544,
+      "sampled_cpu_seconds": 0.078125,
+      "sampled_read_bytes": 54493170,
+      "sampled_write_bytes": 0
+    },
+    {
+      "seconds": 0.4594831,
+      "started_unix_seconds": 1791516689.753054,
+      "units": 1000,
+      "workload": "batch_integration_1000",
+      "profile_samples": 20,
+      "sampled_peak_tree_rss_bytes": 7974912,
+      "sampled_cpu_seconds": 0.421875,
+      "sampled_read_bytes": 0,
+      "sampled_write_bytes": 0
+    },
+    {
+      "seconds": 0.4563675,
+      "started_unix_seconds": 1791516690.2126532,
+      "units": 10001,
+      "workload": "chromatography_sg_chord",
+      "profile_samples": 20,
+      "sampled_peak_tree_rss_bytes": 10436608,
+      "sampled_cpu_seconds": 0.375,
+      "sampled_read_bytes": 0,
+      "sampled_write_bytes": 0
+    },
+    {
+      "seconds": 0.4170946,
+      "started_unix_seconds": 1791516690.6691134,
+      "units": 1000,
+      "workload": "calibration_1000_fits",
+      "profile_samples": 20,
+      "sampled_peak_tree_rss_bytes": 8933376,
+      "sampled_cpu_seconds": 0.359375,
+      "sampled_read_bytes": 0,
+      "sampled_write_bytes": 0
+    },
+    {
+      "seconds": 0.1973466,
+      "started_unix_seconds": 1791516691.0917957,
+      "units": 64,
+      "workload": "targeted_64_samples_calibration",
+      "profile_samples": 9,
+      "sampled_peak_tree_rss_bytes": 11468800,
+      "sampled_cpu_seconds": 0.109375,
+      "sampled_read_bytes": 16874044,
+      "sampled_write_bytes": 0
+    },
+    {
+      "seconds": 0.2605366,
+      "started_unix_seconds": 1791516691.3117106,
+      "units": 10000,
+      "workload": "library_import_10000",
+      "profile_samples": 12,
+      "sampled_peak_tree_rss_bytes": 44802048,
+      "sampled_cpu_seconds": 0.234375,
+      "sampled_read_bytes": 0,
+      "sampled_write_bytes": 0
+    },
+    {
+      "seconds": 0.3343865,
+      "started_unix_seconds": 1791516691.5723004,
+      "units": 10000,
+      "workload": "spectral_search_10000",
+      "profile_samples": 16,
+      "sampled_peak_tree_rss_bytes": 81113088,
+      "sampled_cpu_seconds": 0.3125,
+      "sampled_read_bytes": 0,
+      "sampled_write_bytes": 0
+    },
+    {
+      "seconds": 0.0172014,
+      "started_unix_seconds": 1791516691.9136734,
+      "units": 1000,
+      "workload": "project_register_large_source",
+      "profile_samples": 1,
+      "sampled_peak_tree_rss_bytes": 12550144,
+      "sampled_cpu_seconds": 0.0,
+      "sampled_read_bytes": 0,
+      "sampled_write_bytes": 0
+    },
+    {
+      "seconds": 1.5584756,
+      "started_unix_seconds": 1791516691.9309025,
+      "units": 100,
+      "workload": "project_100_commits",
+      "profile_samples": 66,
+      "sampled_peak_tree_rss_bytes": 12763136,
+      "sampled_cpu_seconds": 0.046875,
+      "sampled_read_bytes": 47227,
+      "sampled_write_bytes": 47822
+    },
+    {
+      "seconds": 0.0087775,
+      "started_unix_seconds": 1791516693.4894688,
+      "units": 100,
+      "workload": "project_open_100_revisions",
+      "profile_samples": 0
+    },
+    {
+      "seconds": 0.0105276,
+      "started_unix_seconds": 1791516693.4982734,
+      "units": 1,
+      "workload": "project_restore_revision",
+      "profile_samples": 1,
+      "sampled_peak_tree_rss_bytes": 12791808,
+      "sampled_cpu_seconds": 0.0,
+      "sampled_read_bytes": 0,
+      "sampled_write_bytes": 0
+    },
+    {
+      "seconds": 0.1408745,
+      "started_unix_seconds": 1791516693.5088573,
+      "units": 2000,
+      "workload": "concurrent_xic_2_readers",
+      "profile_samples": 6,
+      "sampled_peak_tree_rss_bytes": 13504512,
+      "sampled_cpu_seconds": 0.0,
+      "sampled_read_bytes": 162579064,
+      "sampled_write_bytes": 0
+    },
+    {
+      "seconds": 0.0001679,
+      "started_unix_seconds": 1791516693.722978,
+      "units": 1,
+      "workload": "running_xic_cancellation_latency",
+      "profile_samples": 0
+    }
+  ],
+  "limits": "CPU/I/O counters can miss final activity of short-lived children; RSS is sampled, includes fixture generation, and is not per-workload. OS file cache is uncontrolled; repeats are not an application cache. Test profile is not release."
+}

@@ -1,11 +1,8 @@
 //! Batch measurements are independent of exploratory viewer traces and measurements.
-use super::{
-    presets::{Preset, TraceSpec},
-    MzViewerApp,
-};
-use crate::processing::{self, ProcessingParams, ProcessingResult};
+use super::MzViewerApp;
+use crate::processing::{self, ProcessingResult};
 use eframe::egui::{self, Color32};
-use egui_plot::{Line, Plot, PlotPoints, Polygon, VLine};
+use egui_plot::{Line, PlotPoints, Polygon, VLine};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
@@ -16,246 +13,7 @@ use std::{
     },
 };
 
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Analyte {
-    expected_rt: f64,
-    rt_window: [f64; 2],
-    extraction: TraceSpec,
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Method {
-    version: u32,
-    name: String,
-    detection_smoothing: u8,
-    /// Minimum height above the local baseline, in instrument intensity units.
-    minimum_height: f64,
-    /// Fraction of peak height used to locate its boundaries.
-    boundary_fraction: f64,
-    analytes: Vec<Analyte>,
-}
-impl Default for Method {
-    fn default() -> Self {
-        Self {
-            version: 1,
-            name: "New quantification method".into(),
-            detection_smoothing: 2,
-            minimum_height: 0.0,
-            boundary_fraction: 0.05,
-            analytes: vec![new_analyte(1)],
-        }
-    }
-}
-fn new_analyte(n: usize) -> Analyte {
-    Analyte {
-        expected_rt: 5.0,
-        rt_window: [4.0, 6.0],
-        extraction: TraceSpec {
-            name: format!("Analyte {n}"),
-            acquisition: processing::AcquisitionMode::FS,
-            kind: "XIC".into(),
-            mass: Some(100.0),
-            ppm: 10.0,
-            smoothing: 0,
-            polarity: "positive".into(),
-            ms_level: None,
-            precursor_mz: None,
-            mz_range: None,
-        },
-    }
-}
-fn validate(method: &Method) -> Result<Vec<ProcessingParams>, String> {
-    if method.version != 1 || method.name.trim().is_empty() {
-        return Err("Use method version 1 and enter a method name.".into());
-    }
-    if method.detection_smoothing > 10
-        || !method.minimum_height.is_finite()
-        || method.minimum_height < 0.0
-        || !method.boundary_fraction.is_finite()
-        || !(0.0..=0.5).contains(&method.boundary_fraction)
-    {
-        return Err("Detection smoothing must be 0–10, minimum height nonnegative, and boundary fraction 0–0.5.".into());
-    }
-    let mut names = HashSet::new();
-    let mut params = Vec::new();
-    if method.analytes.is_empty() || method.analytes.len() > 64 {
-        return Err("A method needs 1–64 analytes.".into());
-    }
-    for a in &method.analytes {
-        let [lo, hi] = a.rt_window;
-        if !lo.is_finite()
-            || !hi.is_finite()
-            || lo < 0.0
-            || lo >= hi
-            || !a.expected_rt.is_finite()
-            || !(lo..=hi).contains(&a.expected_rt)
-        {
-            return Err(format!(
-                "{}: expected RT must be inside an increasing, nonnegative RT window (minutes).",
-                a.extraction.name
-            ));
-        }
-        if !names.insert(a.extraction.name.trim().to_owned()) {
-            return Err("Analyte names must be unique.".into());
-        }
-        if a.extraction.kind != "XIC" || a.extraction.mz_range.is_some() {
-            return Err("Batch quantification methods use XIC extraction; set kind = 'XIC' and omit mz_range.".into());
-        }
-        if a.extraction.smoothing != 0 {
-            return Err("Extraction smoothing must be 0: batch areas use unsmoothed data.".into());
-        }
-        // Validate each extraction independently: two analytes may share a mass but differ in RT.
-        let preset = Preset {
-            name: method.name.clone(),
-            rows: None,
-            columns: None,
-            version: 1,
-            overlay: false,
-            traces: vec![a.extraction.clone()],
-        };
-        let text = toml::to_string(&preset).map_err(|e| e.to_string())?;
-        let (_, specs) =
-            super::presets::parse(&text, &crate::validation::DataBounds::unrestricted())?;
-        params.push(specs[0].1.clone());
-    }
-    Ok(params)
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-struct Peak {
-    start: f64,
-    end: f64,
-    apex_rt: f64,
-    height: f64,
-    area: f64,
-}
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-enum Status {
-    Pending,
-    Cancelled,
-    Automatic,
-    Ambiguous,
-    Missing,
-    Manual,
-    Reviewed,
-    Failed,
-}
-#[derive(Clone, Serialize, Deserialize)]
-struct Measurement {
-    sample: String,
-    source: String,
-    run: String,
-    analyte: String,
-    params: ProcessingParams,
-    method: String,
-    trace: Vec<[f64; 2]>,
-    automatic: Option<Peak>,
-    peak: Option<Peak>,
-    automatic_status: Status,
-    status: Status,
-    diagnostic: String,
-}
-fn measure(trace: &[[f64; 2]], start: f64, end: f64) -> Result<Peak, String> {
-    if trace.len() < 3
-        || !start.is_finite()
-        || !end.is_finite()
-        || start >= end
-        || start < trace[0][0]
-        || end > trace[trace.len() - 1][0]
-    {
-        return Err("Integration bounds must be increasing and inside the measured trace.".into());
-    }
-    let apex = trace
-        .iter()
-        .filter(|p| p[0] >= start && p[0] <= end)
-        .max_by(|a, b| a[1].total_cmp(&b[1]))
-        .ok_or("The interval contains no scans.")?;
-    let area = processing::integrate_peak(trace, start, end).map_err(|e| e.to_string())?;
-    Ok(Peak {
-        start,
-        end,
-        apex_rt: apex[0],
-        height: apex[1],
-        area,
-    })
-}
-fn detect(trace: &[[f64; 2]], analyte: &Analyte, method: &Method) -> (Option<Peak>, Status) {
-    let window: Vec<_> = trace
-        .iter()
-        .copied()
-        .filter(|p| p[0] >= analyte.rt_window[0] && p[0] <= analyte.rt_window[1])
-        .collect();
-    if window.len() < 3 {
-        return (None, Status::Missing);
-    }
-    let smooth = processing::smooth_chromatogram(window.clone(), method.detection_smoothing)
-        .unwrap_or_else(|_| window.clone());
-    let floor = smooth.iter().map(|p| p[1]).fold(f64::INFINITY, f64::min);
-    let mut candidates = Vec::new();
-    for i in 1..smooth.len() - 1 {
-        if smooth[i][1] <= smooth[i - 1][1] || smooth[i][1] < smooth[i + 1][1] {
-            continue;
-        }
-        // Reject small ripples on an elevated baseline using local prominence.
-        let mut valley_left = i;
-        let mut valley_right = i;
-        while valley_left > 0 && smooth[valley_left - 1][1] <= smooth[valley_left][1] {
-            valley_left -= 1;
-        }
-        while valley_right + 1 < smooth.len()
-            && smooth[valley_right + 1][1] <= smooth[valley_right][1]
-        {
-            valley_right += 1;
-        }
-        let prominence = smooth[i][1] - smooth[valley_left][1].max(smooth[valley_right][1]);
-        if prominence <= method.minimum_height {
-            continue;
-        }
-        let left_threshold = smooth[valley_left][1]
-            + (smooth[i][1] - smooth[valley_left][1]) * method.boundary_fraction;
-        let right_threshold = smooth[valley_right][1]
-            + (smooth[i][1] - smooth[valley_right][1]) * method.boundary_fraction;
-        let clip_threshold = floor + (smooth[i][1] - floor) * method.boundary_fraction;
-        let mut left = i;
-        let mut right = i;
-        while left > valley_left && smooth[left][1] > left_threshold {
-            left -= 1;
-        }
-        while right < valley_right && smooth[right][1] > right_threshold {
-            right += 1;
-        }
-        if let Ok(peak) = measure(trace, smooth[left][0], smooth[right][0]) {
-            if peak.area > 0.0 {
-                candidates.push((
-                    i,
-                    peak,
-                    (left == 0 && smooth[left][1] > clip_threshold)
-                        || (right == smooth.len() - 1 && smooth[right][1] > clip_threshold),
-                ));
-            }
-        }
-    }
-    candidates.sort_by(|a, b| {
-        (smooth[a.0][0] - analyte.expected_rt)
-            .abs()
-            .total_cmp(&(smooth[b.0][0] - analyte.expected_rt).abs())
-    });
-    if let Some((_, peak, clipped)) = candidates.first() {
-        (
-            Some(peak.clone()),
-            if candidates.len() > 1 || *clipped {
-                Status::Ambiguous
-            } else {
-                Status::Automatic
-            },
-        )
-    } else {
-        (None, Status::Missing)
-    }
-}
-
+use crate::quant::{detect, measure, new_analyte, validate, Measurement, Method, Status};
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Batch {
@@ -274,7 +32,14 @@ enum MethodAction {
     Open,
     New,
 }
+#[derive(serde::Serialize, serde::Deserialize)]
 pub(super) struct QuantState {
+    targeted: super::targeted::UiState,
+    advanced_config: crate::chromatography::Config,
+    advanced_preview: Option<(usize, crate::chromatography::Analysis)>,
+    advanced_reason: String,
+    reference_shift: f64,
+    reference_bounds: Option<Vec<[f64; 2]>>,
     #[cfg(feature = "mcp")]
     remote_job_id: u64,
     pub active: bool,
@@ -285,7 +50,9 @@ pub(super) struct QuantState {
     seen_samples: HashSet<usize>,
     results: Vec<Measurement>,
     selected: Option<usize>,
+    #[serde(skip)]
     rx: Option<mpsc::Receiver<Event>>,
+    #[serde(skip)]
     cancel: Arc<AtomicBool>,
     total: usize,
     completed: usize,
@@ -298,11 +65,18 @@ pub(super) struct QuantState {
     batch_samples: Vec<(String, String)>,
     restore_samples: Option<Vec<(String, String)>>,
     pending_sources: Vec<PathBuf>,
+    #[serde(skip)]
     pending_method: Option<MethodAction>,
 }
 impl Default for QuantState {
     fn default() -> Self {
         Self {
+            targeted: super::targeted::UiState::default(),
+            advanced_config: crate::chromatography::Config::default(),
+            advanced_preview: None,
+            advanced_reason: String::new(),
+            reference_shift: 0.0,
+            reference_bounds: None,
             #[cfg(feature = "mcp")]
             remote_job_id: 0,
             active: false,
@@ -330,6 +104,59 @@ impl Default for QuantState {
         }
     }
 }
+impl QuantState {
+    pub(super) fn busy(&self) -> bool {
+        self.rx.is_some() || self.targeted.busy()
+    }
+    pub(super) fn latest_targeted(&self) -> Option<&crate::targeted::BatchResult> {
+        self.targeted.latest()
+    }
+    pub(super) fn verify_snapshot(value: serde_json::Value) -> Result<(), String> {
+        let state: Self = serde_json::from_value(value).map_err(|e| e.to_string())?;
+        if !state.results.is_empty() {
+            validate_batch(&Batch {
+                version: 1,
+                method: state.method.clone(),
+                results: state.results.clone(),
+                samples: state.batch_samples.clone(),
+            })?;
+        }
+        Ok(())
+    }
+}
+impl QuantState {
+    pub(super) fn retain_targeted(
+        &mut self,
+        batch: crate::targeted::BatchResult,
+    ) -> Result<(), String> {
+        self.targeted.retain(batch)
+    }
+    pub(super) fn retain_qc(&mut self, report: crate::qc::Report) -> Result<(), String> {
+        self.targeted.retain_qc(report)
+    }
+    pub(super) fn suggestion(&self) -> Option<crate::domain::Operation> {
+        self.targeted.suggestion()
+    }
+    pub(super) fn retain_chromatography(
+        &mut self,
+        analysis: crate::chromatography::Analysis,
+    ) -> Result<(), String> {
+        crate::chromatography::verify(&analysis).map_err(|e| e.to_string())?;
+        let result = self
+            .results
+            .iter_mut()
+            .find(|r| {
+                crate::chromatography::Trace::from_points(
+                    format!("{} / {}", r.sample, r.analyte),
+                    &r.trace,
+                ) == analysis.raw
+            })
+            .ok_or("Review trace is absent from batch results")?;
+        result.chromatography = Some(analysis);
+        self.advanced_preview = None;
+        Ok(())
+    }
+}
 impl Drop for QuantState {
     fn drop(&mut self) {
         self.cancel.store(true, Ordering::Relaxed);
@@ -339,6 +166,7 @@ fn signature(method: &Method) -> String {
     toml::to_string(method).unwrap_or_default()
 }
 fn select(q: &mut QuantState, i: usize) {
+    q.advanced_preview = None;
     q.selected = Some(i);
     if let Some(p) = &q.results[i].peak {
         q.start = p.start;
@@ -396,13 +224,23 @@ fn run(app: &mut MzViewerApp) -> Result<(), String> {
     let mut jobs = vec![];
     for (sample, source, path, lease) in samples {
         for (a, params) in method.analytes.iter().zip(&params) {
+            if q.results.iter().any(|r| {
+                r.source == source
+                    && r.sample == sample
+                    && r.analyte == a.extraction.name
+                    && r.chromatography.is_some()
+                    && r.method != snapshot
+            }) {
+                return Err("Saved advanced results use a different method. Save this batch and create a new batch to retain its history.".into());
+            }
             // Retain corrections only for exactly the same source, run and method.
             if q.results.iter().any(|r| {
                 r.source == source
                     && r.sample == sample
                     && r.analyte == a.extraction.name
                     && r.method == snapshot
-                    && matches!(r.status, Status::Manual | Status::Reviewed)
+                    && (matches!(r.status, Status::Manual | Status::Reviewed)
+                        || r.chromatography.is_some())
             }) {
                 continue;
             }
@@ -420,6 +258,7 @@ fn run(app: &mut MzViewerApp) -> Result<(), String> {
     q.completed = 0;
     for (sample, source, path, _, a, params) in &jobs {
         let pending = Measurement {
+            chromatography: None,
             sample: sample.clone(),
             source: source.clone(),
             run: path.clone(),
@@ -452,6 +291,7 @@ fn run(app: &mut MzViewerApp) -> Result<(), String> {
                 break;
             }
             let mut result = Measurement {
+                chromatography: None,
                 sample,
                 source,
                 run: path.clone(),
@@ -485,6 +325,7 @@ fn run(app: &mut MzViewerApp) -> Result<(), String> {
     Ok(())
 }
 pub(super) fn poll(app: &mut MzViewerApp, ctx: &egui::Context) {
+    super::targeted::poll(&mut app.quant.targeted, ctx);
     let q = &mut app.quant;
     loop {
         let event = match q.rx.as_ref().map(|rx| rx.try_recv()) {
@@ -723,6 +564,17 @@ fn validate_batch(batch: &Batch) -> Result<(), String> {
     validate(&batch.method)?;
     let mut keys = HashSet::new();
     for r in &batch.results {
+        if let Some(a) = &r.chromatography {
+            crate::chromatography::verify(a).map_err(|e| e.to_string())?;
+            if a.raw
+                != crate::chromatography::Trace::from_points(
+                    format!("{} / {}", r.sample, r.analyte),
+                    &r.trace,
+                )
+            {
+                return Err("Advanced analysis differs from stored trace".into());
+            }
+        }
         let method: Method = toml::from_str(&r.method).map_err(|e| e.to_string())?;
         let params = validate(&method)?;
         let i = method
@@ -748,7 +600,7 @@ fn validate_batch(batch: &Batch) -> Result<(), String> {
             || !keys.insert((&r.source, &r.sample, &r.analyte))
             || r.trace
                 .iter()
-                .any(|p| !p[0].is_finite() || !p[1].is_finite() || p[0] < 0.0 || p[1] < 0.0)
+                .any(|p| !p[0].is_finite() || !p[1].is_finite() || p[0] < 0.0)
             || r.trace.windows(2).any(|w| w[0][0] >= w[1][0])
         {
             return Err("Invalid or duplicate result data in batch.".into());
@@ -875,7 +727,9 @@ pub(super) fn show(app: &mut MzViewerApp, ctx: &egui::Context) {
         }
     }
     egui::CentralPanel::default().show(ctx, |ui| {
-        ui.heading("Batch Quantification");
+        egui::ScrollArea::vertical().id_salt("quantification_content").show(ui, |ui| {
+        ui.heading("Quantification and batch QC");
+        ui.label("Select samples → define an extraction method → run and review peaks → calibrate and assess QC → export.");
         ui.horizontal_wrapped(|ui| {
             if ui.button("Edit method…").clicked() {
                 q.method_open = true;
@@ -966,25 +820,36 @@ pub(super) fn show(app: &mut MzViewerApp, ctx: &egui::Context) {
             );
         }
         ui.separator();
-        results_table(&mut q, ui);
-        ui.separator();
-        review(&mut q, ui);
+        let stage_id=egui::Id::new("quantification_stage");
+        let mut stage=ui.ctx().data(|d|d.get_temp::<usize>(stage_id)).unwrap_or(0);
+        ui.horizontal_wrapped(|ui|{ui.selectable_value(&mut stage,0,"Areas and peak review");ui.selectable_value(&mut stage,1,"Calibration and concentrations");ui.selectable_value(&mut stage,2,"Batch QC and validation");});
+        ui.ctx().data_mut(|d|d.insert_temp(stage_id,stage));
+        match stage {
+            1=>{let samples=if q.batch_samples.is_empty(){let mut samples:Vec<_>=app.files.values().filter(|f|!f.is_loading&&q.selected_samples.contains(&f.id)).map(|f|(f.path.clone(),f.name.clone())).collect();samples.sort();samples}else{q.batch_samples.clone()};super::targeted::panel(&mut q.targeted,&q.method,&samples,ui);},
+            2=>q.targeted.qc_panel(ui),
+            _=>{results_table(&mut q,ui);ui.separator();review(&mut q,ui);}
+        }
+        super::workbench::scroll_new_focus(ui);
+        });
     });
     if q.method_open {
         let mut open = true;
         egui::Window::new("Batch quantification method")
+            .max_height((ctx.content_rect().height() - 60.0).max(120.0))
+            .vscroll(true)
             .open(&mut open)
             .default_size(egui::vec2(1100.0, 440.0))
             .resizable(true)
             .show(ctx, |ui| {
                 ui.add_enabled_ui(q.rx.is_none() && q.pending_method.is_none(), |ui| {
                     method_editor(&mut q, ui);
+                    super::workbench::scroll_new_focus(ui);
                 });
             });
         q.method_open = open;
     }
     if q.confirm_replace {
-        egui::Window::new("Open another batch?").collapsible(false).show(ctx, |ui| {
+        egui::Window::new("Open another batch?").max_height((ctx.content_rect().height()-60.0).max(120.0)).vscroll(true).collapsible(false).show(ctx, |ui| {
             ui.label("Opening a batch replaces the current method and results. Save this batch first to keep your corrections.");
             if ui.button("Save current batch…").clicked() { if let Err(e)=batch_file(&mut q,true) { q.message=e; } }
             if ui.button("Choose batch to open…").clicked() { q.confirm_replace=false; if let Err(e)=batch_file(&mut q,false) { q.message=e; } }
@@ -993,6 +858,8 @@ pub(super) fn show(app: &mut MzViewerApp, ctx: &egui::Context) {
     }
     if let Some(action) = q.pending_method {
         egui::Window::new("Unsaved method changes")
+            .max_height((ctx.content_rect().height() - 60.0).max(120.0))
+            .vscroll(true)
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
@@ -1125,71 +992,41 @@ fn results_table(q: &mut QuantState, ui: &mut egui::Ui) {
         ui.label("Define your method, select samples, then run the batch. Click an area to review its peak.");
         return;
     }
+    use super::table::{Cell, Row};
     let current = signature(&q.method);
-    let mut samples: Vec<_> = q
+    let rows: Vec<_> = q
         .results
         .iter()
-        .map(|r| (r.source.clone(), r.sample.clone()))
+        .enumerate()
+        .map(|(i, r)| Row {
+            key: format!("{i}/{}", r.source),
+            cells: vec![
+                Cell::text(&r.sample),
+                Cell::text(&r.analyte),
+                Cell::number(r.peak.as_ref().map(|p| p.area)),
+                Cell::text(if r.method != current {
+                    "Recalculate".into()
+                } else {
+                    format!("{:?}", r.status)
+                }),
+                Cell::text(&r.diagnostic),
+            ],
+        })
         .collect();
-    samples.sort();
-    samples.dedup();
-    let mut analytes: Vec<_> = q
-        .method
-        .analytes
-        .iter()
-        .map(|a| a.extraction.name.clone())
-        .collect();
-    for r in &q.results {
-        if !analytes.contains(&r.analyte) {
-            analytes.push(r.analyte.clone());
-        }
-    }
-    let mut clicked = None;
-    egui::ScrollArea::both().max_height(220.0).show(ui, |ui| {
-        egui::Grid::new("quant_result_matrix")
-            .striped(true)
-            .show(ui, |ui| {
-                ui.strong("Sample / area");
-                for a in &analytes {
-                    ui.strong(a);
-                }
-                ui.end_row();
-                for (source, sample) in samples {
-                    ui.label(&sample).on_hover_text(&source);
-                    for a in &analytes {
-                        if let Some(i) = q.results.iter().position(|r| {
-                            r.source == source && r.sample == sample && r.analyte == *a
-                        }) {
-                            let r = &q.results[i];
-                            let stale = r.method != current;
-                            let label = format!(
-                                "{} · {}",
-                                r.peak
-                                    .as_ref()
-                                    .map(|p| format!("{:.3}", p.area))
-                                    .unwrap_or_else(|| "—".into()),
-                                if stale {
-                                    "Recalculate".into()
-                                } else {
-                                    format!("{:?}", r.status)
-                                }
-                            );
-                            if ui
-                                .selectable_label(q.selected == Some(i), label)
-                                .on_hover_text(&r.diagnostic)
-                                .clicked()
-                            {
-                                clicked = Some(i);
-                            }
-                        } else {
-                            ui.label("Pending");
-                        }
-                    }
-                    ui.end_row();
-                }
-            });
-    });
-    if let Some(i) = clicked {
+    let selected = q.selected.and_then(|i| rows.get(i)).map(|r| r.key.as_str());
+    if let Some(i) = super::table::show(
+        ui,
+        "quant_result_matrix",
+        &[
+            "Sample",
+            "Analyte",
+            "Area (intensity*min)",
+            "State",
+            "Diagnostic",
+        ],
+        &rows,
+        selected,
+    ) {
         select(q, i);
     }
 }
@@ -1198,6 +1035,7 @@ fn review(q: &mut QuantState, ui: &mut egui::Ui) {
         ui.small("Select a result to inspect or adjust its integration.");
         return;
     };
+    advanced_review(q, i, ui);
     let r = &q.results[i];
     ui.strong(format!("{} / {}", r.sample, r.analyte));
     if r.trace.is_empty() {
@@ -1259,10 +1097,16 @@ fn review(q: &mut QuantState, ui: &mut egui::Ui) {
     });
     let mut mouse = None;
     let mut boundaries = None;
-    let plot = Plot::new(("quant_review", i))
+    super::plot_controls::export(
+        ui,
+        &q.results[i].trace,
+        "RT (min)",
+        "Instrument intensity (unsmoothed)",
+    );
+    let plot = super::plot_controls::plot(ui, ("quant_review", i))
         .height(ui.available_height().max(100.0))
         .x_axis_label("Retention time (min)")
-        .y_axis_label("Intensity")
+        .y_axis_label("Intensity (instrument units)")
         .allow_boxed_zoom(false)
         .allow_drag(false);
     let response = plot.show(ui, |plot_ui| {
@@ -1490,6 +1334,119 @@ pub(super) fn remote_reset(app: &mut MzViewerApp, index: usize) -> Result<(), St
     Ok(())
 }
 
+fn advanced_review(q: &mut QuantState, i: usize, ui: &mut egui::Ui) {
+    use crate::chromatography::{self as c, Baseline, Correction, SavitzkyGolay};
+    ui.collapsing("Advanced chromatographic processing", |ui| {
+        ui.small("RT and widths: minutes. Areas: instrument intensity × minute. Legacy results remain separately available below.");
+        let busy=q.rx.is_some();
+        let locked=q.results[i].chromatography.is_some();
+        if locked { ui.small("Saved processing configuration is immutable. Bounds and review revisions remain editable."); }
+        let mut shown_config=q.results[i].chromatography.as_ref().map(|a|a.config.clone()).unwrap_or_else(||q.advanced_config.clone());
+        ui.add_enabled_ui(!busy && !locked, |ui| {
+            let cfg=&mut shown_config;
+            let mut sg=cfg.smoothing.is_some();
+            if ui.checkbox(&mut sg,"Savitzky–Golay smoothing").changed() { cfg.smoothing=sg.then_some(SavitzkyGolay {window:7,degree:2}); }
+            if let Some(s)=&mut cfg.smoothing {ui.horizontal(|ui| {ui.label("Window (odd samples)");ui.add(egui::DragValue::new(&mut s.window).range(3..=501)); ui.label("Degree");ui.add(egui::DragValue::new(&mut s.degree).range(0..=5));});}
+            let mut model=match cfg.baseline {Baseline::None=>0,Baseline::EndpointChord=>1,Baseline::AsymmetricLeastSquares{..}=>2,Baseline::RollingQuantile{..}=>3};
+            egui::ComboBox::from_id_salt("advanced_baseline").selected_text(["None","Endpoint chord","Asymmetric least squares","Rolling quantile"][model]).show_ui(ui,|ui| {for (j,label) in ["None","Endpoint chord","Asymmetric least squares","Rolling quantile"].iter().enumerate() {ui.selectable_value(&mut model,j,*label);}});
+            let old=match cfg.baseline {Baseline::None=>0,Baseline::EndpointChord=>1,Baseline::AsymmetricLeastSquares{..}=>2,Baseline::RollingQuantile{..}=>3};
+            if old!=model {cfg.baseline=match model {0=>Baseline::None,1=>Baseline::EndpointChord,2=>Baseline::AsymmetricLeastSquares {lambda:1e5,asymmetry:0.01,iterations:10},_=>Baseline::RollingQuantile{window:101,quantile:0.1}};}
+            match &mut cfg.baseline {
+                Baseline::AsymmetricLeastSquares{lambda,asymmetry,iterations}=> {ui.horizontal(|ui| {ui.label("Î»");ui.add(egui::DragValue::new(lambda).speed(100.0));ui.label("Asymmetry");ui.add(egui::DragValue::new(asymmetry).speed(0.001));ui.label("Iterations");ui.add(egui::DragValue::new(iterations).range(1..=100));});}
+                Baseline::RollingQuantile{window,quantile}=> {ui.horizontal(|ui| {ui.label("Window (odd samples)");ui.add(egui::DragValue::new(window));ui.label("Quantile");ui.add(egui::DragValue::new(quantile).speed(0.01));});}
+                _=>()
+            }
+            for (label,value) in [("Minimum height",&mut cfg.minimum_height),("Minimum prominence",&mut cfg.minimum_prominence),("Minimum SNR",&mut cfg.minimum_snr),("Minimum FWHM (min)",&mut cfg.minimum_width_minutes),("Maximum FWHM (min)",&mut cfg.maximum_width_minutes),("Boundary fraction",&mut cfg.boundary_fraction)] {ui.horizontal(|ui| {ui.label(label);ui.add(egui::DragValue::new(value).speed(0.01));});}
+            let mut gap=cfg.maximum_gap_minutes.is_some();if ui.checkbox(&mut gap,"Split acquisition gaps").changed() {cfg.maximum_gap_minutes=gap.then_some(0.1);}
+            if let Some(g)=&mut cfg.maximum_gap_minutes {ui.horizontal(|ui| {ui.label("Maximum gap (min)");ui.add(egui::DragValue::new(g).speed(0.01));});}
+            ui.checkbox(&mut cfg.integrate_smoothed,"Integrate smoothed signal (default uses raw corrected signal)");
+        });
+        let batch_config=shown_config.clone();
+        if !locked {q.advanced_config=shown_config;}
+        ui.add_enabled_ui(!busy, |ui| {
+            if !locked && ui.button("Preview processing").clicked() {
+                match c::process(c::Trace::from_points(format!("{} / {}",q.results[i].sample,q.results[i].analyte),&q.results[i].trace),q.advanced_config.clone()) {Ok(a)=>q.advanced_preview=Some((i,a)),Err(e)=>q.message=e.to_string()}
+            }
+            if ui.button("Process unprocessed batch traces").clicked() {
+                // Compute all proposals before applying any: an invalid trace
+                // cannot leave a partly overwritten batch.
+                let proposals: Result<Vec<_>,_>=q.results.iter().enumerate().filter(|(_,r)| r.chromatography.is_none() && !r.trace.is_empty()).map(|(j,r)| c::process(c::Trace::from_points(format!("{} / {}",r.sample,r.analyte),&r.trace),batch_config.clone()).map(|a|(j,a))).collect();
+                match proposals {Ok(values)=>{for (j,a) in values {q.results[j].chromatography=Some(a);}q.advanced_preview=None;q.message="Advanced batch processing saved in memory. Save batch to retain signal stages and history.".into();},Err(e)=>q.message=e.to_string()}
+            }
+            ui.horizontal(|ui| {ui.label("Correction / review reason");ui.text_edit_singleline(&mut q.advanced_reason);});
+            if let Some(a)=&q.results[i].chromatography {
+                let mut correction=None;
+                ui.horizontal_wrapped(|ui| {
+                    if ui.button("Preview manual bounds").clicked() {correction=Some(Correction::Manual{intervals:vec![[q.start,q.end]],reason:q.advanced_reason.clone()});}
+                    if ui.button("Copy reference bounds").clicked() {q.reference_bounds=Some(a.peaks().iter().map(|p|[p.start_minutes,p.end_minutes]).collect());}
+                    ui.label("Reference RT shift (min)");ui.add(egui::DragValue::new(&mut q.reference_shift).speed(0.01));
+                    if ui.add_enabled(q.reference_bounds.is_some(),egui::Button::new("Preview reference bounds")).clicked() {correction=Some(Correction::Reference{intervals:q.reference_bounds.clone().unwrap_or_default(),shift_minutes:q.reference_shift,reason:q.advanced_reason.clone()});}
+                    if ui.button("Preview restore automatic").clicked() {correction=Some(Correction::Restore{revision:0,reason:q.advanced_reason.clone()});}
+                    if ui.add_enabled(!a.revisions.is_empty(),egui::Button::new("Preview undo")).clicked() {correction=Some(Correction::Restore{revision:a.revisions.len().saturating_sub(1),reason:q.advanced_reason.clone()});}
+                    if ui.button("Preview accept").clicked() {correction=Some(Correction::Accept{reason:q.advanced_reason.clone()});}
+                });
+                if let Some(correction)=correction {match c::revise(a,a.revisions.len(),correction,"gui",true) {Ok(p)=>q.advanced_preview=Some((i,p)),Err(e)=>q.message=e.to_string()}}
+            }
+            if q.advanced_preview.as_ref().is_some_and(|(j,_)| *j==i) && ui.button("Apply advanced preview").clicked() {
+                let proposed=q.advanced_preview.as_ref().unwrap().1.clone();
+                let result=if let Some(original)=&q.results[i].chromatography {
+                    let correction=proposed.revisions.last().unwrap().correction.clone();
+                    c::revise(original,proposed.revisions.len()-1,correction,"gui",false)
+                } else {Ok(proposed)};
+                match result {Ok(a)=>{q.results[i].chromatography=Some(a);q.advanced_preview=None;q.message="Advanced result applied; save batch to preserve history.".into();},Err(e)=>q.message=e.to_string()}
+            }
+            if ui.button("Export advanced peaks CSV…").clicked() {
+                if let Some(path)=rfd::FileDialog::new().add_filter("CSV",&["csv"]).save_file() {
+                    use std::io::Write;
+                    let analyses:Vec<_>=q.results.iter().filter_map(|r|r.chromatography.clone()).collect();
+                    match std::fs::OpenOptions::new().write(true).create_new(true).open(path).and_then(|mut f| f.write_all(c::peaks_csv(&analyses).as_bytes())) {Ok(())=>q.message="Advanced peaks exported.".into(),Err(e)=>q.message=e.to_string()}
+                }
+            }
+        });
+        let visible=q.advanced_preview.as_ref().filter(|(j,_)|*j==i).map(|(_,a)|a).or(q.results[i].chromatography.as_ref());
+        if let Some(a)=visible {
+            if q.advanced_preview.as_ref().is_some_and(|(j,_)|*j==i) { ui.colored_label(ui.visuals().warn_fg_color,"Non-destructive preview - apply explicitly to record this result"); }
+            for warning in &a.warnings {ui.small(warning);}
+            ui.small(format!("Revision {}; {} peaks; reviewed: {}",a.revisions.len(),a.peaks().len(),a.revisions.last().is_some_and(|r|r.reviewed)));
+            let series:Vec<_>=a.segments.iter().enumerate().flat_map(|(index,segment)|[("Raw",&segment.raw),("Smoothed",&segment.smoothed),("Baseline",&segment.baseline),("Corrected / integrated",&segment.integration_signal)].into_iter().map(move|(name,values)|(format!("{name} · segment {}",index+1),segment.rt_minutes.iter().zip(values).map(|(x,y)|[*x,*y]).collect()))).collect();
+            super::plot_controls::export_series(ui,&series,"RT (min)","Instrument intensity");
+            super::plot_controls::plot(ui,("advanced_signal_stages",i)).height(180.0).x_axis_label("RT (min)").y_axis_label("Instrument intensity").show(ui,|p| {
+                for s in &a.segments {
+                    for (name,y,color) in [("Raw",&s.raw,super::plot_controls::scientific_color(p.ctx().style().visuals.dark_mode,0)),("Smoothed",&s.smoothed,super::plot_controls::scientific_color(p.ctx().style().visuals.dark_mode,1)),("Baseline",&s.baseline,super::plot_controls::scientific_color(p.ctx().style().visuals.dark_mode,2)),("Corrected / integrated",&s.integration_signal,super::plot_controls::scientific_color(p.ctx().style().visuals.dark_mode,3))] {
+                        let points:Vec<_>=s.rt_minutes.iter().zip(y).map(|(x,y)|[*x,*y]).collect();p.line(Line::new(name,processing::decimate_for_display(&points)).color(color));
+                    }
+                }
+                for peak in a.peaks() {p.vline(VLine::new("Advanced start",peak.start_minutes));p.vline(VLine::new("Advanced end",peak.end_minutes));}
+            });
+            for peak in a.peaks() {ui.label(format!("{:.4}–{:.4} min | apex {:.4} | FWHM {} min | area {:.6e} | {}",peak.start_minutes,peak.end_minutes,peak.apex_minutes,peak.fwhm_minutes.map(|v|format!("{v:.4}")).unwrap_or_else(||"missing".into()),peak.area_intensity_minutes,peak.flags.join(", ")));}
+        }
+    });
+}
+
+impl QuantState {
+    pub(super) fn project_selection(
+        &self,
+        files: &std::collections::HashMap<super::state::FileId, super::state::OpenFile>,
+    ) -> Vec<(String, String)> {
+        let mut selected: Vec<_> = self
+            .selected_samples
+            .iter()
+            .filter_map(|id| files.get(id))
+            .map(|file| {
+                (
+                    file.cache
+                        .source_path
+                        .clone()
+                        .unwrap_or_else(|| file.path.clone()),
+                    file.name.clone(),
+                )
+            })
+            .collect();
+        selected.sort();
+        selected
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1518,6 +1475,7 @@ mod tests {
         let t = trace();
         let (peak, status) = detect(&t, &m.analytes[0], &m);
         Measurement {
+            chromatography: None,
             sample: "sample, \"A\"".into(),
             source: "source.mzML".into(),
             run: "source.mzML".into(),
@@ -1720,6 +1678,176 @@ mod tests {
         let mut restored: Batch = serde_json::from_slice(&bytes).unwrap();
         restored.results[0].trace[2][0] = 0.0;
         assert!(validate_batch(&restored).is_err());
+    }
+    #[test]
+    fn advanced_batch_history_roundtrip_and_corruption_rejection() {
+        use crate::chromatography::{self as c, Correction};
+        let mut r = result();
+        let a = c::process(
+            c::Trace::from_points(format!("{} / {}", r.sample, r.analyte), &r.trace),
+            c::Config {
+                smoothing: None,
+                baseline: c::Baseline::None,
+                minimum_snr: 0.0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        r.chromatography = Some(
+            c::revise(
+                &a,
+                0,
+                Correction::Manual {
+                    intervals: vec![[0.75, 2.6]],
+                    reason: "GUI bounds".into(),
+                },
+                "gui",
+                false,
+            )
+            .unwrap(),
+        );
+        let batch = Batch {
+            version: 1,
+            method: method(),
+            results: vec![r],
+            samples: vec![],
+        };
+        let bytes = serde_json::to_vec(&batch).unwrap();
+        let mut restored: Batch = serde_json::from_slice(&bytes).unwrap();
+        validate_batch(&restored).unwrap();
+        assert_eq!(
+            restored.results[0].chromatography,
+            batch.results[0].chromatography
+        );
+        restored.results[0]
+            .chromatography
+            .as_mut()
+            .unwrap()
+            .revisions[0]
+            .peaks[0]
+            .area_intensity_minutes += 1.0;
+        assert!(validate_batch(&restored).is_err());
+    }
+    #[test]
+    fn advanced_controls_preview_apply_and_review_through_egui() {
+        fn frame(
+            q: &mut QuantState,
+            ctx: &egui::Context,
+            events: Vec<egui::Event>,
+        ) -> egui::FullOutput {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 1400.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        egui::ScrollArea::vertical().show(ui, |ui| advanced_review(q, 0, ui));
+                    });
+                },
+            )
+        }
+        fn click(q: &mut QuantState, ctx: &egui::Context, label: &str) -> egui::FullOutput {
+            let output = frame(q, ctx, vec![]);
+            let pos = super::super::test_render::text_center(&output.shapes, label)
+                .unwrap_or_else(|| panic!("Missing control {label}"));
+            frame(
+                q,
+                ctx,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: Default::default(),
+                    },
+                ],
+            );
+            frame(
+                q,
+                ctx,
+                vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: Default::default(),
+                }],
+            )
+        }
+        let mut q = QuantState::default();
+        q.results = vec![result()];
+        q.advanced_config = crate::chromatography::Config {
+            smoothing: None,
+            baseline: crate::chromatography::Baseline::None,
+            minimum_snr: 0.0,
+            ..Default::default()
+        };
+        select(&mut q, 0);
+        let ctx = egui::Context::default();
+        super::super::workbench::configure(&ctx, false);
+        let mut frames = vec![frame(&mut q, &ctx, vec![])];
+        frames.push(click(&mut q, &ctx, "Advanced chromatographic processing"));
+        // Settle the collapsing animation before locating controls.
+        ctx.style_mut(|s| s.animation_time = 0.0);
+        frames.push(frame(&mut q, &ctx, vec![]));
+        frames.push(click(&mut q, &ctx, "Preview processing"));
+        assert!(q.results[0].chromatography.is_none());
+        assert!(q.advanced_preview.is_some());
+        frames.push(click(&mut q, &ctx, "Apply advanced preview"));
+        assert!(q.results[0].chromatography.is_some());
+        q.start = 0.75;
+        q.end = 2.6;
+        q.advanced_reason = "Software UI verification".into();
+        frames.push(click(&mut q, &ctx, "Preview manual bounds"));
+        assert!(q.results[0]
+            .chromatography
+            .as_ref()
+            .unwrap()
+            .revisions
+            .is_empty());
+        frames.push(click(&mut q, &ctx, "Apply advanced preview"));
+        assert_eq!(
+            q.results[0]
+                .chromatography
+                .as_ref()
+                .unwrap()
+                .revisions
+                .len(),
+            1
+        );
+        frames.push(click(&mut q, &ctx, "Preview accept"));
+        frames.push(click(&mut q, &ctx, "Apply advanced preview"));
+        assert!(q.results[0].chromatography.as_ref().unwrap().revisions[1].reviewed);
+        let mut second = result();
+        second.sample = "Second sample".into();
+        q.results.push(second);
+        // A draft from another row must not override the saved configuration
+        // currently displayed to the user when processing unprocessed rows.
+        q.advanced_config.baseline = crate::chromatography::Baseline::EndpointChord;
+        frames.push(click(&mut q, &ctx, "Process unprocessed batch traces"));
+        assert_eq!(
+            q.results[1]
+                .chromatography
+                .as_ref()
+                .unwrap()
+                .config
+                .baseline,
+            crate::chromatography::Baseline::None
+        );
+        frames.push(frame(&mut q, &ctx, vec![]));
+        if std::env::var_os("CHROMASCOPE_QUANT_PREVIEW").is_some() {
+            super::super::test_render::save(
+                &ctx,
+                frames,
+                &PathBuf::from("target/chromatography-review.png"),
+                egui::vec2(1440.0, 1400.0),
+            );
+        }
     }
     #[test]
     fn csv_quotes_names_keeps_missing_areas_blank_and_marks_stale_methods() {

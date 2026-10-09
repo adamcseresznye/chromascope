@@ -1,0 +1,8 @@
+[
+  {"id":"sample-a","source":"sample-a.mzML","role":"sample","metadata":{"group":"A","injection_order":1}},
+  {"id":"sample-b","source":"sample-b.mzML","role":"sample","metadata":{"group":"B","injection_order":2}},
+  {"id":"blank","source":"blank.mzML","role":"blank","metadata":{"injection_order":3}},
+  {"id":"qc-1","source":"qc-1.mzML","role":"qc","metadata":{"injection_order":4}},
+  {"id":"qc-2","source":"qc-2.mzML","role":"qc","metadata":{"injection_order":5}},
+  {"id":"qc-3","source":"qc-3.mzML","role":"qc","metadata":{"injection_order":6}}
+]

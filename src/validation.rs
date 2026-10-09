@@ -11,7 +11,9 @@ use mzdata::spectrum::ScanPolarity;
 ///
 /// Extracted during file opening to enable intelligent validation
 /// and user feedback about acceptable parameter ranges.
-#[derive(Debug, Clone, Copy)]
+#[cfg_attr(feature = "mcp-headless", derive(rmcp::schemars::JsonSchema))]
+#[cfg_attr(feature = "mcp-headless", schemars(crate = "rmcp::schemars"))]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy)]
 pub struct DataBounds {
     /// Minimum m/z value in the file (across all spectra)
     pub min_mz: f64,
@@ -49,7 +51,7 @@ impl DataBounds {
     /// * `Ok(())` - If mass is within bounds
     /// * `Err(ChromascopeError::MassOutOfRange)` - If mass is outside the file's range
     pub fn validate_mass(&self, mass: f64) -> Result<()> {
-        if mass <= 0.0 {
+        if !mass.is_finite() || mass <= 0.0 {
             return Err(ChromascopeError::InvalidMass(mass));
         }
         if mass < self.min_mz || mass > self.max_mz {
@@ -80,7 +82,7 @@ impl DataBounds {
         }
 
         // Window should be smaller than 10% of data points
-        let max_reasonable_window = (self.scan_count / 10).max(3) as u8;
+        let max_reasonable_window = (self.scan_count / 10).clamp(3, 10) as u8;
         if window > max_reasonable_window {
             return Err(ChromascopeError::SmoothingWindowTooLarge {
                 window,
@@ -122,12 +124,41 @@ impl DataBounds {
 /// let invalid = XicParams::new(2000.0, ScanPolarity::Positive, 10.0, &bounds);
 /// assert!(invalid.is_err());
 /// ```
-#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "mcp-headless", derive(rmcp::schemars::JsonSchema))]
+#[cfg_attr(feature = "mcp-headless", schemars(crate = "rmcp::schemars"))]
+#[derive(serde::Serialize, Debug, Clone, Copy, PartialEq)]
 pub struct XicParams {
     mass: f64,
     mass_tolerance: f64,
+    #[cfg_attr(
+        feature = "mcp-headless",
+        schemars(with = "crate::processing::PolaritySchema")
+    )]
     #[serde(with = "crate::processing::polarity_serde")]
     polarity: ScanPolarity,
+}
+
+impl<'de> serde::Deserialize<'de> for XicParams {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Wire {
+            mass: f64,
+            mass_tolerance: f64,
+            #[serde(with = "crate::processing::polarity_serde")]
+            polarity: ScanPolarity,
+        }
+        let w = Wire::deserialize(deserializer)?;
+        XicParams::new(
+            w.mass,
+            w.polarity,
+            w.mass_tolerance,
+            &DataBounds::unrestricted(),
+        )
+        .map_err(serde::de::Error::custom)
+    }
 }
 
 impl XicParams {

@@ -1,0 +1,113 @@
+{
+  "command": [
+    "C:\\Users\\s0212777\\OneDrive - Universiteit Antwerpen\\Bureaublad\\projects\\chromascope\\target\\debug\\deps\\performance-a2056ce861a75ce2.exe",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+  ],
+  "scans": 1000,
+  "exit_code": 0,
+  "wall_seconds": 4.34249009998166,
+  "sample_interval_seconds": 0.01,
+  "sampled_peak_tree_rss_bytes": 81080320,
+  "last_observed_process_counters": {
+    "28548": {
+      "cpu_seconds": 2.421875,
+      "read_bytes": 615382912,
+      "write_bytes": 23242523
+    }
+  },
+  "workloads": [
+    {
+      "seconds": 0.2138879,
+      "units": 1000,
+      "workload": "source_sha256"
+    },
+    {
+      "seconds": 0.0696055,
+      "units": 1000,
+      "workload": "open_bounds"
+    },
+    {
+      "seconds": 0.0633256,
+      "units": 1000,
+      "workload": "xic_repeat_0"
+    },
+    {
+      "seconds": 0.0670864,
+      "units": 1000,
+      "workload": "xic_repeat_1"
+    },
+    {
+      "seconds": 0.0620717,
+      "units": 1000,
+      "workload": "xic_repeat_2"
+    },
+    {
+      "seconds": 0.0799567,
+      "units": 1000,
+      "workload": "tic_missing_metadata"
+    },
+    {
+      "seconds": 0.0877134,
+      "units": 1000,
+      "workload": "bpc_missing_metadata"
+    },
+    {
+      "seconds": 0.419365,
+      "units": 1000,
+      "workload": "batch_integration_1000"
+    },
+    {
+      "seconds": 0.4311053,
+      "units": 10001,
+      "workload": "chromatography_sg_chord"
+    },
+    {
+      "seconds": 0.405729,
+      "units": 1000,
+      "workload": "calibration_1000_fits"
+    },
+    {
+      "seconds": 0.1919802,
+      "units": 64,
+      "workload": "targeted_64_samples_calibration"
+    },
+    {
+      "seconds": 0.2280104,
+      "units": 10000,
+      "workload": "library_import_10000"
+    },
+    {
+      "seconds": 0.3115227,
+      "units": 10000,
+      "workload": "spectral_search_10000"
+    },
+    {
+      "seconds": 0.0166266,
+      "units": 1000,
+      "workload": "project_register_large_source"
+    },
+    {
+      "seconds": 1.0247225,
+      "units": 100,
+      "workload": "project_100_commits"
+    },
+    {
+      "seconds": 0.0089144,
+      "units": 100,
+      "workload": "project_open_100_revisions"
+    },
+    {
+      "seconds": 0.0042065,
+      "units": 1,
+      "workload": "project_restore_revision"
+    },
+    {
+      "seconds": 0.1340972,
+      "units": 2000,
+      "workload": "concurrent_xic_2_readers"
+    }
+  ],
+  "limits": "CPU/I/O counters can miss final activity of short-lived children; RSS is sampled, includes fixture generation, and is not per-workload. OS file cache is uncontrolled; repeats are not an application cache. Test profile is not release."
+}

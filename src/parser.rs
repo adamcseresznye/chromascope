@@ -22,13 +22,132 @@ use log::{debug, error, info, trace, warn};
 use mzdata::io::DetailLevel;
 use mzdata::spectrum::ScanPolarity;
 use mzdata::{prelude::*, MZReader};
-use rayon::prelude::*;
 use std::cmp::Ordering;
 use std::fs::File;
 use std::path::PathBuf;
 
+enum DataReader {
+    Plain(Box<MZReader<File>>),
+    Gzip(Box<MZReader<mzdata::io::RestartableGzDecoder<std::io::BufReader<File>>>>),
+}
+impl DataReader {
+    fn open_path(path: &std::path::Path) -> std::io::Result<Self> {
+        if path
+            .to_string_lossy()
+            .to_ascii_lowercase()
+            .ends_with(".mzml.gz")
+        {
+            MZReader::<File>::open_gzipped_read_seek(File::open(path)?)
+                .map(|reader| Self::Gzip(Box::new(reader)))
+        } else {
+            MZReader::open_path(path).map(|reader| Self::Plain(Box::new(reader)))
+        }
+    }
+    fn len(&self) -> usize {
+        match self {
+            Self::Plain(r) => r.len(),
+            Self::Gzip(r) => r.len(),
+        }
+    }
+    fn set_detail_level(&mut self, level: DetailLevel) {
+        match self {
+            Self::Plain(r) => r.set_detail_level(level),
+            Self::Gzip(r) => r.set_detail_level(level),
+        }
+    }
+    fn iter(&mut self) -> Box<dyn Iterator<Item = mzdata::spectrum::MultiLayerSpectrum> + '_> {
+        match self {
+            Self::Plain(r) => Box::new(r.iter()),
+            Self::Gzip(r) => Box::new(r.iter()),
+        }
+    }
+    fn get_spectrum_by_index(
+        &mut self,
+        index: usize,
+    ) -> Option<mzdata::spectrum::MultiLayerSpectrum> {
+        match self {
+            Self::Plain(r) => r.get_spectrum_by_index(index),
+            Self::Gzip(r) => r.get_spectrum_by_index(index),
+        }
+    }
+}
+
+/// Validate before indexing or summing; a malformed scan is never a zero signal.
+fn validate_peak_arrays(mzs: &[f64], intensities: &[f32]) -> Result<()> {
+    if mzs.len() != intensities.len()
+        || mzs.iter().any(|v| !v.is_finite() || *v < 0.0)
+        || mzs.windows(2).any(|w| w[0] > w[1])
+        || intensities.iter().any(|v| !v.is_finite())
+    {
+        return Err(ChromascopeError::MzDataError(
+            "Peak arrays must have equal lengths, finite intensities and sorted nonnegative masses"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Sum stored profile/centroid samples without peak picking or silent truncation.
+fn raw_summary(
+    spectrum: mzdata::spectrum::MultiLayerSpectrum,
+    range: Option<(f64, f64)>,
+    base_peak: bool,
+) -> Result<(f32, f32)> {
+    let calculate = |mzs: &[f64], intensities: &[f32]| -> Result<(f32, f32)> {
+        validate_peak_arrays(mzs, intensities)?;
+        let (lo, hi) = range.map_or((0, mzs.len()), |(lo, hi)| {
+            (
+                mzs.partition_point(|mz| *mz < lo),
+                mzs.partition_point(|mz| *mz <= hi),
+            )
+        });
+        let result = if base_peak {
+            intensities[lo..hi]
+                .iter()
+                .enumerate()
+                .max_by(|a, b| a.1.total_cmp(b.1))
+                .map(|(i, intensity)| (*intensity, mzs[lo + i] as f32))
+                .unwrap_or((0.0, 0.0))
+        } else {
+            (intensities[lo..hi].iter().sum(), 0.0)
+        };
+        if !result.0.is_finite() || !result.1.is_finite() {
+            return Err(ChromascopeError::MzDataError(
+                "Chromatogram result exceeds finite f32 range".into(),
+            ));
+        }
+        Ok(result)
+    };
+    if let Some(arrays) = &spectrum.arrays {
+        if arrays.is_empty() {
+            return Ok((0., 0.));
+        }
+        let mzs = arrays
+            .mzs()
+            .map_err(|e| ChromascopeError::MzDataError(e.to_string()))?;
+        let intensities = arrays
+            .intensities()
+            .map_err(|e| ChromascopeError::MzDataError(e.to_string()))?;
+        calculate(&mzs, &intensities)
+    } else {
+        let centroided = spectrum
+            .into_centroid()
+            .map_err(|e| ChromascopeError::MzDataError(e.to_string()))?;
+        calculate(
+            &centroided.peaks.iter().map(|p| p.mz).collect::<Vec<_>>(),
+            &centroided
+                .peaks
+                .iter()
+                .map(|p| p.intensity)
+                .collect::<Vec<_>>(),
+        )
+    }
+}
+
 /// Represents extracted chromatogram data from a mass spectrometry file.
 /// Returned by `get_tic()`, `get_bpic()`, and `get_xic()` methods.
+#[cfg_attr(feature = "mcp-headless", derive(rmcp::schemars::JsonSchema))]
+#[cfg_attr(feature = "mcp-headless", schemars(crate = "rmcp::schemars"))]
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub struct ChromatogramData {
     /// Retention times (minutes) for each data point
@@ -42,7 +161,9 @@ pub struct ChromatogramData {
 }
 
 /// Represents a mass spectrum at a specific retention time.
-#[derive(Debug, Clone)]
+#[cfg_attr(feature = "mcp-headless", derive(rmcp::schemars::JsonSchema))]
+#[cfg_attr(feature = "mcp-headless", schemars(crate = "rmcp::schemars"))]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub struct MassSpectrum {
     /// m/z values
     pub mz: Vec<f64>,
@@ -56,13 +177,14 @@ pub struct MassSpectrum {
 
 /// Represents a data structure for parsing mass spectrometry files.
 pub struct MzData {
+    pub(crate) job_control: Option<crate::jobs::JobControl>,
     pub(crate) acquisition_filter: Option<crate::processing::AcquisitionMode>,
     /// An optional `String` representing the name of the data file.
     file_name: Option<String>,
     /// An optional format-agnostic reader for the opened mass spectrometry file.
     /// `MZReader` infers the file format from the path extension and supports
     /// mzML, mzML.gz, MGF, Bruker TDF, and other formats transparently.
-    msfile: Option<MZReader<File>>,
+    msfile: Option<DataReader>,
     /// Valid parameter ranges for this file (extracted during opening)
     pub bounds: DataBounds,
     /// Vector of unique (ms_level, polarity, precursor_mz, min_mz, max_mz) combinations found
@@ -96,6 +218,7 @@ impl MzData {
     /// A new instance of `MzData` with all fields initialized.
     pub fn new() -> Self {
         Self {
+            job_control: None,
             acquisition_filter: None,
             file_name: None,
             msfile: None,
@@ -126,8 +249,9 @@ impl MzData {
     /// ```
     pub fn open_msfile(&mut self, path: &PathBuf) -> Result<&mut Self> {
         info!("Attempting to open file at path: {:?}", path);
+        crate::source_validation::validate_mzml(path, self.job_control.as_ref())?;
 
-        match MZReader::open_path(path) {
+        match DataReader::open_path(path) {
             Ok(reader) => {
                 self.msfile = Some(reader);
                 self.file_name = Some(path.display().to_string());
@@ -163,7 +287,7 @@ impl MzData {
     /// The UI thread calls this method to open a new reader for double-click
     /// spectrum lookups, skipping the expensive bounds scan.
     pub fn open_reader_only(&mut self, path: &PathBuf) -> Result<&mut Self> {
-        match MZReader::open_path(path) {
+        match DataReader::open_path(path) {
             Ok(reader) => {
                 self.msfile = Some(reader);
                 self.file_name = Some(path.display().to_string());
@@ -186,10 +310,10 @@ impl MzData {
     /// description. These fields are populated during XML tag parsing, before
     /// any base64/zlib binary array work is done.
     ///
-    /// **Tier 2 — peak sampling fallback (O(SAMPLE_SIZE × peaks)):**
+    /// **Tier 2 — complete peak bounds fallback (O(spectra × peaks)):**
     /// If no non-empty scan windows are found (some converters omit the
-    /// `<scanWindowList>` element), decodes peaks for only the first and last
-    /// `SAMPLE_SIZE` spectra using `get_spectrum_by_index`.
+    /// `<scanWindowList>` element), checks every mass array so interior signals
+    /// cannot be excluded by approximate end-of-run bounds.
     ///
     /// # Returns
     /// * `Ok(())` - If bounds were successfully extracted
@@ -215,16 +339,10 @@ impl MzData {
             ));
         }
 
-        // -- O(1): RT bounds from first and last spectrum --------------------------
-        // File is always sorted by RT, so index 0 == min_rt, last index == max_rt.
-        let min_rt = reader
-            .get_spectrum_by_index(0)
-            .map(|s| s.start_time() as f32)
-            .unwrap_or(0.0);
-        let max_rt = reader
-            .get_spectrum_by_index(scan_count - 1)
-            .map(|s| s.start_time() as f32)
-            .unwrap_or(0.0);
+        // Determine extrema during the metadata pass: acquisition order need not
+        // be RT sorted. Avoid decoding all peak arrays just to inspect windows.
+        let mut min_rt = f32::INFINITY;
+        let mut max_rt = f32::NEG_INFINITY;
 
         // -- O(n): per-filter m/z ranges + global m/z bounds ---------------------
         // Iterates all spectra reading only scan-window metadata (zero peak decoding).
@@ -235,90 +353,130 @@ impl MzData {
         let mut filter_ranges: Vec<(u8, ScanPolarity, Option<f64>, f64, f64)> = Vec::new();
         let mut min_mz = f64::MAX;
         let mut max_mz = f64::MIN;
+        let mut missing_scan_windows = false;
 
-        for spectrum in reader.iter() {
-            let ms_level = spectrum.description.ms_level;
-            let polarity = spectrum.description.polarity;
-            // For MS2+ spectra key by the precursor isolation target m/z.
-            let precursor_key: Option<f64> = if ms_level > 1 {
-                spectrum
-                    .description
-                    .precursor
-                    .first()
-                    .and_then(|p| p.ions.first())
-                    .map(|ion| ion.mz)
-            } else {
-                None
-            };
-            // Find-or-insert the entry for this (ms_level, polarity, precursor_key) triplet.
-            let entry = if let Some(idx) = filter_ranges.iter().position(|(ms, pol, pre, _, _)| {
-                *ms == ms_level && *pol == polarity && *pre == precursor_key
-            }) {
-                &mut filter_ranges[idx]
-            } else {
-                filter_ranges.push((ms_level, polarity, precursor_key, f64::MAX, f64::MIN));
-                filter_ranges.last_mut().unwrap()
-            };
-            for scan_event in spectrum.description.acquisition.scans.iter() {
-                for window in scan_event.scan_windows.iter() {
-                    if !window.is_empty() {
-                        let lo = window.lower_bound as f64;
-                        let hi = window.upper_bound as f64;
-                        min_mz = min_mz.min(lo);
-                        max_mz = max_mz.max(hi);
-                        entry.3 = entry.3.min(lo);
-                        entry.4 = entry.4.max(hi);
+        reader.set_detail_level(DetailLevel::MetadataOnly);
+        let mut observed_scans = 0;
+        let metadata_pass = (|| -> Result<()> {
+            for spectrum in reader.iter() {
+                if let Some(control) = &self.job_control {
+                    control
+                        .check()
+                        .map_err(|e| ChromascopeError::MzDataError(e.to_string()))?;
+                }
+                observed_scans += 1;
+                let rt = spectrum.start_time() as f32;
+                if !rt.is_finite() || rt < 0.0 {
+                    return Err(ChromascopeError::MzDataError(
+                        "Retention times must be finite nonnegative minutes".into(),
+                    ));
+                }
+                min_rt = min_rt.min(rt);
+                max_rt = max_rt.max(rt);
+                let ms_level = spectrum.description.ms_level;
+                let polarity = spectrum.description.polarity;
+                // For MS2+ spectra key by the precursor isolation target m/z.
+                let precursor_key: Option<f64> = if ms_level > 1 {
+                    spectrum
+                        .description
+                        .precursor
+                        .first()
+                        .and_then(|p| p.ions.first())
+                        .map(|ion| ion.mz)
+                } else {
+                    None
+                };
+                // Find-or-insert the entry for this (ms_level, polarity, precursor_key) triplet.
+                let entry = if let Some(idx) =
+                    filter_ranges.iter().position(|(ms, pol, pre, _, _)| {
+                        *ms == ms_level && *pol == polarity && *pre == precursor_key
+                    }) {
+                    &mut filter_ranges[idx]
+                } else {
+                    filter_ranges.push((ms_level, polarity, precursor_key, f64::MAX, f64::MIN));
+                    filter_ranges.last_mut().unwrap()
+                };
+                let mut has_window = false;
+                for scan_event in spectrum.description.acquisition.scans.iter() {
+                    for window in scan_event.scan_windows.iter() {
+                        if !window.is_empty() {
+                            let lo = window.lower_bound as f64;
+                            let hi = window.upper_bound as f64;
+                            if !lo.is_finite() || !hi.is_finite() || lo < 0. || hi < lo {
+                                return Err(ChromascopeError::MzDataError(
+                                    "Invalid scan window bounds".into(),
+                                ));
+                            }
+                            has_window = true;
+                            min_mz = min_mz.min(lo);
+                            max_mz = max_mz.max(hi);
+                            entry.3 = entry.3.min(lo);
+                            entry.4 = entry.4.max(hi);
+                        }
                     }
                 }
+                missing_scan_windows |= !has_window;
             }
+            Ok(())
+        })();
+        reader.set_detail_level(DetailLevel::Full);
+        metadata_pass?;
+        if observed_scans != scan_count {
+            return Err(ChromascopeError::MzDataError(format!(
+                "Incomplete spectrum traversal: expected {scan_count}, read {observed_scans}"
+            )));
         }
 
-        // -- O(20): peak sampling fallback (only if scan windows absent) -----------
-        // Some converters omit <scanWindowList> in their mzML output.
-        // Samples first 10 + last 10 spectra and decodes their peaks.
-        if min_mz == f64::MAX || max_mz == f64::MIN {
-            const SAMPLE_SIZE: usize = 10;
+        // Without scan windows inspect all arrays: sampling the ends can miss
+        // every analyte in the middle of a chromatographic run.
+        if missing_scan_windows || min_mz == f64::MAX || max_mz == f64::MIN {
             warn!(
-                "No scan window metadata found in {:?} — falling back to peak sampling \
-             (first+last {} spectra)",
-                self.file_name, SAMPLE_SIZE
+                "Incomplete scan window metadata in {:?} — inspecting all peak arrays",
+                self.file_name
             );
-
-            let first_end = SAMPLE_SIZE.min(scan_count);
-            let last_start = scan_count.saturating_sub(SAMPLE_SIZE).max(first_end); // no overlap
-
-            for idx in (0..first_end).chain(last_start..scan_count) {
-                if let Some(spectrum) = reader.get_spectrum_by_index(idx) {
-                    let ms_level = spectrum.description.ms_level;
-                    let polarity = spectrum.description.polarity;
-                    let precursor_key: Option<f64> = if ms_level > 1 {
-                        spectrum
-                            .description
-                            .precursor
-                            .first()
-                            .and_then(|p| p.ions.first())
-                            .map(|ion| ion.mz)
-                    } else {
-                        None
-                    };
-                    let entry = if let Some(pos) =
-                        filter_ranges.iter().position(|(ms, pol, pre, _, _)| {
-                            *ms == ms_level && *pol == polarity && *pre == precursor_key
-                        }) {
-                        &mut filter_ranges[pos]
-                    } else {
-                        filter_ranges.push((ms_level, polarity, precursor_key, f64::MAX, f64::MIN));
-                        filter_ranges.last_mut().unwrap()
-                    };
-                    if let Some(arrays) = spectrum.arrays.as_ref() {
-                        if let Ok(mzs) = arrays.mzs() {
-                            for &mz in mzs.iter() {
-                                min_mz = min_mz.min(mz);
-                                max_mz = max_mz.max(mz);
-                                entry.3 = entry.3.min(mz);
-                                entry.4 = entry.4.max(mz);
-                            }
-                        }
+            for spectrum in reader.iter() {
+                if let Some(control) = &self.job_control {
+                    control
+                        .check()
+                        .map_err(|e| ChromascopeError::MzDataError(e.to_string()))?;
+                }
+                let ms_level = spectrum.description.ms_level;
+                let polarity = spectrum.description.polarity;
+                let precursor_key: Option<f64> = if ms_level > 1 {
+                    spectrum
+                        .description
+                        .precursor
+                        .first()
+                        .and_then(|p| p.ions.first())
+                        .map(|ion| ion.mz)
+                } else {
+                    None
+                };
+                let entry = if let Some(pos) =
+                    filter_ranges.iter().position(|(ms, pol, pre, _, _)| {
+                        *ms == ms_level && *pol == polarity && *pre == precursor_key
+                    }) {
+                    &mut filter_ranges[pos]
+                } else {
+                    filter_ranges.push((ms_level, polarity, precursor_key, f64::MAX, f64::MIN));
+                    filter_ranges.last_mut().unwrap()
+                };
+                if let Some(arrays) = spectrum.arrays.as_ref() {
+                    if arrays.is_empty() {
+                        continue;
+                    }
+                    let mzs = arrays
+                        .mzs()
+                        .map_err(|e| ChromascopeError::MzDataError(e.to_string()))?;
+                    let intensities = arrays
+                        .intensities()
+                        .map_err(|e| ChromascopeError::MzDataError(e.to_string()))?;
+                    validate_peak_arrays(&mzs, &intensities)?;
+                    for &mz in mzs.iter() {
+                        min_mz = min_mz.min(mz);
+                        max_mz = max_mz.max(mz);
+                        entry.3 = entry.3.min(mz);
+                        entry.4 = entry.4.max(mz);
                     }
                 }
             }
@@ -391,189 +549,10 @@ impl MzData {
         mz_range: Option<(f64, f64)>,
         precursor_mz: Option<f64>,
     ) -> Result<ChromatogramData> {
-        info!(
-            "Attempting to read BIC of {:?} at MS{} {:?}",
-            self.file_name, ms_level, polarity
-        );
-
-        let acquisition_filter = self.acquisition_filter;
-        let reader = self.msfile.as_mut().ok_or_else(|| {
-            ChromascopeError::FileNotOpened(
-                "File must be opened before extracting chromatogram".to_string(),
-            )
-        })?;
-
-        // Derive traces from selected spectra: vendor embedded chromatograms
-        // can mix polarities/MS levels and cannot provide scan-index mappings.
-        // -- Tier 2: spectrum iteration fallback -------------------------------
-        // MetadataOnly is valid for full-file BPC: base peak intensity
-        // (MS:1000505) and base peak m/z (MS:1000504) are CV params on the
-        // spectrum description — no binary array decoding needed.
-        if mz_range.is_none() {
-            reader.set_detail_level(DetailLevel::MetadataOnly);
-        }
-
-        let mut results: Vec<(f32, f32, f32, usize)> = reader
-            .iter()
-            .filter(|s| {
-                acquisition_filter.is_none_or(|mode| mode.matches(&s.description))
-                    && s.description.ms_level == ms_level
-                    && s.description.polarity == polarity
-                    && precursor_mz.is_none_or(|target| {
-                        s.description
-                            .precursor
-                            .first()
-                            .map(|p| {
-                                p.ions
-                                    .first()
-                                    .map(|ion| ion.mz)
-                                    .unwrap_or(f64::from(p.isolation_window.target))
-                            })
-                            .map(|mz| (mz - target).abs() < 0.01)
-                            .unwrap_or(false)
-                    })
-            })
-            .map(|spectrum| {
-                let rt = spectrum.start_time() as f32;
-                let idx = spectrum.index();
-                let (intensity, mz) = if let Some((min_mz, max_mz)) = mz_range {
-                    if let Some(arrays) = spectrum.arrays.as_ref() {
-                        match (arrays.mzs(), arrays.intensities()) {
-                            (Ok(mzs), Ok(intensities)) => mzs
-                                .iter()
-                                .zip(intensities.iter())
-                                .filter(|(mz, _)| **mz >= min_mz && **mz <= max_mz)
-                                .max_by(|a, b| a.1.total_cmp(b.1))
-                                .map(|(&mz, &intensity)| (intensity, mz as f32))
-                                .unwrap_or((0.0, 0.0)),
-                            _ => (0.0, 0.0),
-                        }
-                    } else {
-                        match spectrum.into_centroid() {
-                            Ok(centroided) => {
-                                let max_peak = centroided
-                                    .peaks
-                                    .iter()
-                                    .filter(|p| p.mz >= min_mz && p.mz <= max_mz)
-                                    .max_by(|a, b| {
-                                        a.intensity
-                                            .partial_cmp(&b.intensity)
-                                            .unwrap_or(Ordering::Equal)
-                                    });
-                                if let Some(peak) = max_peak {
-                                    (peak.intensity, peak.mz as f32)
-                                } else {
-                                    (0.0_f32, 0.0_f32)
-                                }
-                            }
-                            Err(_) => {
-                                warn!(
-                                    "Failed to centroid spectrum at RT {}, using zero intensity",
-                                    rt
-                                );
-                                (0.0_f32, 0.0_f32)
-                            }
-                        }
-                    }
-                } else {
-                    // Under MetadataOnly, peak arrays are not decoded.
-                    // Read MS:1000505 (base peak intensity) and MS:1000504
-                    // (base peak m/z) from the spectrum description CV params.
-                    let desc = &spectrum.description;
-                    let bp_intensity = desc
-                        .params()
-                        .iter()
-                        .find(|p| p.name == "base peak intensity")
-                        .and_then(|p| p.value.to_f64().ok())
-                        .unwrap_or(0.0) as f32;
-                    let bp_mz = desc
-                        .params()
-                        .iter()
-                        .find(|p| p.name == "base peak m/z")
-                        .and_then(|p| p.value.to_f64().ok())
-                        .unwrap_or(0.0) as f32;
-                    (bp_intensity, bp_mz)
-                };
-                (rt, intensity, mz, idx)
-            })
-            .collect();
-
-        // Always restore full detail level so subsequent calls decode arrays.
-        reader.set_detail_level(DetailLevel::Full);
-
-        // Sanity check: if the file doesn't populate base peak CV params
-        // (non-conformant mzML), every intensity will be 0. Re-run with
-        // full array decoding so we never silently return a flatline BPC.
-        if mz_range.is_none() && !results.is_empty() && results.iter().all(|(_, i, _, _)| *i == 0.0)
-        {
-            warn!(
-                "BPC: all base peak intensity CV params (MS:1000505) returned 0 for {:?} \
-                 — retrying with full array decoding",
-                self.file_name
-            );
-            results = reader
-                .iter()
-                .filter(|s| {
-                    acquisition_filter.is_none_or(|mode| mode.matches(&s.description))
-                        && s.description.ms_level == ms_level
-                        && s.description.polarity == polarity
-                        && precursor_mz.is_none_or(|target| {
-                            s.description
-                                .precursor
-                                .first()
-                                .map(|p| {
-                                    p.ions
-                                        .first()
-                                        .map(|ion| ion.mz)
-                                        .unwrap_or(f64::from(p.isolation_window.target))
-                                })
-                                .map(|mz| (mz - target).abs() < 0.01)
-                                .unwrap_or(false)
-                        })
-                })
-                .map(|spectrum| {
-                    let rt = spectrum.start_time() as f32;
-                    let idx = spectrum.index();
-                    let bp = spectrum.peaks().base_peak();
-                    (rt, bp.intensity, bp.mz as f32, idx)
-                })
-                .collect();
-        }
-
-        results.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
-
-        debug!("Successfully extracted BIC from: {:?}", self.file_name);
-        trace!(
-            "Successfully extracted the BIC of {:?}. {} data points",
-            self.file_name,
-            results.len()
-        );
-
-        let retention_time = results.iter().map(|(rt, _, _, _)| *rt).collect();
-        let intensity = results.iter().map(|(_, i, _, _)| *i).collect();
-        let mz = results.iter().map(|(_, _, m, _)| *m).collect();
-        let index = results.iter().map(|(_, _, _, idx)| *idx).collect();
-
-        Ok(ChromatogramData {
-            retention_time,
-            intensity,
-            mz,
-            index,
-        })
+        self.get_summary(ms_level, polarity, mz_range, precursor_mz, true)
     }
 
-    /// Extract Total Ion Chromatogram (TIC).
-    ///
-    /// Returns owned `ChromatogramData` instead of mutating self.
-    ///
-    /// # Arguments
-    /// * `ms_level` - MS level to filter
-    /// * `polarity` - Scan polarity to filter
-    /// * `mz_range` - Optional m/z range to restrict TIC calculation
-    ///
-    /// # Returns
-    /// * `Ok(ChromatogramData)` - Owned chromatogram data (`mz` field will be empty)
-    /// * `Err(ChromascopeError::FileNotOpened)` - If file not opened
+    /// Extract TIC with scan-specific fallback for absent CV metadata.
     pub fn get_tic(
         &mut self,
         ms_level: u8,
@@ -581,140 +560,143 @@ impl MzData {
         mz_range: Option<(f64, f64)>,
         precursor_mz: Option<f64>,
     ) -> Result<ChromatogramData> {
-        info!(
-            "Attempting to read TIC of {:?} at MS{} {:?}",
-            self.file_name, ms_level, polarity
-        );
+        self.get_summary(ms_level, polarity, mz_range, precursor_mz, false)
+    }
 
+    fn get_summary(
+        &mut self,
+        ms_level: u8,
+        polarity: ScanPolarity,
+        mz_range: Option<(f64, f64)>,
+        precursor_mz: Option<f64>,
+        base_peak: bool,
+    ) -> Result<ChromatogramData> {
+        if ms_level == 0
+            || mz_range
+                .is_some_and(|(lo, hi)| !lo.is_finite() || !hi.is_finite() || lo < 0.0 || lo >= hi)
+            || precursor_mz.is_some_and(|mz| !mz.is_finite() || mz <= 0.0)
+        {
+            return Err(ChromascopeError::MzDataError(
+                "Invalid extraction parameters".into(),
+            ));
+        }
+        let control = self.job_control.clone();
         let acquisition_filter = self.acquisition_filter;
         let reader = self.msfile.as_mut().ok_or_else(|| {
             ChromascopeError::FileNotOpened(
-                "File must be opened before extracting chromatogram".to_string(),
+                "File must be opened before extracting chromatogram".into(),
             )
         })?;
-
-        // Derive traces from selected spectra: vendor embedded chromatograms
-        // can mix polarities/MS levels and cannot provide scan-index mappings.
-        // -- Tier 2: spectrum iteration fallback -------------------------------
-        if mz_range.is_none() {
-            reader.set_detail_level(DetailLevel::MetadataOnly);
-        }
-
-        let mut results: Vec<(f32, f32, usize)> = reader
-            .iter()
-            .filter(|s| {
-                acquisition_filter.is_none_or(|mode| mode.matches(&s.description))
-                    && s.description.ms_level == ms_level
-                    && s.description.polarity == polarity
-                    && precursor_mz.is_none_or(|target| {
-                        s.description
-                            .precursor
-                            .first()
-                            .map(|p| {
-                                p.ions
-                                    .first()
-                                    .map(|ion| ion.mz)
-                                    .unwrap_or(f64::from(p.isolation_window.target))
-                            })
-                            .map(|mz| (mz - target).abs() < 0.01)
-                            .unwrap_or(false)
-                    })
-            })
-            .map(|spectrum| {
+        let matches = |s: &mzdata::spectrum::MultiLayerSpectrum| {
+            acquisition_filter.is_none_or(|mode| mode.matches(&s.description))
+                && s.description.ms_level == ms_level
+                && s.description.polarity == polarity
+                && precursor_mz.is_none_or(|target| {
+                    s.description
+                        .precursor
+                        .first()
+                        .map(|p| {
+                            p.ions
+                                .first()
+                                .map(|ion| ion.mz)
+                                .unwrap_or(f64::from(p.isolation_window.target))
+                        })
+                        .is_some_and(|mz| (mz - target).abs() < 0.01)
+                })
+        };
+        let metadata = |s: &mzdata::spectrum::MultiLayerSpectrum| -> Option<(f32, f32)> {
+            let value = |name| {
+                s.description
+                    .params()
+                    .iter()
+                    .find(|p| p.name == name)
+                    .and_then(|p| p.value.to_f64().ok())
+                    .filter(|v| v.is_finite() && *v >= 0.0 && *v <= f32::MAX as f64)
+            };
+            if base_peak {
+                Some((
+                    value("base peak intensity")? as f32,
+                    value("base peak m/z")? as f32,
+                ))
+            } else {
+                Some((value("total ion current")? as f32, 0.0))
+            }
+        };
+        reader.set_detail_level(if mz_range.is_none() {
+            DetailLevel::MetadataOnly
+        } else {
+            DetailLevel::Full
+        });
+        let first_pass = (|| -> Result<Vec<(f32, f32, f32, usize)>> {
+            let mut results = Vec::new();
+            for spectrum in reader
+                .iter()
+                .take_while(|_| control.as_ref().is_none_or(|c| c.step()))
+                .filter(&matches)
+            {
                 let rt = spectrum.start_time() as f32;
                 let idx = spectrum.index();
-                let tic = if let Some((min_mz, max_mz)) = mz_range {
-                    if let Some(arrays) = spectrum.arrays.as_ref() {
-                        match (arrays.mzs(), arrays.intensities()) {
-                            (Ok(mzs), Ok(intensities)) => {
-                                let start = mzs.partition_point(|&mz| mz < min_mz);
-                                let end = mzs.partition_point(|&mz| mz <= max_mz);
-                                intensities[start..end].iter().sum()
-                            }
-                            _ => {
-                                warn!(
-                                    "Failed to decode arrays at RT {:.3}, using zero intensity",
-                                    rt
-                                );
-                                0.0_f32
-                            }
-                        }
-                    } else {
-                        0.0_f32
-                    }
+                let (intensity, mz) = if mz_range.is_none() {
+                    metadata(&spectrum).unwrap_or((f32::NAN, f32::NAN))
                 } else {
-                    // Read MS:1000285 CV param — no binary decoding under MetadataOnly
-                    spectrum
-                        .description
-                        .params()
-                        .iter()
-                        .find(|p| p.name == "total ion current")
-                        .and_then(|p| p.value.to_f64().ok())
-                        .unwrap_or(0.0) as f32
+                    raw_summary(spectrum, mz_range, base_peak)?
                 };
-                (rt, tic, idx)
-            })
-            .collect();
-
-        // Always restore full detail level so subsequent calls decode arrays.
+                results.push((rt, intensity, mz, idx));
+            }
+            Ok(results)
+        })();
         reader.set_detail_level(DetailLevel::Full);
-
-        // -- Sanity check: all-zeros retry ----------------------------------------
-        // Some converters omit MS:1000285 entirely. If every intensity is 0,
-        // fall back to full peak decoding rather than returning a silent flatline.
-        if mz_range.is_none() && !results.is_empty() && results.iter().all(|(_, i, _)| *i == 0.0) {
-            warn!(
-                "TIC: all TIC CV params (MS:1000285) returned 0 for {:?} \
-             — retrying with full array decoding",
-                self.file_name
-            );
-            results = reader
-                .iter()
-                .filter(|s| {
-                    acquisition_filter.is_none_or(|mode| mode.matches(&s.description))
-                        && s.description.ms_level == ms_level
-                        && s.description.polarity == polarity
-                        && precursor_mz.is_none_or(|target| {
-                            s.description
-                                .precursor
-                                .first()
-                                .map(|p| {
-                                    p.ions
-                                        .first()
-                                        .map(|ion| ion.mz)
-                                        .unwrap_or(f64::from(p.isolation_window.target))
-                                })
-                                .map(|mz| (mz - target).abs() < 0.01)
-                                .unwrap_or(false)
-                        })
-                })
-                .map(|spectrum| {
-                    let rt = spectrum.start_time() as f32;
-                    let idx = spectrum.index();
-                    let tic = spectrum.peaks().tic();
-                    (rt, tic, idx)
-                })
-                .collect();
+        if let Some(c) = &control {
+            c.check()
+                .map_err(|e| ChromascopeError::MzDataError(e.to_string()))?;
         }
-
-        results.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
-
-        debug!("Successfully extracted TIC from: {:?}", self.file_name);
-        trace!(
-            "Successfully extracted the TIC of {:?}. {} data points",
-            self.file_name,
-            results.len()
-        );
-
-        let retention_time = results.iter().map(|(rt, _, _)| *rt).collect();
-        let intensity = results.iter().map(|(_, i, _)| *i).collect();
-        let index = results.iter().map(|(_, _, idx)| *idx).collect();
-
+        let mut results = first_pass?;
+        // Preserve legacy all-zero retry. Mixed metadata retains supplied values.
+        let all_zero = !results.is_empty() && results.iter().all(|v| v.1 == 0.0);
+        let missing = results
+            .iter()
+            .enumerate()
+            .filter(|(_, v)| mz_range.is_none() && (all_zero || !v.1.is_finite()))
+            .map(|(position, v)| (v.3, position))
+            .collect::<Vec<_>>();
+        if !missing.is_empty() {
+            let mut recovered = 0;
+            for spectrum in reader
+                .iter()
+                .take_while(|_| control.as_ref().is_none_or(|c| c.step()))
+            {
+                // Both traversals preserve acquisition order; walk missing rows
+                // linearly rather than hash every scan in a large fallback pass.
+                let Some(&(index, position)) = missing.get(recovered) else {
+                    break;
+                };
+                if index == spectrum.index() {
+                    let (intensity, mz) = raw_summary(spectrum, None, base_peak)?;
+                    results[position].1 = intensity;
+                    results[position].2 = mz;
+                    recovered += 1;
+                }
+            }
+            if let Some(c) = &control {
+                c.check()
+                    .map_err(|e| ChromascopeError::MzDataError(e.to_string()))?;
+            }
+            if recovered != missing.len() {
+                return Err(ChromascopeError::MzDataError(
+                    "Incomplete metadata fallback traversal".into(),
+                ));
+            }
+        }
+        results.sort_by(|a, b| a.0.total_cmp(&b.0));
         Ok(ChromatogramData {
-            retention_time,
-            intensity,
-            mz: Vec::new(),
-            index,
+            retention_time: results.iter().map(|v| v.0).collect(),
+            intensity: results.iter().map(|v| v.1).collect(),
+            mz: if base_peak {
+                results.iter().map(|v| v.2).collect()
+            } else {
+                Vec::new()
+            },
+            index: results.iter().map(|v| v.3).collect(),
         })
     }
 
@@ -744,13 +726,14 @@ impl MzData {
             self.file_name, ms_level, polarity
         );
 
-        if mass <= 0.0 {
+        if !mass.is_finite() || mass <= 0.0 {
             return Err(ChromascopeError::InvalidMass(mass));
         }
         if !(0.0..=1000.0).contains(&mass_tolerance) {
             return Err(ChromascopeError::InvalidMassTolerance(mass_tolerance));
         }
 
+        let control = self.job_control.clone();
         let acquisition_filter = self.acquisition_filter;
         let reader = self.msfile.as_mut().ok_or_else(|| {
             ChromascopeError::FileNotOpened(
@@ -758,9 +741,10 @@ impl MzData {
             )
         })?;
 
-        // Step A: Sequential I/O — collect owned spectra (binary arrays stay compressed)
-        let spectra: Vec<_> = reader
+        // Stream owned spectra; retain only trace values, not a run of peak arrays.
+        let spectra = reader
             .iter()
+            .take_while(|_| control.as_ref().is_none_or(|c| c.step()))
             .filter(|s| {
                 acquisition_filter.is_none_or(|mode| mode.matches(&s.description))
                     && s.description.ms_level == ms_level
@@ -778,13 +762,11 @@ impl MzData {
                             .map(|mz| (mz - target).abs() < 0.01)
                             .unwrap_or(false)
                     })
-            })
-            .collect();
+            });
 
-        // Step B: Parallel CPU processing
+        // Decode one spectrum at a time.
         let tol_da = mass * (mass_tolerance / 1_000_000.0);
         let mut results: Vec<(f32, f32, usize)> = spectra
-            .into_par_iter()
             .map(|spectrum| {
                 let spectrum_rt = spectrum
                     .description
@@ -798,26 +780,20 @@ impl MzData {
                 // Sum stored samples directly: this works for profile and centroid
                 // arrays without silently applying peak picking during import.
                 if let Some(arrays) = spectrum.arrays.as_ref() {
+                    if arrays.is_empty() {return Ok((spectrum_rt,0.,spectrum_idx));}
                     let mzs = arrays.mzs().map_err(|e| {
                         ChromascopeError::MzDataError(format!("Cannot read XIC m/z array: {:?}", e))
                     })?;
+                    let intensities = arrays.intensities().map_err(|e| ChromascopeError::MzDataError(format!("Cannot read XIC intensity array: {e:?}")))?;
+                    if mzs.len() != intensities.len() || mzs.iter().any(|v| !v.is_finite() || *v < 0.0) || mzs.windows(2).any(|w| w[0] > w[1]) || intensities.iter().any(|v| !v.is_finite()) {
+                        return Err(ChromascopeError::MzDataError("XIC arrays must have equal lengths, finite intensities and sorted nonnegative masses".into()));
+                    }
                     let lower = mass - tol_da;
                     let upper = mass + tol_da;
                     let start = mzs.partition_point(|&mz| mz < lower);
                     let end = mzs.partition_point(|&mz| mz <= upper);
                     if start == end {
                         return Ok((spectrum_rt, 0.0, spectrum_idx));
-                    }
-                    let intensities = arrays.intensities().map_err(|e| {
-                        ChromascopeError::MzDataError(format!(
-                            "Cannot read XIC intensity array: {:?}",
-                            e
-                        ))
-                    })?;
-                    if intensities.len() != mzs.len() {
-                        return Err(ChromascopeError::MzDataError(
-                            "XIC array lengths differ".into(),
-                        ));
                     }
                     return Ok((
                         spectrum_rt,
@@ -889,6 +865,14 @@ impl MzData {
             .arrays
             .as_ref()
             .ok_or_else(|| ChromascopeError::MzDataError("Spectrum has no arrays".into()))?;
+        if arrays.is_empty() {
+            return Ok(MassSpectrum {
+                mz: Vec::new(),
+                intensity: Vec::new(),
+                index,
+                retention_time: spec.start_time() as f32,
+            });
+        }
 
         let mz = arrays
             .mzs()
@@ -918,6 +902,91 @@ impl MzData {
             index,
             retention_time,
         })
+    }
+
+    /// Retains native acquisition metadata and original scan linkage.
+    pub fn spectral_scan(&mut self, index: usize) -> Result<crate::spectral::Spectrum> {
+        use crate::spectral::{Polarity, Representation, Spectrum};
+        let metadata = self.scan_metadata_structured(index)?;
+        let raw = self.get_mass_spectrum_by_index(index)?;
+        let polarity = match metadata["polarity"].as_str() {
+            Some("Positive") => Polarity::Positive,
+            Some("Negative") => Polarity::Negative,
+            _ => Polarity::Unknown,
+        };
+        let representation = match metadata["representation"].as_str() {
+            Some("Centroid") => Representation::Centroid,
+            Some("Profile") => Representation::Profile,
+            _ => Representation::Unknown,
+        };
+        let precursor_mz = metadata["precursors"][0]["ions"][0]["mz"]
+            .as_f64()
+            .filter(|v| *v > 0.0)
+            .or_else(|| {
+                metadata["precursors"][0]["isolation_window"]["target_mz"]
+                    .as_f64()
+                    .filter(|v| *v > 0.0)
+            });
+        if raw.mz.len() != raw.intensity.len() {
+            return Err(ChromascopeError::MzDataError(
+                "Spectrum array length mismatch".into(),
+            ));
+        }
+        let collision_energy = metadata["precursors"][0]["activation"]["parameters"]
+            .as_array()
+            .and_then(|parameters| {
+                parameters.iter().find_map(|p| {
+                    let name = p["name"].as_str()?.to_ascii_lowercase();
+                    if !["collision energy", "normalized collision energy"].contains(&name.as_str())
+                    {
+                        return None;
+                    }
+                    let value = p["value"].as_str()?.parse::<f64>().ok()?;
+                    let unit = p["unit"].as_str()?;
+                    if unit.is_empty()
+                        || unit.eq_ignore_ascii_case("unknown")
+                        || !value.is_finite()
+                        || value < 0.0
+                    {
+                        return None;
+                    }
+                    Some(crate::spectral::Energy {
+                        value,
+                        unit: match unit {
+                            "electronvolt" | "Electronvolt" => "eV".into(),
+                            other => other.into(),
+                        },
+                    })
+                })
+            });
+        let spectrum = Spectrum {
+            id: metadata["native_id"].as_str().unwrap_or("").into(),
+            peaks: raw
+                .mz
+                .iter()
+                .zip(&raw.intensity)
+                .map(|(m, i)| [*m, *i as f64])
+                .collect(),
+            ms_level: metadata["ms_level"].as_u64().unwrap_or(0) as u8,
+            representation,
+            polarity,
+            precursor_mz,
+            precursor_type: None,
+            collision_energy,
+            instrument: None,
+            rt_minutes: metadata["retention_time_minutes"].as_f64(),
+            metadata: std::collections::BTreeMap::from([
+                ("native_scan_metadata_json".into(), metadata.to_string()),
+                ("original_index".into(), index.to_string()),
+                ("intensity_unit".into(), "instrument intensity".into()),
+                ("mz_unit".into(), "m/z".into()),
+                ("rt_unit".into(), "minute".into()),
+            ]),
+        };
+        spectrum
+            .validate()
+            .map_err(|e| ChromascopeError::MzDataError(e.to_string()))?;
+        Ok(spectrum)
     }
 
     /// Human-readable native scan and acquisition metadata, without decoding peak arrays.

@@ -1,0 +1,6 @@
+{
+  "name": "MassBank Antwerp fixture subset",
+  "version": "2026.03",
+  "url": "https://github.com/MassBank/MassBank-data/tree/2026.03/Antwerp_Univ",
+  "license": "CC BY (per-record declarations retained)"
+}

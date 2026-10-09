@@ -604,14 +604,12 @@ pub(super) fn trace_row(
                 .on_hover_text("Delete trace from workspace and figures");
             controls.1 = deletion.rect;
             delete = deletion.clicked();
+            ui.colored_label(color.to_egui(), "●")
+                .on_hover_text("Retained trace color in figures");
             let response = ui
                 .add_sized(
                     [ui.available_width().max(1.0), 24.0],
-                    egui::Button::selectable(
-                        active,
-                        egui::RichText::new(name.clone()).color(color.to_egui()),
-                    )
-                    .truncate(),
+                    egui::Button::selectable(active, name.clone()).truncate(),
                 )
                 .on_hover_text(format!("{name}\n{}", trace_name(params)));
             select = response.clicked();
@@ -783,7 +781,7 @@ pub(super) fn results(app: &mut MzViewerApp, ctx: &Context) {
     let mut open = ctx
         .data(|d| d.get_temp::<bool>(egui::Id::new("results_open")))
         .unwrap_or(false);
-    egui::Window::new("Integration results").open(&mut open).default_width(800.0).show(ctx, |ui| {
+    egui::Window::new("Integration results").max_height((ctx.content_rect().height()-60.0).max(120.0)).vscroll(true).open(&mut open).default_width(800.0).show(ctx, |ui| {
         ui.horizontal(|ui| {
             if ui.add_enabled(!app.workspace.measurements.is_empty(), egui::Button::new("Export CSV…")).clicked() {
                 if let Some(p) = rfd::FileDialog::new().add_filter("CSV", &["csv"]).set_file_name("integrations.csv").save_file() {
@@ -791,18 +789,19 @@ pub(super) fn results(app: &mut MzViewerApp, ctx: &Context) {
                 }
             }
         });
-        let mut remove = None;
-        egui::ScrollArea::both().max_height(400.0).show(ui, |ui| {
-            egui::Grid::new("integration_results").striped(true).show(ui, |ui| {
-                for label in ["File", "Trace / parameters", "Start (min)", "End (min)", "Area (a.u.·min)", ""] { ui.strong(label); } ui.end_row();
-                for (i,r) in app.workspace.measurements.iter().enumerate() {
-                    ui.label(&r.file).on_hover_text(&r.source); ui.label(&r.trace); ui.label(format!("{:.5}",r.start)); ui.label(format!("{:.5}",r.end)); ui.label(format!("{:.6e}",r.area));
-                    if ui.small_button("Remove").clicked() { remove = Some(i); } ui.end_row();
-                }
-            });
-        });
+        use super::table::{Cell,Row};
+        let rows:Vec<_> = app.workspace.measurements.iter().enumerate().map(|(index,r)| Row { key:format!("{}:{}:{}:{index}",r.source,r.start,r.end), cells:vec![Cell::text(&r.file),Cell::text(&r.trace),Cell::number(Some(r.start)),Cell::number(Some(r.end)),Cell::number(Some(r.area))] }).collect();
+        let selection_id = egui::Id::new("integration_result_selection");
+        let mut selected = ctx.data(|d|d.get_temp::<String>(selection_id));
+        if let Some(index) = super::table::show(ui,"integration-results", &["File","Trace / parameters","Start (min)","End (min)","Area (a.u.·min)"],&rows, selected.as_deref()) {
+            selected = Some(rows[index].key.clone());
+        }
+        if let Some(index) = rows.iter().position(|row| Some(&row.key) == selected.as_ref()) {
+            ui.collapsing("Selected integration evidence",|ui| { ui.label(serde_json::to_string_pretty(&app.workspace.measurements[index]).unwrap()); });
+            if ui.button("Remove selected measurement").clicked() { app.workspace.measurements.remove(index); selected=None; }
+        }
+        ctx.data_mut(|d| {if let Some(selected)=selected {d.insert_temp(selection_id, selected);} else {d.remove::<String>(selection_id);}});
         ui.small("Full-resolution processed trace; endpoint-chord baseline. Parameters are stored with each measurement.");
-        if let Some(i) = remove { app.workspace.measurements.remove(i); }
     });
     ctx.data_mut(|d| d.insert_temp(egui::Id::new("results_open"), open));
 }
@@ -938,23 +937,7 @@ pub(super) fn input(app: &mut MzViewerApp, ctx: &Context) {
     }
     results(app, ctx);
 }
-fn save_session(app: &mut MzViewerApp, ctx: &Context) {
-    if app.files.values().any(|f| f.is_loading)
-        || app.async_state.is_processing
-        || app.state_changed == StateChange::Changed
-    {
-        app.show_error_dialog(
-            "Wait for imports and trace updates to finish before saving a session.".into(),
-        );
-        return;
-    }
-    let Some(path) = rfd::FileDialog::new()
-        .add_filter("Chromascope session", &["chromascope"])
-        .set_file_name("session.chromascope")
-        .save_file()
-    else {
-        return;
-    };
+fn capture_session(app: &MzViewerApp, ctx: &Context) -> Session {
     let mut ids: Vec<_> = app.files.keys().copied().collect();
     ids.sort_unstable();
     let active = app
@@ -974,7 +957,7 @@ fn save_session(app: &mut MzViewerApp, ctx: &Context) {
             }
         })
         .collect();
-    let session = Session {
+    Session {
         version: 1,
         files,
         active,
@@ -987,7 +970,29 @@ fn save_session(app: &mut MzViewerApp, ctx: &Context) {
         view: app.workspace.view.clone(),
         batch_preset: app.presets.specs.clone(),
         split: ctx.data(|d| d.get_temp::<f32>(egui::Id::new("workbench_plot_split"))),
+    }
+}
+pub(super) fn project_snapshot(app: &MzViewerApp, ctx: &Context) -> serde_json::Value {
+    serde_json::to_value(capture_session(app, ctx)).unwrap()
+}
+fn save_session(app: &mut MzViewerApp, ctx: &Context) {
+    if app.files.values().any(|f| f.is_loading)
+        || app.async_state.is_processing
+        || app.state_changed == StateChange::Changed
+    {
+        app.show_error_dialog(
+            "Wait for imports and trace updates to finish before saving a session.".into(),
+        );
+        return;
+    }
+    let Some(path) = rfd::FileDialog::new()
+        .add_filter("Chromascope session", &["chromascope"])
+        .set_file_name("session.chromascope")
+        .save_file()
+    else {
+        return;
     };
+    let session = capture_session(app, ctx);
     if let Err(e) = serde_json::to_vec_pretty(&session)
         .map_err(|e| e.to_string())
         .and_then(|b| std::fs::write(path, b).map_err(|e| e.to_string()))
@@ -1011,40 +1016,53 @@ fn open_session(app: &mut MzViewerApp, ctx: &Context) {
                 app.show_error_dialog(e);
                 return;
             }
-            app.reset_state();
-            app.workspace.traces.clear();
-            app.async_state.processing_rx = None;
-            app.async_state.is_processing = false;
-            app.workspace.measurements = s.measurements;
-            app.workspace.restore_active = s
-                .active
-                .and_then(|i| s.files.get(i))
-                .map(|f| (f.source.clone(), f.run.clone()));
-            app.workspace.restore_input = Some(s.input);
-            app.workspace.pending = s.files.into_iter().map(|f| (f.source.clone(), f)).collect();
-            let mut sources: Vec<_> = app
-                .workspace
-                .pending
-                .iter()
-                .map(|(p, _)| PathBuf::from(p))
-                .collect();
-            sources.sort();
-            sources.dedup();
-            super::panels::queue_file_imports(app, sources);
-            app.workspace.overlay = s.overlay;
-            app.workspace.view = s.view;
-            app.presets.specs = s.batch_preset;
-            app.presets.applied.clear();
-            app.presets.failed.clear();
-            app.workspace.bounds = s.bounds;
-            app.workspace.spectrum_bounds = s.spectrum_bounds;
-            app.workspace.apply_bounds = false;
-            super::workbench::configure(ctx, s.dark);
-            if let Some(split) = s.split {
-                ctx.data_mut(|d| d.insert_temp(egui::Id::new("workbench_plot_split"), split));
-            }
+            restore_session(app, ctx, s);
         }
         Err(e) => app.show_error_dialog(format!("Cannot open session: {e}")),
+    }
+}
+pub(super) fn restore_project_snapshot(
+    app: &mut MzViewerApp,
+    ctx: &Context,
+    value: serde_json::Value,
+) -> Result<(), String> {
+    let session: Session = serde_json::from_value(value).map_err(|e| e.to_string())?;
+    session.validate()?;
+    restore_session(app, ctx, session);
+    Ok(())
+}
+fn restore_session(app: &mut MzViewerApp, ctx: &Context, s: Session) {
+    app.reset_state();
+    app.workspace.traces.clear();
+    app.async_state.processing_rx = None;
+    app.async_state.is_processing = false;
+    app.workspace.measurements = s.measurements;
+    app.workspace.restore_active = s
+        .active
+        .and_then(|i| s.files.get(i))
+        .map(|f| (f.source.clone(), f.run.clone()));
+    app.workspace.restore_input = Some(s.input);
+    app.workspace.pending = s.files.into_iter().map(|f| (f.source.clone(), f)).collect();
+    let mut sources: Vec<_> = app
+        .workspace
+        .pending
+        .iter()
+        .map(|(p, _)| PathBuf::from(p))
+        .collect();
+    sources.sort();
+    sources.dedup();
+    super::panels::queue_file_imports(app, sources);
+    app.workspace.overlay = s.overlay;
+    app.workspace.view = s.view;
+    app.presets.specs = s.batch_preset;
+    app.presets.applied.clear();
+    app.presets.failed.clear();
+    app.workspace.bounds = s.bounds;
+    app.workspace.spectrum_bounds = s.spectrum_bounds;
+    app.workspace.apply_bounds = false;
+    super::workbench::configure(ctx, s.dark);
+    if let Some(split) = s.split {
+        ctx.data_mut(|d| d.insert_temp(egui::Id::new("workbench_plot_split"), split));
     }
 }
 pub(super) fn restore_loaded(app: &mut MzViewerApp, _ctx: &Context) {

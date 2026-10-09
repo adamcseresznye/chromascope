@@ -5,18 +5,21 @@ use log::error;
 
 /// Renders the error dialog if an error message is present.
 ///
-/// This creates a centered modal window with the error message and an OK button.
-/// The dialog blocks interaction until dismissed by clicking OK.
+/// A centered, scrollable error window preserves long diagnostic messages.
 pub fn render_error_dialog(app: &mut MzViewerApp, ctx: &egui::Context) {
     if let Some(error) = app.error_message.clone() {
-        egui::Window::new("Error")
+        egui::Window::new("Action could not be completed")
+            .max_height((ctx.content_rect().height() - 60.0).max(120.0))
+            .vscroll(true)
             .collapsible(false)
-            .resizable(false)
+            .resizable(true)
+            .default_width(520.0)
+            .vscroll(true)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
                 ui.colored_label(ui.visuals().error_fg_color, &error);
                 ui.add_space(10.0);
-                if ui.button("OK").clicked() {
+                if ui.button("Dismiss").clicked() {
                     app.error_message = None;
                 }
             });
@@ -34,6 +37,8 @@ pub fn render_xic_settings_window(app: &mut MzViewerApp, ctx: &egui::Context) {
         let mut close_on_confirm = false;
 
         egui::Window::new("XIC settings")
+            .max_height((ctx.content_rect().height() - 60.0).max(120.0))
+            .vscroll(true)
             .open(&mut window_open)
             .show(ctx, |ui| {
                 ui.label("Enter target m/z and tolerance (ppm):");
@@ -235,6 +240,8 @@ pub fn render_range_window(app: &mut MzViewerApp, ctx: &egui::Context) {
     let mut error_message: Option<String> = None;
 
     egui::Window::new("m/z Range Filter")
+        .max_height((ctx.content_rect().height() - 60.0).max(120.0))
+        .vscroll(true)
         .open(&mut app.user_input.range_window_open)
         .resizable(false)
         .collapsible(false)
@@ -331,6 +338,8 @@ pub fn render_plot_properties_window(app: &mut MzViewerApp, ctx: &egui::Context)
     // of `app` inside the closure (needed for `add_plot_properties`).
     let mut open = true;
     egui::Window::new("Plot Properties")
+        .max_height((ctx.content_rect().height() - 60.0).max(120.0))
+        .vscroll(true)
         .open(&mut open)
         .resizable(false)
         .collapsible(false)

@@ -1,0 +1,20 @@
+[
+  {
+    "exit_code": 101,
+    "exit_record": "target\\performance-finalized-oct09-clippy.exit",
+    "log": "target\\performance-finalized-oct09-clippy.log",
+    "log_sha256": "ff682c2a406ce41ae5e783ba34f9428ff07f435ba7a50397d0cd5192345dc1ba"
+  },
+  {
+    "exit_code": 101,
+    "exit_record": "target\\performance-finalized-oct09-close-headless.exit",
+    "log": "target\\performance-finalized-oct09-close-headless.log",
+    "log_sha256": "659c7396302339b476cfcad2dbc0febf38c3aace48fa89db9f76e69b2ab4a528"
+  },
+  {
+    "exit_code": 1,
+    "exit_record": "target\\performance-finalized-oct09-repaired-format.exit",
+    "log": "target\\performance-finalized-oct09-repaired-format.log",
+    "log_sha256": "6f678c092ebfafdd1c784164a1cd8151c11515c3b3443c0a1da2130a78b43989"
+  }
+]

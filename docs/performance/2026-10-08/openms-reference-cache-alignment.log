@@ -1,0 +1,8 @@
+
+running 1 test
+test openms_workloads ... BENCH_JSON {"seconds":2.2756964,"started_unix_seconds":1791516786.1675773,"units":6,"workload":"openms_detect_align_cold_6_samples"}
+BENCH_JSON {"seconds":1.4514088,"started_unix_seconds":1791516788.4433458,"units":6,"workload":"openms_checkpoint_reuse_align_6_samples"}
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 5.21s
+

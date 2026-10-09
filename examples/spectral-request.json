@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "operation_id": "3e05c9f5-0ced-455a-b570-344cc02dc703",
+  "actor": "example-analyst",
+  "operation": {
+    "operation": "process_spectra",
+    "spectra": [
+      {
+        "id": "explicit-synthetic-unknown",
+        "peaks": [
+          [
+            50.0,
+            10.0
+          ],
+          [
+            100.0,
+            20.0
+          ],
+          [
+            150.0,
+            30.0
+          ]
+        ],
+        "ms_level": 2,
+        "representation": "centroid",
+        "polarity": "positive",
+        "precursor_mz": 195.0877,
+        "precursor_type": "[M+H]+",
+        "collision_energy": {
+          "value": 20.0,
+          "unit": "eV"
+        },
+        "instrument": "LC-ESI-QTOF",
+        "rt_minutes": 2.0,
+        "metadata": {
+          "origin": "Explicit synthetic input; no known identity",
+          "acquisition_mode": "dda",
+          "mz_unit": "m/z",
+          "intensity_unit": "arbitrary intensity",
+          "rt_unit": "minute"
+        }
+      }
+    ],
+    "background": [],
+    "config": {
+      "tolerance": {
+        "value": 0.01,
+        "unit": "da"
+      },
+      "centroid_snr": null,
+      "background_scale": 1.0,
+      "relative_threshold": 0.01
+    }
+  }
+}

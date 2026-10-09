@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "operation_id": "21e606b4-a9e3-48da-8b75-fb9e9ec83a3a",
+  "actor": "human",
+  "operation": {
+    "operation": "targeted_batch",
+    "batch": {
+      "version": 1,
+      "name": "Editable unknown-run example (supply real standards)",
+      "targets": [
+        {
+          "id": "example-analyte",
+          "quantifier": {
+            "extraction": {
+              "expected_rt": 10.95,
+              "rt_window": [
+                10.0,
+                12.0
+              ],
+              "extraction": {
+                "name": "Example quantifier",
+                "acquisition": "FS",
+                "kind": "XIC",
+                "mass": 524.3,
+                "ppm": 10.0,
+                "smoothing": 0,
+                "polarity": "positive"
+              }
+            }
+          },
+          "qualifiers": [],
+          "internal_standard": null,
+          "is_area_range": null,
+          "calibration": {
+            "degree": 1,
+            "intercept": {
+              "kind": "free"
+            },
+            "weighting": "unweighted",
+            "unit": "ng_ml",
+            "range": [
+              1.0,
+              100.0
+            ],
+            "lod": 1.0,
+            "loq": 1.0,
+            "accuracy_tolerance_percent": 15.0,
+            "qc_cv_limit_percent": 15.0,
+            "blank_response_limit": 0.0
+          }
+        }
+      ],
+      "samples": [
+        {
+          "id": "unknown-1",
+          "source": "test_file/data_dependent_02.mzML",
+          "role": "unknown",
+          "injection_order": 1,
+          "dilution": 1.0,
+          "nominal": {},
+          "exclusions": {}
+        }
+      ],
+      "detection_smoothing": 0,
+      "minimum_height": 0.0,
+      "boundary_fraction": 0.05
+    }
+  }
+}

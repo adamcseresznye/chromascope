@@ -16,6 +16,65 @@ pub(super) fn text_center(shapes: &[egui::epaint::ClippedShape], text: &str) -> 
     shapes.iter().find_map(|s| find(&s.shape, text))
 }
 
+/// Locate a real rendered control, scrolling the viewport when forms grow.
+/// This retains click/selection assertions instead of bypassing UI interaction.
+#[cfg(test)]
+pub(super) fn scroll_to_text(
+    text: &str,
+    frames: &mut Vec<egui::FullOutput>,
+    mut render: impl FnMut(Vec<egui::Event>) -> egui::FullOutput,
+) -> egui::Pos2 {
+    frames.push(render(vec![]));
+    if let Some(pos) = text_center(&frames.last().unwrap().shapes, text) {
+        return pos;
+    }
+    // A standalone analytical window can be shorter than the screen. Use
+    // its painted content clip, rather than scrolling outside that viewport.
+    let pointer = frames
+        .last()
+        .unwrap()
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(t) if shape.clip_rect.contains(t.pos) => {
+                Some(shape.clip_rect.center())
+            }
+            _ => None,
+        })
+        .unwrap_or(egui::pos2(500., 150.));
+    for direction in [-1.0, 1.0] {
+        for _ in 0..32 {
+            frames.push(render(vec![
+                egui::Event::PointerMoved(pointer),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0., direction * 240.),
+                    modifiers: Default::default(),
+                },
+            ]));
+            frames.push(render(vec![]));
+            if let Some(pos) = text_center(&frames.last().unwrap().shapes, text) {
+                return pos;
+            }
+        }
+    }
+    let visible: Vec<_> = frames
+        .last()
+        .unwrap()
+        .shapes
+        .iter()
+        .filter_map(|shape| {
+            if let egui::Shape::Text(t) = &shape.shape {
+                Some((&t.galley.job.text, t.pos, shape.clip_rect))
+            } else {
+                None
+            }
+        })
+        .take(40)
+        .collect();
+    panic!("Missing rendered control after scrolling: {text}; visible={visible:?}")
+}
+
 #[cfg(test)]
 pub(super) fn save(
     ctx: &egui::Context,

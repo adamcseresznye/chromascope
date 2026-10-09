@@ -1,0 +1,25 @@
+
+running 1 test
+test analytical_workloads ... BENCH_JSON {"build":"test profile; dependencies opt-level=2, core unoptimized","bytes":231436084,"peaks_per_scan":1024,"scans":10000,"synthetic":true,"workload":"dataset"}
+BENCH_JSON {"seconds":0.5404476,"units":10000,"workload":"source_sha256"}
+BENCH_JSON {"seconds":0.5970025,"units":10000,"workload":"open_bounds"}
+BENCH_JSON {"seconds":0.6486956,"units":10000,"workload":"xic_repeat_0"}
+BENCH_JSON {"seconds":0.6418431,"units":10000,"workload":"xic_repeat_1"}
+BENCH_JSON {"seconds":0.645243,"units":10000,"workload":"xic_repeat_2"}
+BENCH_JSON {"seconds":0.8227938,"units":10000,"workload":"tic_missing_metadata"}
+BENCH_JSON {"seconds":0.8999821,"units":10000,"workload":"bpc_missing_metadata"}
+BENCH_JSON {"seconds":0.4296059,"units":1000,"workload":"batch_integration_1000"}
+BENCH_JSON {"seconds":0.4294929,"units":10001,"workload":"chromatography_sg_chord"}
+BENCH_JSON {"seconds":0.4033211,"units":1000,"workload":"calibration_1000_fits"}
+BENCH_JSON {"seconds":0.1788853,"units":64,"workload":"targeted_64_samples_calibration"}
+BENCH_JSON {"seconds":0.2344161,"units":10000,"workload":"library_import_10000"}
+BENCH_JSON {"seconds":0.3134781,"units":10000,"workload":"spectral_search_10000"}
+BENCH_JSON {"seconds":0.165603,"units":10000,"workload":"project_register_large_source"}
+BENCH_JSON {"seconds":0.9954133,"units":100,"workload":"project_100_commits"}
+BENCH_JSON {"seconds":0.0066373,"units":100,"workload":"project_open_100_revisions"}
+BENCH_JSON {"seconds":0.0034793,"units":1,"workload":"project_restore_revision"}
+BENCH_JSON {"seconds":1.37526,"units":20000,"workload":"concurrent_xic_2_readers"}
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.58s
+

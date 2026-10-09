@@ -6,7 +6,7 @@ pub(super) fn show(app: &MzViewerApp, ctx: &Context) {
     let about_id = egui::Id::new("about_open");
     let mut open = ctx.data(|d| d.get_temp::<bool>(about_id).unwrap_or(false));
     if open {
-        egui::Window::new("About Chromascope")
+        egui::Window::new("About Chromascope").max_height((ctx.content_rect().height()-60.0).max(120.0)).vscroll(true)
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
@@ -53,6 +53,8 @@ pub(super) fn show(app: &MzViewerApp, ctx: &Context) {
     if let Some(id) = ctx.data(|d| d.get_temp::<FileId>(file_id)) {
         let mut open = true;
         egui::Window::new("File information")
+            .max_height((ctx.content_rect().height() - 60.0).max(120.0))
+            .vscroll(true)
             .open(&mut open)
             .collapsible(false)
             .default_width(420.0)

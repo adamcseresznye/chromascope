@@ -1,0 +1,94 @@
+[
+  {
+    "gate": "all-features",
+    "exit_code": 0,
+    "log": "target\\performance-finalized-oct09-close-all-features.log",
+    "log_sha256": "c9fafdaf9af00b93355d5f9644f5798ef4a20384b786fad860d0438fa8507b60",
+    "passed": 379,
+    "failed": 0,
+    "ignored": 5
+  },
+  {
+    "gate": "headless",
+    "exit_code": 0,
+    "log": "target\\performance-finalized-oct09-close-headless-retry.log",
+    "log_sha256": "f61afd0ce52bc3d3e3fd43b6114aa1b7b26d318b6fed125a1fb64185a0f5d633",
+    "passed": 282,
+    "failed": 0,
+    "ignored": 5
+  },
+  {
+    "gate": "check",
+    "exit_code": 0,
+    "log": "target\\performance-finalized-oct09-check.log",
+    "log_sha256": "07c18ece3b8024291948e80d6c874d668e974259f146289ff32cddb72cd8755d"
+  },
+  {
+    "gate": "build",
+    "exit_code": 0,
+    "log": "target\\performance-finalized-oct09-build.log",
+    "log_sha256": "54979e3222887a04e88d5acb46fce21591077d3f9387c62e9010f1e4a0ef9cfc"
+  },
+  {
+    "gate": "release",
+    "exit_code": 0,
+    "log": "target\\performance-finalized-oct09-release.log",
+    "log_sha256": "f8696ec2447bce23b82a509a1b8e747cf45d4ce45eb8a7107265eb871aa63314"
+  },
+  {
+    "gate": "clippy",
+    "exit_code": 0,
+    "log": "target\\performance-finalized-oct09-close-clippy.log",
+    "log_sha256": "0398fb374cf4024d62ebc6e6f57df2ca405b9f0ee0eb567b4daf9c538d6a37b7"
+  },
+  {
+    "gate": "format",
+    "exit_code": 0,
+    "log": "target\\performance-finalized-oct09-completed-format.log",
+    "log_sha256": "cbf18fe11b5be3176f866893bdd120594d2b0fb50f65916068118eb3eba819bb"
+  },
+  {
+    "gate": "diff",
+    "exit_code": 0,
+    "log": "target\\performance-finalized-oct09-completed-diff.log",
+    "log_sha256": "169c68cf753f454e2ec84c72a264bc62427fe95c0ce71a9a3bb17c127689cfa3"
+  },
+  {
+    "gate": "openms-scientific",
+    "exit_code": 0,
+    "log": "target\\performance-finalized-oct09-openms-scientific.log",
+    "log_sha256": "d9239f203bd480aa4ac7480674933bd0addb0f555873ab300065f76dd40b794b",
+    "passed": 1,
+    "failed": 0,
+    "ignored": 0
+  },
+  {
+    "gate": "profiler",
+    "exit_code": 0,
+    "log": "target\\performance-finalized-oct09-profiler.log",
+    "log_sha256": "eb1b2a3d35a4890035ce3913fec8f003d056284344cd111338fdd654ed72666e"
+  },
+  {
+    "gate": "independent-references",
+    "exit_code": 0,
+    "log": "target\\performance-finalized-oct09-independent.log",
+    "log_sha256": "c01d3681a535471c14f3c2f32ec32bde3289653a00b3519e4d853273cf3b6d33"
+  },
+  {
+    "gate": "python-openms",
+    "exit_code": 0,
+    "log": "target\\performance-finalized-oct09-python-openms.log",
+    "log_sha256": "78027b2f42b1e8e312f8fec207db0e2e20e00174f14f0226ebc89888c8c04365"
+  },
+  {
+    "gate": "python-format",
+    "exit_code": 0,
+    "log": "target\\performance-finalized-oct09-python-format.log",
+    "log_sha256": "83abf4b47e6b6e216d698b30f1f030922562c86836a54764d86a0e463467807e"
+  },
+  {
+    "gate": "python-compile",
+    "exit_code": 0,
+    "log": "target\\performance-finalized-oct09-pycompile.log"
+  }
+]

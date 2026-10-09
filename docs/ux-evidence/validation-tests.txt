@@ -1,0 +1,501 @@
+warning: `C:\Users\s0212777\.cargo\config` is deprecated in favor of `config.toml`
+  |
+  = help: if you need to support cargo 1.38 or earlier, you can symlink `config` to `config.toml`
+    Blocking waiting for file lock on build directory
+   Compiling chromascope v0.3.0 (C:\Users\s0212777\OneDrive - Universiteit Antwerpen\Bureaublad\projects\chromascope)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4m 27s
+     Running unittests src\lib.rs (target\debug\deps\chromascope-f0048a7476676f38.exe)
+
+running 226 tests
+test error::tests::test_invalid_mass_error_message ... ok
+test error::tests::test_invalid_smoothing_window_error ... ok
+test error::tests::test_no_retention_time_data_error ... ok
+test error::tests::test_result_type_alias_works ... ok
+test error::tests::test_invalid_tolerance_error_message ... ok
+test error::tests::test_io_error_conversion ... ok
+test error::tests::test_missing_xic_params_error ... ok
+test error::tests::test_mzdata_error ... ok
+test engine_mcp::interface_tests::immutable_paging_bounds_and_checksums ... ok
+test export::tests::test_export_csv_creates_file ... ok
+test error::tests::test_file_not_opened_error ... ok
+test export::tests::test_export_large_dataset ... ok
+test error::tests::test_no_mass_spectrum_data_error ... ok
+test export::tests::test_export_empty_data ... ok
+test error::tests::test_no_plot_data_error ... ok
+test export::tests::test_export_csv_correct_format ... ok
+test gui::preset_editor::tests::editor_round_trip_preserves_transition_filters_and_grid ... ok
+test gui::preset_editor::tests::analytes_render_below_each_other_at_narrow_and_wide_widths ... ok
+test gui::annotation::tests::evidence_review_clicks_retain_unknown_and_reversible_history ... ok
+test gui::delivery::tests::report_configuration_software_render ... ok
+test export::tests::test_export_spectrum_csv_empty_returns_no_plot_data ... ok
+test gui::preset_editor::tests::invalid_cells_and_excel_rows_are_rejected_without_silent_defaults ... ok
+test gui::preset_editor::tests::replacing_dirty_draft_preserves_changes_until_decision ... ok
+test export::tests::test_export_spectrum_csv_invalid_path ... ok
+test export::tests::test_export_to_invalid_path ... ok
+test export::tests::test_export_spectrum_csv_correct_format ... ok
+test gui::quant::tests::csv_quotes_names_keeps_missing_areas_blank_and_marks_stale_methods ... ok
+test gui::quant::tests::batch_roundtrip_retains_manual_corrections_and_rejects_corrupt_data ... ok
+test gui::quant::tests::method_roundtrip_validates_rt_windows_and_allows_isomer_extractions ... ok
+test gui::preset_editor::tests::saved_file_can_be_reopened_and_replaced ... ok
+test gui::quant::tests::advanced_controls_preview_apply_and_review_through_egui ... ok
+test gui::quant::tests::missing_noise_multiple_candidates_and_clipped_peaks_are_flagged ... ok
+test gui::quant::tests::irregular_scan_spacing_integrates_the_raw_peak ... ok
+test gui::quant::tests::advanced_batch_history_roundtrip_and_corruption_rejection ... ok
+test gui::quant::tests::local_prominence_rejects_ripples_on_an_elevated_baseline ... ok
+test gui::quant::tests::empty_or_cancelled_batch_keeps_results_and_does_not_touch_viewer ... ok
+test gui::presets::tests::preset_validates_modes_transitions_and_ranges ... ok
+test gui::quant::tests::dragging_boundaries_and_intervals_changes_only_the_selected_result ... ok
+test gui::presets::tests::failed_sample_is_not_retried_on_every_frame ... ok
+test gui::quant::tests::shipped_method_example_is_valid_and_roundtrips ... ok
+test gui::quant::tests::replacing_an_edited_method_requires_a_decision_and_keeps_the_current_method ... ok
+test gui::remote::tests::integration_updates_and_undo_restores_previous_boundaries ... ok
+test gui::remote::tests::invalid_inputs_and_read_only_changes_are_rejected ... ok
+test gui::remote::tests::batch_records_partial_failure_and_preserves_successes ... ok
+test gui::quant::tests::smoothing_changes_detection_but_not_the_area_source ... ok
+test gui::state::tests::test_integration_state_default ... ok
+test gui::state::tests::test_validated_input_default ... ok
+test gui::state::tests::test_file_cache_default ... ok
+test gui::state::tests::test_validated_input_new ... ok
+test gui::state::tests::test_validated_input_sync_accepts_valid ... ok
+test gui::state::tests::test_validated_input_sync_rejects_failing_validation ... ok
+test gui::state::tests::test_validated_input_sync_rejects_invalid_parse ... ok
+test gui::qc::tests::qc_dashboard_evaluation_and_review_preserve_failed_status ... ok
+test gui::remote::tests::numerical_round_trip_and_read_only_ui_preservation ... ok
+test gui::remote::tests::metadata_filter_validation_exports_and_existing_files_are_preserved ... ok
+test gui::presets::tests::shared_preset_follows_sample_switches_and_caches_without_clutter ... ok
+test gui::tests::integration_and_export_keep_full_resolution ... ok
+test gui::tests::test_active_file_switch_syncs_color_picker ... ok
+test gui::remote::tests::queue_applies_on_owner_thread_and_records_errors ... ok
+test gui::tests::empty_selection_preserves_workspace_and_new_files_are_appended ... ok
+test gui::tests::test_app_default_initialization ... ok
+test gui::tests::test_build_processing_params_xic_invalid_mass ... ok
+test gui::tests::test_build_processing_params_tic ... ok
+test gui::tests::test_build_processing_params_bpc ... ok
+test gui::spectral::tests::desktop_search_overlay_and_annotation_keep_original_history ... ok
+test gui::quant::tests::batch_extracts_all_samples_preserves_corrections_and_invalidates_method_edits ... ok
+test gui::tests::test_create_line_for_file_respects_settings ... ok
+test gui::tests::test_file_id_stability ... ok
+test gui::tests::test_close_last_file_resets_color_picker ... ok
+test gui::tests::test_error_cleared_after_dismissal ... ok
+test gui::tests::test_build_processing_params_xic_invalid_tolerance ... ok
+test gui::tests::test_hashmap_file_removal_stability ... ok
+test gui::tests::test_error_dialog_shown ... ok
+test gui::remote::tests::quantification_method_progress_manual_recalculation_and_reset ... ok
+test gui::tests::switching_files_during_processing_updates_new_active_file ... ok
+test gui::tests::test_mass_spectrum_color_uses_file_display_color ... ok
+test gui::remote::tests::asynchronous_loading_extraction_and_display_conflict ... ok
+test gui::tests::test_build_processing_params_xic_valid ... ok
+test gui::tests::pending_parameter_changes_survive_running_job ... ok
+test gui::quant::tests::quant_workspace_renders_results_and_review_at_small_and_large_sizes ... ok
+test gui::tests::test_multiple_errors_overwrite ... ok
+test gui::tests::test_param_cache_prevents_redundant_extraction ... ok
+test gui::tests::test_poll_with_no_receiver_does_not_panic ... ok
+test gui::tests::test_reset_state_clears_files ... ok
+test gui::tests::test_line_color_propagates_to_active_file ... ok
+test gui::tests::test_is_processing_default_false ... ok
+test gui::workspace::tests::configurable_grid_can_show_nine_analytes_on_one_page ... ok
+test gui::workspace::tests::focus_mode_restores_the_previous_panels_after_session_round_trip ... ok
+test gui::tests::test_reset_state_clears_line_color ... ok
+test gui::workspace::tests::missing_session_source_finishes_recovery_with_error ... ok
+test gui::workspace::tests::background_update_retains_previous_xic_with_a_distinct_color ... ok
+test gui::workspace::tests::corrupt_session_trace_is_rejected_before_restoration ... ok
+test gui::workspace::tests::integrations_keep_parameters_after_trace_edits_and_escape_csv ... ok
+test gui::workspace::tests::comparison_matrix_aligns_missing_analytes_and_preserves_individual_layout ... ok
+test gui::workspace::tests::long_trace_names_keep_hide_and_delete_controls_accessible ... ok
+test gui::workspace::tests::horizontal_figure_uses_columns_and_vertical_figure_uses_rows ... ok
+test gui::workspace::tests::adjacent_scan_navigation_uses_native_indices_and_actual_rt ... ok
+test gui::workspace::tests::session_round_trip_preserves_filters_and_measurements ... ok
+test gui::workspace::tests::session_restores_trace_to_new_file_id_and_keeps_selection ... ok
+test gui::workspace::tests::shared_scale_uses_visible_full_resolution_traces_and_custom_limits ... ok
+test gui::workspace::tests::stacked_figures_limit_panels_and_overlay_is_explicit ... ok
+test jobs::tests::cancellation_during_work_and_exact_scan_limit ... ok
+test gui::workspace::tests::selecting_retained_panel_preserves_panel_order_and_delete_removes_it ... ok
+test jobs::tests::panic_becomes_structured_failure_and_later_work_can_run ... ok
+test gui::workspace::tests::retained_xics_select_without_losing_full_resolution_or_parameters ... ok
+test gui::workspace::tests::view_settings_round_trip_and_old_sessions_default_to_visible_panes ... ok
+test gui::workspace::tests::svg_exports_escape_labels_and_respect_visibility ... ok
+test gui::untargeted::tests::matrix_links_sample_eic_and_retains_original_on_worker_failure ... ok
+test import::tests::conversion_preserves_paths_and_has_no_processing_filters ... ok
+test jobs::tests::shared_scan_budget_is_atomic_under_contention ... ok
+test mcp::tests::schemas_and_unknown_arguments ... ok
+test parser::tests::test_extract_bounds_uses_scan_windows_when_available ... ok
+test parser::tests::test_available_scan_filters_includes_ms1 ... ok
+test gui::targeted::tests::raw_batch_background_run_and_reversible_review_through_egui ... ok
+test parser::tests::test_detail_level_restored_after_tic ... ok
+test parser::tests::test_bpc_intensities_are_nonzero ... ok
+test parser::tests::test_bounds_accuracy ... ok
+test parser::tests::test_bounds_span_all_spectra ... ok
+test import::tests::mzml_bypasses_converter_and_vendor_requires_configuration ... ok
+test mcp::tests::access_policy_denies_escape_and_overwrite ... ok
+test gui::workbench::tests::workbench_frames_fit_and_preserve_cached_data ... ok
+test parser::tests::test_full_pipeline_tic ... ok
+test mcp::tests::protocol_initialize_discovery_and_invalid_tool_arguments ... ok
+test parser::tests::test_get_bpic_negative_polarity ... ok
+test parser::tests::test_get_bpic ... ok
+test parser::tests::test_get_bpic_file_not_opened ... ok
+test parser::tests::test_full_pipeline_xic ... ok
+test parser::tests::test_get_mass_spectrum_by_index_invalid ... ok
+test parser::tests::test_get_mass_spectrum_after_extraction ... ok
+test parser::tests::test_get_bpic_unknown_polarity ... ok
+test parser::tests::test_get_mass_spectrum_by_index_different_indices ... ok
+test parser::tests::test_get_closest_index_exact_match ... ok
+test parser::tests::test_get_closest_index_empty_data ... ok
+test parser::tests::test_get_closest_index_between_points ... ok
+test parser::tests::test_get_mass_spectrum_works_after_reader_only_open ... ok
+test parser::tests::test_get_mass_spectrum_returns_owned ... ok
+test parser::tests::test_get_closest_index_after_last ... ok
+test parser::tests::test_get_mass_spectrum_by_index_unopened_file ... ok
+test parser::tests::test_get_closest_index_before_first ... ok
+test parser::tests::test_get_mass_spectrum_by_index_valid ... ok
+test parser::tests::test_get_tic_file_not_opened ... ok
+test parser::tests::test_get_xic_negative_tolerance ... ok
+test parser::tests::test_get_tic ... ok
+test parser::tests::test_get_xic ... ok
+test parser::tests::test_get_xic_file_not_opened ... ok
+test parser::tests::test_get_xic_no_matching_peaks ... ok
+test parser::tests::test_multiple_xic_extractions ... ok
+test parser::tests::test_invalid_smoothing_window ... ok
+test parser::tests::test_invalid_tolerance_returns_error ... ok
+test parser::tests::test_invalid_mass_returns_error ... ok
+test parser::tests::test_get_tic_all_polarities ... ok
+test parser::tests::test_ms1_filter_has_valid_mz_range ... ok
+test parser::tests::test_new ... ok
+test parser::tests::test_get_xic_zero_tolerance ... ok
+test parser::tests::test_open_msfile_nonexistent ... ok
+test parser::tests::test_get_xic_all_polarities ... ok
+test parser::tests::test_multiple_extractions_coexist ... ok
+test parser::tests::test_open_msfile ... ok
+test parser::tests::test_prepare_for_plot_averages_duplicates ... ok
+test parser::tests::test_prepare_for_plot_empty_data ... ok
+test parser::tests::test_prepare_for_plot_ordering ... ok
+test parser::tests::test_parallel_tic_matches_sequential ... ok
+test parser::tests::test_open_reader_only_does_not_extract_bounds ... ok
+test parser::tests::test_prepare_for_plot_starts_with_first_rt_not_zero ... ok
+test parser::tests::test_prepare_for_plot_after_tic ... ok
+test parser::tests::test_parallel_xic_output_sorted_by_rt ... ok
+test parser::tests::test_smooth_chromatogram_single_point ... ok
+test parser::tests::test_scan_window_fields_are_accessible ... ok
+test parser::tests::test_smooth_chromatogram ... ok
+test parser::tests::test_smooth_chromatogram_empty ... ok
+test parser::tests::test_smooth_chromatogram_invalid_window ... ok
+test parser::tests::test_smooth_chromatogram_window_larger_than_data ... ok
+test parser::tests::test_valid_mass_and_tolerance ... ok
+test parser::tests::test_smooth_chromatogram_window_zero ... ok
+test parser::tests::test_xic_sums_intensities_per_spectrum ... ok
+test parser::tests::test_tic_scan_indices_map_to_actual_spectra ... ok
+test processing::acquisition_tests::acquisition_filter_changes_actual_extraction_and_can_be_cleared ... ok
+test parser::tests::test_valid_smoothing_window ... ok
+test parser::tests::test_xic_double_click_finds_correct_spectrum ... ok
+test parser::tests::test_tic_does_not_hold_full_file_in_memory ... ok
+test parser::tests::test_xic_one_entry_per_spectrum_no_duplicates ... ok
+test parser::tests::test_xic_binary_search_pre_filter_correctness ... ok
+test parser::tests::test_tic_range_raw_arrays_nonzero ... ok
+test parser::tests::test_switching_extraction_methods ... ok
+test processing::acquisition_tests::targeted_modes_require_correct_spectrum_metadata ... ok
+test processing::tests::test_integrate_peak_empty_data_fails ... ok
+test parser::tests::test_xic_structure_matches_tic ... ok
+test processing::tests::test_decimation_caps_at_max_points ... ok
+test processing::tests::test_integrate_peak_start_ge_end_fails ... ok
+test processing::tests::test_integrate_peak_subset ... ok
+test processing::tests::test_integrate_peak_rectangle ... ok
+test processing::tests::test_integrate_peak_slanted_baseline ... ok
+test processing::tests::test_integrate_peak_fronting_peak ... ok
+test processing::tests::test_integrate_peak_triangle ... ok
+test parser::tests::test_xic_stores_spectrum_indices_not_peak_indices ... ok
+test processing::tests::test_interpolate_at_clamping ... ok
+test processing::tests::test_integrate_peak_interpolated_boundary ... ok
+test processing::tests::test_integrate_peak_no_interior_points_interpolates ... ok
+test processing::tests::test_interpolate_at_exact_point ... ok
+test processing::tests::test_interpolate_at_midpoint ... ok
+test validation::tests::test_boundary_tolerances ... ok
+test processing::tests::test_process_tic ... ok
+test processing::tests::test_process_with_smoothing ... ok
+test processing::tests::test_process_xic_without_params_fails ... ok
+test processing::tests::test_process_xic_with_valid_params ... ok
+test processing::tests::test_process_bpc ... ok
+test processing::tests::test_process_chromatogram_returns_both_plot_data_and_raw_chromatogram ... ok
+test processing::tests::test_process_excessive_smoothing_fails ... ok
+test spectral::tests::subtraction_overflow_and_unused_invalid_centroid_snr_rejected ... ok
+test spectral::tests::zero_signal_background_preserves_signed_peak_and_missing_state ... ok
+test spectral::tests::incompatible_background_precursor_presence_is_rejected ... ok
+test processing::tests::test_process_negative_polarity ... ok
+test validation::tests::test_excessive_tolerance_invalid ... ok
+test validation::tests::test_mass_exactly_at_boundaries ... ok
+test validation::tests::test_mass_out_of_range_includes_file_bounds ... ok
+test validation::tests::test_mass_validation_with_bounds ... ok
+test project::resource_tests::hashing_enforces_actual_bytes_and_cancellation ... ok
+test validation::tests::test_smoothing_relative_to_scan_count ... ok
+test validation::tests::test_valid_xic_params ... ok
+test validation::tests::test_negative_mass_invalid ... ok
+test validation::tests::test_negative_tolerance_invalid ... ok
+test validation::tests::test_smoothing_absolute_max ... ok
+test validation::tests::test_various_polarities ... ok
+test validation::tests::test_zero_mass_invalid ... ok
+test gui::remote::tests::images_are_png_and_capture_does_not_change_live_bounds ... ok
+test gui::statistics::tests::heatmap_selection_and_software_plot_render ... ok
+
+test result: ok. 226 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.36s
+
+     Running unittests src\main.rs (target\debug\deps\chromascope-46854bd9d7084e3f.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\bin\chromascope-cli.rs (target\debug\deps\chromascope_cli-be7e08628565b9a6.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\bin\chromascope-engine-mcp.rs (target\debug\deps\chromascope_engine_mcp-4eb6bb4ca10685e0.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\bin\chromascope-mcp.rs (target\debug\deps\chromascope_mcp-3a08d49f30ce80d6.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\annotation.rs (target\debug\deps\annotation-ea4e812343d29e54.exe)
+
+running 9 tests
+test reference_glucose_formula_isotope_and_incorrect_adduct ... ok
+test library_isomers_remain_unknown_and_conflicting_evidence_fails ... ok
+test lipid_hierarchy_does_not_invent_chain_or_sn_resolution ... ok
+test coeluting_h_na_relationship_is_tentative_and_replayed ... ok
+test response_replay_rejects_changed_history_or_candidate ... ok
+test competing_isomers_reviews_stale_and_export_preserve_originals ... ok
+test project_annotations_preserve_history_and_require_registered_sources ... ok
+test actual_mcp_propose_review_export ... ok
+test engine_cli_review_and_no_overwrite_export ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.20s
+
+     Running tests\chromatography.rs (target\debug\deps\chromatography-cd2da2c4005482eb.exe)
+
+running 12 tests
+test missing_points_gaps_empty_and_invalid_parameters ... ok
+test gaussian_apex_fwhm_and_analytical_area ... ok
+test noise_estimator_linear_drift_and_width_constraints ... ok
+test truncated_width_is_missing_and_between_scan_area_is_exact ... ok
+test baseline_drift_chord_and_rolling_quantile ... ok
+test preview_manual_reference_accept_undo_and_corruption ... ok
+test asymmetric_peak_area_against_exact_gamma_integral ... ok
+test overlaps_partition_without_double_counting_and_unresolved_is_flagged_by_scope ... ok
+test polynomial_edges_irregular_sampling_and_signed_negative_areas ... ok
+test scipy_smoothing_baseline_apex_and_trapezoid_references ... ok
+test cli_project_preview_never_changes_project_even_on_failure ... ok
+test engine_cli_batch_roundtrip_and_no_overwrite_csv ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.59s
+
+     Running tests\delivery.rs (target\debug\deps\delivery-b818d90a02091c5c.exe)
+
+running 7 tests
+test escaped_report_tsv_svg_and_method_comparison ... ok
+test unsafe_mapping_and_changed_sources_are_rejected ... ok
+test cli_export_and_schema_defaults ... ok
+test missing_source_inspection_and_no_overwrite ... ok
+test calibration_quantification_tables_and_replay_reference ... ok
+test raw_extraction_reproduces_after_portable_relocation ... ok
+test portable_roundtrip_replay_history_and_corruption ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.37s
+
+     Running tests\engine.rs (target\debug\deps\engine-e2b25ea1de95da35.exe)
+
+running 10 tests
+test missing_source_and_future_schema_fail_explicitly ... ok
+test independent_chord_area_and_invalid_inputs ... ok
+test scheduler_cancellation_and_limits ... ok
+test quantification_uses_shared_unsmoothed_peak_kernel ... ok
+test method_migration_preserves_source_and_stable_identity ... ok
+test restore_is_a_new_revision_and_keeps_original_results ... ok
+test immutable_project_roundtrip_stale_commit_corruption_and_relink ... ok
+test headless_mcp_stdio_matches_engine_and_enforces_roots ... ok
+test spectrum_metadata_and_cli_project_reopen ... ok
+Processing progress: 8 completed scan/sample phases
+test engine_legacy_and_cli_numerical_equivalence ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.63s
+
+     Running tests\engine_mcp.rs (target\debug\deps\engine_mcp-98ab3496cb7b4976.exe)
+
+running 5 tests
+test configured_project_report_export_protocol ... ok
+test transport_validation_authorization_cancellation_and_read_only_policy ... ok
+test preview_cannot_commit_and_stale_review_remains_failed_evidence ... ok
+test complete_targeted_workflow_review_qc_report_and_project_history ... ok
+test actual_stdio_example_retains_replay_bundle_and_refuses_overwrite ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.45s
+
+     Running tests\import_msconvert.rs (target\debug\deps\import_msconvert-a153ac62601bf06b.exe)
+
+running 4 tests
+test real_msconvert_roundtrip_preserves_tic_and_scan_mapping ... ignored, requires an installed ProteoWizard msconvert
+test real_msconvert_targeted_vendor_acquisition_has_spectra_and_xic ... ignored, requires ProteoWizard and CHROMASCOPE_TEST_VENDOR_FILE
+test profile_arrays_support_xic_and_range_bpc_without_peak_picking ... ok
+test converter_process_multi_run_failure_cancellation_and_cleanup ... ok
+
+test result: ok. 2 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 6.45s
+
+     Running tests\performance.rs (target\debug\deps\performance-e214cdfb3c9c19d4.exe)
+
+running 2 tests
+test analytical_workloads ... ignored, opt-in performance measurements; creates a large synthetic mzML in a temporary directory
+test openms_workloads ... ignored, requires existing pyOpenMS 3.5.0; cold/warm feature detection and affine alignment benchmark
+
+test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\qc.rs (target\debug\deps\qc-a53f61a24c147f54.exe)
+
+running 25 tests
+test failed_individual_cannot_hide_behind_mean_accuracy ... ok
+test heterogeneous_qc_levels_cannot_produce_a_precision_pass ... ok
+test no_rules_is_indeterminate_and_threshold_boundaries_inclusive ... ok
+test carryover_does_not_cross_batch_boundaries ... ok
+test optional_failure_is_visible_but_does_not_gate_required_pass ... ok
+test independent_python_statistics_and_rational_reference ... ok
+test invalid_inputs_rejected ... ok
+test carryover_uses_immediate_predecessor_not_largest_standard ... ok
+test duplicate_ids_orders_nonfinite_bounds_and_units_are_structured_errors ... ok
+test method_study_requires_declared_preparations ... ok
+test missing_required_never_passes_and_optional_does_not_gate ... ok
+test known_failing_batch_retains_every_reason ... ok
+test engine_method_validation_and_export_share_calculations ... ok
+test precision_by_run_and_level_preserves_design ... ok
+test order_effect_requires_one_batch ... ok
+test zero_and_negative_denominators_and_insufficient_replicates ... ok
+test review_is_reversible_and_never_overrides_failed_batch ... ok
+test report_roundtrip_keeps_identity_and_detects_review_tampering ... ok
+test recovery_requires_independent_matched_level_design ... ok
+test replay_detects_tampered_numbers_status_evidence_and_thresholds ... ok
+test method_calibration_rules_match_independent_numpy_models ... ok
+test real_extraction_to_qc_keeps_raw_evidence_and_missing_mass_explicit ... ok
+test project_qc_commit_checks_all_sources_and_retains_prior_revisions ... ok
+test actual_headless_mcp_qc_and_review ... ok
+test cli_evaluation_export_and_no_overwrite ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.32s
+
+     Running tests\release_workflows.rs (target\debug\deps\release_workflows-d1e6c2adbeef7850.exe)
+
+running 2 tests
+test cli_help_and_content_verified_relink_preserve_history ... ok
+test release_example_retains_evidence_and_refuses_existing_directory ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.21s
+
+     Running tests\reliability.rs (target\debug\deps\reliability-9d003c2053ec7013.exe)
+
+running 9 tests
+test malformed_file_and_cancelled_work_have_explicit_errors ... ok
+test malformed_arrays_are_errors_in_every_extraction_path_and_reader_recovers ... ok
+test project_interrupted_temporary_write_and_abandoned_lock_preserve_history ... ok
+test mixed_missing_metadata_is_recovered_without_replacing_supplied_values ... ok
+test unsorted_acquisition_has_actual_rt_extrema_and_preserved_scan_mapping ... ok
+test complete_no_window_bounds_include_interior_masses_and_gzip_validation ... ok
+test concurrent_project_writers_admit_one_revision_and_keep_snapshot ... ok
+test raw_time_units_convert_explicitly_and_unknown_missing_invalid_values_fail ... ok
+test repaired_traces_are_equivalent_in_gui_compatibility_engine_and_cli ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.25s
+
+     Running tests\spectral.rs (target\debug\deps\spectral-80e849e5513ae1bf.exe)
+
+running 25 tests
+test incompatible_averaging_and_unknown_representation_fail ... ok
+test average_and_background_keep_raw_and_negative_values ... ok
+test formula_known_caffeine_mass_adduct_hypotheses_and_bounds ... ok
+test adduct_ambiguity_retains_multiple_neutral_formulas ... ok
+test low_quality_single_ion_false_match_dia_and_outside_precursor_rejected ... ok
+test independent_massbank_dot_product_and_exhaustive_formula_references ... ok
+test mgf_import_and_unterminated_block ... ok
+test mzsignal_profile_centroid_recovers_gaussian_reference ... ok
+test real_massbank_reference_preserves_license_annotations_and_energy ... ok
+test nominal_isotope_convolution_matches_binomial_carbon_and_sulfur_reference ... ok
+test invalid_spectrum_and_resource_limits_explicit ... ok
+test isobaric_alternatives_retained_and_similarity_alone_cannot_disambiguate ... ok
+test carbon_isotope_spacing_charge_and_missing_states ... ok
+test native_scan_inspection_retains_isolation_and_rt ... ok
+test greedy_ambiguity_and_dense_pair_cap_are_explicit ... ok
+test cosine_exact_partial_disjoint_and_one_to_one ... ok
+test ppm_tolerance_is_mass_dependent_and_negative_peaks_do_not_score ... ok
+test known_match_is_unknown_until_review_and_confidence_requires_evidence ... ok
+test strict_library_metadata_index_and_replay ... ok
+test search_filters_wrong_polarity_adduct_instrument_energy_and_missing ... ok
+test json_annotation_roundtrip_and_linked_source_checks ... ok
+test engine_cli_identical_search_and_annotation ... ok
+test project_spectral_replay_and_immutable_history ... ok
+test cli_candidate_export_is_create_new_and_preserves_confidence ... ok
+test actual_mcp_import_search_annotation_and_root_policy ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.85s
+
+     Running tests\statistics.rs (target\debug\deps\statistics-614e801fb69238c2.exe)
+
+running 12 tests
+test targeted_concentrations_source_links_and_metadata_design ... ok
+test independent_welch_intervals_effects_fdr_and_pca ... ok
+test exact_rank_deficient_and_average_linkage_examples ... ok
+test half_minimum_internal_standard_and_pareto_known_values ... ok
+test invalid_design_and_corrupt_results_are_rejected ... ok
+test feature_matrix_conversion_keeps_original_filters_and_raw_evidence ... ok
+test missingness_all_missing_and_constant_states ... ok
+test explicit_missing_exclusions_normalization_and_reversibility ... ok
+test engine_roundtrip_exports_and_request_integrity ... ok
+test actual_mcp_statistics_and_export has been running for over 60 seconds
+test cli_create_new_export_and_project_revision_restore has been running for over 60 seconds
+test transformations_scaling_metadata_filters_and_by_family has been running for over 60 seconds
+test actual_mcp_statistics_and_export ... ok
+test transformations_scaling_metadata_filters_and_by_family ... ok
+test cli_create_new_export_and_project_revision_restore ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 75.09s
+
+     Running tests\targeted.rs (target\debug\deps\targeted-5ed12c9941a1cbd0.exe)
+
+running 12 tests
+test inverse_roots_never_extrapolate_or_choose_ambiguous ... ok
+test independent_numpy_regressions_all_models_weights_intercepts ... ok
+test invalid_designs_weights_levels_and_missing_standards_fail ... ok
+test cancelled_missing_source_and_range_extension_fail_structurally ... ok
+test responses_dilution_censoring_qc_and_is_flags ... ok
+test rt_qualifiers_is_bounds_exclusions_and_empty_precision_retain_evidence ... ok
+test signed_responses_zero_is_and_machine_boundary_flags_are_explicit ... ok
+test review_history_reject_restore_stale_corruption_and_lossless_roundtrip ... ok
+test raw_mzml_to_reviewed_concentrations_via_engine_and_cli ... ok
+test batch_sources_and_review_survive_project_reopen_with_checksums ... ok
+test shared_engine_cli_review_export_no_overwrite ... ok
+test targeted_mcp_raw_review_export_and_nested_path_policy ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.46s
+
+     Running tests\untargeted.rs (target\debug\deps\untargeted-697ef80458d0f56e.exe)
+
+running 5 tests
+test openms_multisample_reference_positive_negative_cli_cache_and_project ... ignored, requires local pyOpenMS 3.5.0; run explicitly for scientific/CLI/cache validation
+test validates_units_modes_paths_and_thresholds ... ok
+test cancellation_and_invalid_config_prevent_adapter_execution ... ok
+test independently_replays_area_alignment_and_qc_filters ... ok
+test matrix_and_observation_exports_preserve_filtered_evidence ... ok
+
+test result: ok. 4 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.14s
+
+   Doc-tests chromascope
+
+running 6 tests
+test src\export.rs - export::export_chromatogram_csv (line 30) - compile ... ok
+test src\processing.rs - processing::process_chromatogram (line 250) - compile ... ok
+test src\parser.rs - parser::MzData::open_msfile (line 239) - compile ... ok
+test src\processing.rs - processing::ProcessingParams (line 21) ... ok
+test src\validation.rs - validation::XicParams (line 108) ... ok
+test src\validation.rs - validation::XicParams::new (line 179) ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.76s
+

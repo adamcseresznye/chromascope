@@ -1,0 +1,56 @@
+{
+  "command": "chromascope-cli run SOURCE < metadata-request.json",
+  "executable_sha256": "e7e9f9477a93d50c59bec569bc33bd80001ec8c430bc9d827b9128bc50bbb02d",
+  "cases": [
+    {
+      "source": "sample-0.mzML",
+      "sha256": "84ebf774e688466d98184107833c30fffac376857156018ce3d34a95ee255945",
+      "exit_code": 0,
+      "response": {
+        "ok": true,
+        "result": {
+          "finished_unix_ms": 1791552307226,
+          "kernel_version": "chromascope/0.3.0/extraction-v2",
+          "output": {
+            "bounds": {
+              "max_mz": 714.0,
+              "max_rt": 6.824999809265137,
+              "min_mz": 60.0,
+              "min_rt": 0.0,
+              "scan_count": 821
+            },
+            "kind": "metadata",
+            "mass_unit": "m/z",
+            "retention_time_unit": "minute"
+          },
+          "request": {
+            "actor": "release-unit-reference",
+            "operation": {
+              "operation": "metadata"
+            },
+            "operation_id": "912b2aa9-9bd9-4ebb-91fe-582417ef85d2",
+            "version": 1
+          },
+          "result_id": "321bc09b-04ab-4262-8146-3b278915fb09",
+          "source_sha256": "84ebf774e688466d98184107833c30fffac376857156018ce3d34a95ee255945",
+          "started_unix_ms": 1791552307196,
+          "version": 1
+        }
+      },
+      "stderr": ""
+    },
+    {
+      "source": "unsupported-time-unit.mzML",
+      "sha256": "4fc563c3d2d1de4f8b0624e9d569a9ef0feed71bb66792223c720c249bca0fba",
+      "exit_code": 1,
+      "response": {
+        "error": {
+          "code": "adapter_failure",
+          "message": "MzML parsing error: Invalid mzML source metadata: scan start time requires an explicit supported minute/second/millisecond unit"
+        },
+        "ok": false
+      },
+      "stderr": ""
+    }
+  ]
+}

@@ -32,6 +32,8 @@
 //!
 //! This module can be used to define and manipulate line properties in graphical applications, allowing for customizable visual representations of data. The enums can be easily converted to types compatible with the `egui` and `egui_plot` libraries for rendering.
 
+#[cfg_attr(feature = "mcp-headless", derive(rmcp::schemars::JsonSchema))]
+#[cfg_attr(feature = "mcp-headless", schemars(crate = "rmcp::schemars"))]
 #[derive(serde::Serialize, serde::Deserialize, PartialEq, Default, Clone, Copy, Debug)]
 pub enum LineColor {
     #[default]
@@ -48,6 +50,7 @@ pub enum LineColor {
 }
 
 impl LineColor {
+    #[cfg(feature = "gui")]
     pub fn to_egui(&self) -> egui::ecolor::Color32 {
         match self {
             Self::Red => egui::ecolor::Color32::from_rgb(202, 75, 75),
@@ -64,6 +67,8 @@ impl LineColor {
     }
 }
 
+#[cfg_attr(feature = "mcp-headless", derive(rmcp::schemars::JsonSchema))]
+#[cfg_attr(feature = "mcp-headless", schemars(crate = "rmcp::schemars"))]
 #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug, Default, Clone, Copy)]
 pub enum PlotType {
     Xic,

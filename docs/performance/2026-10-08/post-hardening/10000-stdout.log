@@ -1,0 +1,29 @@
+
+running 1 test
+test analytical_workloads ... BENCH_JSON {"build":"test profile; dependencies opt-level=2, core unoptimized","bytes":231436084,"peaks_per_scan":1024,"scans":10000,"synthetic":true,"workload":"dataset"}
+BENCH_JSON {"seconds":0.6735127,"started_unix_seconds":1791519098.2513962,"units":10000,"workload":"source_sha256"}
+BENCH_JSON {"seconds":0.5090561,"started_unix_seconds":1791519099.150547,"units":10000,"workload":"reader_iteration_Full"}
+BENCH_JSON {"seconds":0.5107776,"started_unix_seconds":1791519099.8926828,"units":10000,"workload":"reader_iteration_Lazy"}
+BENCH_JSON {"seconds":0.477811,"started_unix_seconds":1791519100.706828,"units":10000,"workload":"reader_iteration_MetadataOnly"}
+BENCH_JSON {"seconds":0.8299476,"started_unix_seconds":1791519101.1852314,"units":10000,"workload":"open_bounds"}
+BENCH_JSON {"seconds":0.7894653,"started_unix_seconds":1791519102.0154276,"units":10000,"workload":"xic_repeat_0"}
+BENCH_JSON {"seconds":1.059574,"started_unix_seconds":1791519102.8051815,"units":10000,"workload":"xic_repeat_1"}
+BENCH_JSON {"seconds":1.2874973,"started_unix_seconds":1791519103.865038,"units":10000,"workload":"xic_repeat_2"}
+BENCH_JSON {"seconds":1.4771483,"started_unix_seconds":1791519105.1528068,"units":10000,"workload":"tic_missing_metadata"}
+BENCH_JSON {"seconds":1.7512511,"started_unix_seconds":1791519106.6302123,"units":10000,"workload":"bpc_missing_metadata"}
+BENCH_JSON {"seconds":0.7275464,"started_unix_seconds":1791519108.38178,"units":1000,"workload":"batch_integration_1000"}
+BENCH_JSON {"seconds":0.6244574,"started_unix_seconds":1791519109.1094198,"units":10001,"workload":"chromatography_sg_chord"}
+BENCH_JSON {"seconds":0.5934589,"started_unix_seconds":1791519109.7339778,"units":1000,"workload":"calibration_1000_fits"}
+BENCH_JSON {"seconds":0.3174183,"started_unix_seconds":1791519110.3339677,"units":64,"workload":"targeted_64_samples_calibration"}
+BENCH_JSON {"seconds":0.4543319,"started_unix_seconds":1791519110.6755333,"units":10000,"workload":"library_import_10000"}
+BENCH_JSON {"seconds":0.6205932,"started_unix_seconds":1791519111.129988,"units":10000,"workload":"spectral_search_10000"}
+BENCH_JSON {"seconds":0.3168915,"started_unix_seconds":1791519111.7661273,"units":10000,"workload":"project_register_large_source"}
+BENCH_JSON {"seconds":2.0585339,"started_unix_seconds":1791519112.0830884,"units":100,"workload":"project_100_commits"}
+BENCH_JSON {"seconds":0.0130086,"started_unix_seconds":1791519114.141741,"units":100,"workload":"project_open_100_revisions"}
+BENCH_JSON {"seconds":0.0150653,"started_unix_seconds":1791519114.1547804,"units":1,"workload":"project_restore_revision"}
+BENCH_JSON {"seconds":2.4174791,"started_unix_seconds":1791519114.1699226,"units":20000,"workload":"concurrent_xic_2_readers"}
+BENCH_JSON {"seconds":0.0010535,"started_unix_seconds":1791519117.8674722,"units":1,"workload":"running_xic_cancellation_latency"}
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 19.87s
+

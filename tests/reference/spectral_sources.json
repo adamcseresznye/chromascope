@@ -1,0 +1,24 @@
+{
+  "release": "2026.03",
+  "retrieved": "2026-10-08",
+  "records": [
+    {
+      "file": "MSBNK-Antwerp_Univ-AN111301.txt",
+      "url": "https://raw.githubusercontent.com/MassBank/MassBank-data/2026.03/Antwerp_Univ/MSBNK-Antwerp_Univ-AN111301.txt",
+      "sha256": "ada364afa767f1e39f1154b652123241ce3bfbbe61e7fa80278e408257be8cbe",
+      "license": "CC BY",
+      "authors": "Belova L, Covaci A, University of Antwerp, Belgium; Caballero-Casero N, University of Cordoba, Spain.",
+      "copyright": "Copyright (c) 2021 by Toxicological Center, University of Antwerp, Wilrijk, Belgium",
+      "modifications": "none"
+    },
+    {
+      "file": "MSBNK-Antwerp_Univ-AN111302.txt",
+      "url": "https://raw.githubusercontent.com/MassBank/MassBank-data/2026.03/Antwerp_Univ/MSBNK-Antwerp_Univ-AN111302.txt",
+      "sha256": "b90d0cf5dcedf7827b7b36939fc7d95fd2dda911171aea10d01a591c498ee7d1",
+      "license": "CC BY",
+      "authors": "Belova L, Covaci A, University of Antwerp, Belgium; Caballero-Casero N, University of Cordoba, Spain.",
+      "copyright": "Copyright (c) 2021 by Toxicological Center, University of Antwerp, Wilrijk, Belgium",
+      "modifications": "none"
+    }
+  ]
+}
