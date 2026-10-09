@@ -153,8 +153,14 @@ pub(super) fn panel(app: &mut MzViewerApp, ui: &mut egui::Ui) {
             }
         }
         ui.label("Revision-bound review operation");
-        super::forms::typed::<Operation>(ui, "Proposed review controls", &mut state.draft);
-        ui.collapsing("Advanced operation JSON", |ui| {
+        super::forms::guided::<Operation>(
+            ui,
+            "Proposed review controls",
+            "Routine review fields match the selected concentration. Approval always requires your reason below.",
+            &mut state.draft,
+        );
+        ui.collapsing("Advanced operation JSON — expert exact-operation audit", |ui| {
+            ui.small("Routine fields are in the guided controls above. This text is retained so the exact proposed operation can be audited before approval.");
             ui.add(
                 egui::TextEdit::multiline(&mut state.draft)
                     .code_editor()
@@ -276,6 +282,16 @@ pub(super) fn panel(app: &mut MzViewerApp, ui: &mut egui::Ui) {
 impl State {
     pub(super) fn busy(&self) -> bool {
         self.pending.is_some()
+    }
+    /// `(total_proposals, awaiting_decision)` — proposals without any
+    /// recorded approve/reject event still need scientist review.
+    pub(super) fn review_summary(&self) -> (usize, usize) {
+        let awaiting = self
+            .proposals
+            .iter()
+            .filter(|p| p.events.is_empty())
+            .count();
+        (self.proposals.len(), awaiting)
     }
 }
 

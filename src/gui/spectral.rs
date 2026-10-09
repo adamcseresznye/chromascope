@@ -167,12 +167,18 @@ fn panel(
 ) {
     ui.label("MS1/MS2 inspection, retained processing, local libraries, candidate overlays and evidence-based annotations");
 
-    ui.label(format!(
-        "Active source: {}",
-        path.as_ref()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "No acquisition selected".into())
-    ));
+    ui.horizontal_wrapped(|ui| {
+        ui.strong("Active source:");
+        if let Some(path) = path.as_ref() {
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.display().to_string());
+            ui.label(&name).on_hover_text(path.display().to_string());
+        } else {
+            ui.weak("No acquisition selected — open data in the Data explorer first.");
+        }
+    });
 
     let embedded = ui
         .ctx()
@@ -186,10 +192,10 @@ fn panel(
     if embedded {
         ui.horizontal_wrapped(|ui| {
             for (index, label) in [
-                "Inspect and process",
-                "Libraries and search",
-                "Formula and isotope hypotheses",
-                "Evidence and review",
+                "1 · Inspect and process",
+                "2 · Libraries and search",
+                "3 · Formula and isotope hypotheses",
+                "4 · Evidence and review",
             ]
             .iter()
             .enumerate()
@@ -200,17 +206,27 @@ fn panel(
         ui.ctx().data_mut(|d| d.insert_temp(stage_key, stage));
     }
     if !embedded || stage == 0 {
-        super::forms::typed::<Processing>(ui, "Spectrum processing", &mut s.processing);
+        super::forms::guided::<Processing>(
+            ui,
+            "Spectrum processing",
+            "Average signal scans and subtract background. Mass tolerance merges neighboring centroid peaks; raise the peak filter to drop noise.",
+            &mut s.processing,
+        );
         ui.horizontal(|ui| {
-            ui.label("Signal indices");
+            ui.label("Signal scan indices")
+                .on_hover_text("Comma-separated scan indices averaged as signal");
             ui.text_edit_singleline(&mut s.indices);
-            ui.label("Background indices");
+            ui.label("Background scan indices")
+                .on_hover_text("Comma-separated scan indices subtracted as background");
             ui.text_edit_singleline(&mut s.background_indices);
         });
 
         ui.collapsing(
-            "Processing: mass tolerance, profile SNR, subtraction scale, peak filter",
-            |ui| editor(ui, &mut s.processing),
+            "Advanced processing JSON — expert full-parameter audit",
+            |ui| {
+                ui.small("Routine settings live in the guided form above. This editor is intentionally retained for exact-parameter review and reproducibility.");
+                editor(ui, &mut s.processing)
+            },
         );
 
         if ui
@@ -231,8 +247,14 @@ fn panel(
         }
     }
     if !embedded || stage == 1 {
-        super::forms::typed::<LibrarySource>(ui, "Library source and license", &mut s.source);
+        super::forms::guided::<LibrarySource>(
+            ui,
+            "Library source and license",
+            "Name the spectral library and its license so every match stays attributable. Then import a local MSP, MGF, or MassBank file.",
+            &mut s.source,
+        );
         ui.collapsing("Advanced library source JSON", |ui| {
+            ui.small("Routine fields are in the guided form above; edit here only for exact-source review.");
             editor(ui, &mut s.source)
         });
 
@@ -269,12 +291,14 @@ fn panel(
             }
         }
 
-        super::forms::typed::<SearchConfig>(
+        super::forms::guided::<SearchConfig>(
             ui,
             "Search compatibility and scoring",
+            "Match tolerances decide which library fragments count; minimum matches and cosine decide which candidates are reported. Strict compatibility rejects missing instrument metadata.",
             &mut s.search_config,
         );
         ui.collapsing("Advanced search settings JSON", |ui| {
+            ui.small("Routine settings are in the guided form above; edit here only for exact-parameter review.");
             editor(ui, &mut s.search_config)
         });
 
@@ -413,8 +437,11 @@ spectra:query.inputs,background:query.background,config:query.config}
             &mut s.draft,
         );
         ui.collapsing(
-            "Advanced operation JSON (all parameters and annotation evidence)",
-            |ui| editor(ui, &mut s.draft),
+            "Advanced operation JSON — expert review of all parameters and annotation evidence",
+            |ui| {
+                ui.small("Prepared operations combine every stage above. Routine work never requires editing this text; it is retained so any parameter and its evidence can be audited exactly.");
+                editor(ui, &mut s.draft)
+            },
         );
 
         if ui

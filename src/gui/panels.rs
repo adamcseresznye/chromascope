@@ -648,6 +648,23 @@ pub fn update_central_panel(app: &mut MzViewerApp, ctx: &Context) {
                 .inner_margin(16),
         )
         .show(ctx, |ui| {
+            egui::Frame::new()
+                .inner_margin(8)
+                .corner_radius(5)
+                .show(ui, |ui| {
+                    super::workflow::banner(app, ctx, ui);
+                });
+            ui.collapsing("Analysis workflow guide", |ui| {
+                // Bound the expanded guide so chromatograms and spectra keep
+                // their space in this non-scrolling panel.
+                egui::ScrollArea::vertical()
+                    .id_salt("analysis_workflow_guide_scroll")
+                    .max_height(320.0)
+                    .show(ui, |ui| {
+                        super::workflow::guide(app, ctx, ui);
+                    });
+            });
+            ui.separator();
             if app.files.is_empty() {
                 ui.centered_and_justified(|ui| {
                     ui.vertical_centered(|ui| {
@@ -1014,7 +1031,7 @@ mod compact_header_tests {
                         |ctx| {
                             update_data_selection_panel(&mut app, ctx);
                             assert!(
-                                ctx.available_rect().top() <= 76.0,
+                                ctx.available_rect().top() <= 118.0,
                                 "the header must leave plot space at minimum width: {}",
                                 ctx.available_rect().top()
                             );
@@ -1024,17 +1041,22 @@ mod compact_header_tests {
                         super::super::test_render::text_center(&output.shapes, "Chromascope")
                             .is_none()
                     );
+                    // The wrapped navigation row needs one layout pass to
+                    // stabilize at minimum width; controls must persist after it.
+                    if frame == 0 {
+                        continue;
+                    }
                     for label in [
                         "File",
                         "Project",
                         "View",
                         "Data explorer",
-                        "Quant/QC",
+                        "Quantification and QC",
                         "Identification",
-                        "Untargeted",
+                        "Untargeted analysis",
                         "Statistics",
                         "Reports",
-                        "AI review",
+                        "AI activity",
                     ] {
                         assert!(
                             super::super::test_render::text_center(&output.shapes, label).is_some(),

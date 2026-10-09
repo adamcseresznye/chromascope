@@ -111,6 +111,67 @@ impl QuantState {
     pub(super) fn latest_targeted(&self) -> Option<&crate::targeted::BatchResult> {
         self.targeted.latest()
     }
+    /// Peak integrations that still need scientist review: missing, ambiguous,
+    /// failed, cancelled, pending, or measured under a changed method.
+    pub(super) fn unresolved_count(&self) -> usize {
+        let current = signature(&self.method);
+        self.results
+            .iter()
+            .filter(|r| {
+                r.method != current
+                    || matches!(
+                        r.status,
+                        Status::Missing
+                            | Status::Ambiguous
+                            | Status::Failed
+                            | Status::Cancelled
+                            | Status::Pending
+                    )
+            })
+            .count()
+    }
+    pub(super) fn has_results(&self) -> bool {
+        !self.results.is_empty()
+    }
+    pub(super) fn method_is_valid(&self) -> bool {
+        validate(&self.method).is_ok()
+    }
+    pub(super) fn method_error(&self) -> String {
+        validate(&self.method)
+            .err()
+            .unwrap_or_else(|| "The method is incomplete.".into())
+    }
+    pub(super) fn method_summary(&self) -> String {
+        format!(
+            "{} · {} analytes",
+            self.method.name,
+            self.method.analytes.len()
+        )
+    }
+    pub(super) fn has_targeted_batch(&self) -> bool {
+        self.targeted.batch_count() > 0
+    }
+    pub(super) fn calibration_summary(&self) -> (usize, usize, usize) {
+        self.targeted.calibration_summary()
+    }
+    pub(super) fn invalid_result_count(&self) -> usize {
+        self.targeted.invalid_result_count()
+    }
+    pub(super) fn review_progress(&self) -> (usize, usize) {
+        (
+            self.targeted.reviewed_result_count(),
+            self.targeted.total_result_count(),
+        )
+    }
+    pub(super) fn qc_report_count(&self) -> usize {
+        self.targeted.qc_report_count()
+    }
+    pub(super) fn qc_status(&self) -> Option<crate::qc::Status> {
+        self.targeted.qc_latest_status()
+    }
+    pub(super) fn qc_pending_reviews(&self) -> usize {
+        self.targeted.qc_pending_reviews()
+    }
     pub(super) fn verify_snapshot(value: serde_json::Value) -> Result<(), String> {
         let state: Self = serde_json::from_value(value).map_err(|e| e.to_string())?;
         if !state.results.is_empty() {
@@ -728,12 +789,45 @@ pub(super) fn show(app: &mut MzViewerApp, ctx: &egui::Context) {
     }
     egui::CentralPanel::default().show(ctx, |ui| {
         egui::ScrollArea::vertical().id_salt("quantification_content").show(ui, |ui| {
-        ui.heading("Quantification and batch QC");
-        ui.label("Select samples → define an extraction method → run and review peaks → calibrate and assess QC → export.");
+        ui.heading("Quantification and QC");
+        ui.label("1 Select samples → 2 define an extraction method → 3 run and review peaks → 4 calibrate and assess QC → 5 export.");
+        // The live state was moved into `q`; restore it around the workflow
+        // banner so step status and navigation see the real batch.
+        app.quant = std::mem::take(&mut q);
+        super::workflow::banner(app, ctx, ui);
+        ui.horizontal_wrapped(|ui| {
+            ui.small("Workflow:");
+            if ui.small_button("← Inspect data").clicked() {
+                super::workflow::go(app, ctx, super::workflow::Destination::Data);
+            }
+            if ui.small_button("Continue to Reports →").clicked() {
+                super::workflow::go(app, ctx, super::workflow::Destination::Reports);
+            }
+        });
+        q = std::mem::take(&mut app.quant);
         ui.horizontal_wrapped(|ui| {
             if ui.button("Edit method…").clicked() {
                 q.method_open = true;
             }
+            let batch_ready = {
+                let selected = app
+                    .files
+                    .iter()
+                    .filter(|(id, _)| q.selected_samples.contains(id))
+                    .count();
+                let importing = app.files.iter().any(|(id, f)| {
+                    q.selected_samples.contains(id) && f.is_loading
+                });
+                if selected == 0 {
+                    Some("Select at least one loaded sample on the left to enable Run batch.")
+                } else if importing {
+                    Some("Waiting for selected samples to finish importing…")
+                } else if validate(&q.method).is_err() {
+                    Some("Define a valid extraction method (Edit method…) before running.")
+                } else {
+                    None
+                }
+            };
             ui.add_enabled_ui(q.rx.is_none(), |ui| {
                 let selected = app
                     .files
@@ -782,6 +876,11 @@ pub(super) fn show(app: &mut MzViewerApp, ctx: &egui::Context) {
                     q.message = "Stopping after the current extraction…".into();
                 }
             }
+            if let Some(reason) = batch_ready {
+                if q.rx.is_none() {
+                    ui.small(reason);
+                }
+            }
             if ui
                 .add_enabled(
                     !q.results.is_empty() && q.rx.is_none(),
@@ -820,9 +919,29 @@ pub(super) fn show(app: &mut MzViewerApp, ctx: &egui::Context) {
             );
         }
         ui.separator();
+        let current = signature(&q.method);
+        let unresolved = q
+            .results
+            .iter()
+            .filter(|r| {
+                r.method != current
+                    || matches!(
+                        r.status,
+                        Status::Missing
+                            | Status::Ambiguous
+                            | Status::Failed
+                            | Status::Cancelled
+                            | Status::Pending
+                    )
+            })
+            .count();
         let stage_id=egui::Id::new("quantification_stage");
         let mut stage=ui.ctx().data(|d|d.get_temp::<usize>(stage_id)).unwrap_or(0);
-        ui.horizontal_wrapped(|ui|{ui.selectable_value(&mut stage,0,"Areas and peak review");ui.selectable_value(&mut stage,1,"Calibration and concentrations");ui.selectable_value(&mut stage,2,"Batch QC and validation");});
+        ui.horizontal_wrapped(|ui|{
+            ui.selectable_value(&mut stage,0,if unresolved > 0 {format!("1 · Areas and peak review ({unresolved} unresolved)")} else {"1 · Areas and peak review".to_string()});
+            ui.selectable_value(&mut stage,1,"2 · Calibration and concentrations");
+            ui.selectable_value(&mut stage,2,"3 · Batch QC and validation");
+        });
         ui.ctx().data_mut(|d|d.insert_temp(stage_id,stage));
         match stage {
             1=>{let samples=if q.batch_samples.is_empty(){let mut samples:Vec<_>=app.files.values().filter(|f|!f.is_loading&&q.selected_samples.contains(&f.id)).map(|f|(f.path.clone(),f.name.clone())).collect();samples.sort();samples}else{q.batch_samples.clone()};super::targeted::panel(&mut q.targeted,&q.method,&samples,ui);},
@@ -989,7 +1108,8 @@ fn results_table(q: &mut QuantState, ui: &mut egui::Ui) {
         }
     });
     if q.results.is_empty() {
-        ui.label("Define your method, select samples, then run the batch. Click an area to review its peak.");
+        ui.label("No batch results yet.");
+        ui.small("1 Select samples on the left · 2 choose Edit method… to define analytes · 3 press Run batch. Reviewed peaks appear here for boundary correction.");
         return;
     }
     use super::table::{Cell, Row};
@@ -1031,8 +1151,11 @@ fn results_table(q: &mut QuantState, ui: &mut egui::Ui) {
     }
 }
 fn review(q: &mut QuantState, ui: &mut egui::Ui) {
+    if q.results.is_empty() {
+        return;
+    }
     let Some(i) = q.selected.filter(|&i| i < q.results.len()) else {
-        ui.small("Select a result to inspect or adjust its integration.");
+        ui.small("Select a result above to inspect or adjust its integration.");
         return;
     };
     advanced_review(q, i, ui);

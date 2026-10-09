@@ -13,12 +13,12 @@ const PANEL_WIDTH: f32 = 270.0;
 pub fn navigation(app: &mut MzViewerApp, ui: &mut egui::Ui) {
     let destinations = [
         "Data explorer",
-        "Quant/QC",
+        "Quantification and QC",
         "Identification",
-        "Untargeted",
+        "Untargeted analysis",
         "Statistics",
         "Reports",
-        "AI review",
+        "AI activity",
     ];
     let mut selected = if app.quant.active {
         1
@@ -134,7 +134,7 @@ pub(super) fn advanced_active(app: &MzViewerApp, ctx: &Context) -> bool {
 pub fn activity(app: &mut MzViewerApp, ctx: &Context) {
     let id = egui::Id::new("activity_open");
     let mut open = ctx.data(|d| d.get_temp::<bool>(id)).unwrap_or(false);
-    analytical_panel(ctx, "AI / MCP activity", &mut open, |ui| {
+    analytical_panel(ctx, "AI activity", &mut open, |ui| {
         super::ai_review::panel(app, ui);
         ui.separator();
         #[cfg(feature = "mcp")]
@@ -335,6 +335,11 @@ pub fn status(app: &MzViewerApp, ctx: &Context) {
                         "files"
                     }
                 ));
+                if let Some(revision) = app.project.revision() {
+                    ui.small(format!("Project r{revision}"));
+                } else {
+                    ui.small("Exploratory · no project");
+                }
             }
             let low_contrast = app.files.values().any(|file| file.display.visible && contrast_ratio(file.display.color.to_egui(),ui.visuals().panel_fill)<3.0)
                 || app.workspace.traces.values().flatten().any(|trace|trace.visible && contrast_ratio(trace.color.to_egui(),ui.visuals().panel_fill)<3.0);
@@ -453,6 +458,36 @@ pub fn inspector(app: &mut MzViewerApp, ctx: &Context) {
                     }
                 });
                 ui.add_space(10.0);
+                super::workspace::inspector(app, ui);
+                ui.heading("Selection");
+                ui.small("Inspect a spectrum, then integrate a peak. Batch review happens in Quantification and QC.");
+                numeric_spectrum(app,ui);
+                if let Some(rt) = app.user_input.retention_time_ms_spectrum {
+                    ui.label(format!("Retention time: {rt:.3} min"));
+                } else {
+                    ui.small("Double-click a trace to inspect a spectrum.");
+                }
+                if let (Some(start), Some(end)) = (app.integration.start_rt, app.integration.end_rt)
+                {
+                    ui.label(format!(
+                        "Integration: {:.3}–{:.3} min",
+                        start.min(end),
+                        start.max(end)
+                    ));
+                }
+                if let Some(area) = app.integration.result {
+                    ui.label(format!("Area: {area:.4e} intensity·min"));
+                }
+                if app.integration.start_rt.is_some() && ui.button("Clear integration").clicked() {
+                    app.integration = Default::default();
+                }
+                ui.small("Right-drag across a peak to integrate.");
+                numeric_integration(app, ui);
+                if let Some(points)=app.active_file_id.and_then(|id|app.files.get(&id)).and_then(|file|file.cache.plot_data.as_ref()) {
+                    super::plot_controls::export(ui,points,"Retention time (min)","Intensity (instrument units)");
+                }
+                ui.small("Integration uses the full-resolution processed trace and a straight line between endpoints as baseline. Set smoothing to 0 to inspect unsmoothed data.");
+                ui.add_space(10.0);
                 egui::CollapsingHeader::new("Appearance")
                     .default_open(false)
                     .show(ui, |ui| {
@@ -515,34 +550,6 @@ pub fn inspector(app: &mut MzViewerApp, ctx: &Context) {
                             }
                         }
                     });
-                super::workspace::inspector(app, ui);
-                ui.heading("Selection");
-                numeric_spectrum(app,ui);
-                if let Some(rt) = app.user_input.retention_time_ms_spectrum {
-                    ui.label(format!("Retention time: {rt:.3} min"));
-                } else {
-                    ui.small("Double-click a trace to inspect a spectrum.");
-                }
-                if let (Some(start), Some(end)) = (app.integration.start_rt, app.integration.end_rt)
-                {
-                    ui.label(format!(
-                        "Integration: {:.3}–{:.3} min",
-                        start.min(end),
-                        start.max(end)
-                    ));
-                }
-                if let Some(area) = app.integration.result {
-                    ui.label(format!("Area: {area:.4e} intensity·min"));
-                }
-                if app.integration.start_rt.is_some() && ui.button("Clear integration").clicked() {
-                    app.integration = Default::default();
-                }
-                ui.small("Right-drag across a peak to integrate.");
-                numeric_integration(app, ui);
-                if let Some(points)=app.active_file_id.and_then(|id|app.files.get(&id)).and_then(|file|file.cache.plot_data.as_ref()) {
-                    super::plot_controls::export(ui,points,"Retention time (min)","Intensity (instrument units)");
-                }
-                ui.small("Integration uses the full-resolution processed trace and a straight line between endpoints as baseline. Set smoothing to 0 to inspect unsmoothed data.");
             });
         });
 }
@@ -653,7 +660,21 @@ fn xic_controls(app: &mut MzViewerApp, ui: &mut egui::Ui) {
             .hint_text("e.g. 10")
             .desired_width(f32::INFINITY),
     );
-    if ui.button("Apply XIC").clicked() {
+    ui.small("Tolerance is a ± half-width around the target m/z. The extraction window stays fixed to these values for reproducibility.");
+    if app.user_input.mass.value > 0.0 && app.user_input.mass_tolerance.value > 0.0 {
+        ui.small(format!(
+            "Current extraction: {:.4} m/z ± {:.1} ppm",
+            app.user_input.mass.value, app.user_input.mass_tolerance.value
+        ));
+    }
+    if ui
+        .add(
+            egui::Button::new(egui::RichText::new("Apply XIC").strong())
+                .fill(ui.visuals().selection.bg_fill),
+        )
+        .on_hover_text("Extract the ion chromatogram for the target above")
+        .clicked()
+    {
         let parsed = app
             .user_input
             .mass
@@ -943,7 +964,9 @@ mod tests {
                     }
                 });
                 input.events.clear();
-                if frame == 0 {
+                // Arm menu interaction after the first layout pass so wrapped
+                // headers at minimum width have stabilized before clicking.
+                if frame == 1 {
                     let target = match name {
                         "file-menu" => Some("File"),
                         "grid-menu" => Some("Plot options"),

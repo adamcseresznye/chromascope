@@ -43,6 +43,294 @@ impl Default for State {
         }
     }
 }
+/// Guided routine setup: sample grouping, feature detection, alignment, and
+/// filtering. Every control edits the same typed `Config` behind the draft;
+/// invalid values are rejected with a scientific explanation and the draft
+/// keeps its last valid state. Expert settings (charge range, gap-fill
+/// mechanics, timeouts, matrix limits, checkpoint mechanics) stay in the
+/// advanced sections below.
+fn routine_setup(ui: &mut egui::Ui, s: &mut State) {
+    egui::CollapsingHeader::new("Routine setup — samples, detection, alignment, filtering")
+        .id_salt("untargeted_routine_setup")
+        .default_open(true)
+        .show(ui, |ui| {
+            let mut config: Config = match serde_json::from_str(&s.draft) {
+                Ok(config) => config,
+                Err(error) => {
+                    ui.colored_label(
+                        ui.visuals().error_fg_color,
+                        format!("Correct the advanced configuration first: {error}"),
+                    );
+                    return;
+                }
+            };
+            let mut changed = false;
+            ui.strong("Samples and roles");
+            ui.small("Blanks reveal background features and QCs track repeatability. Roles only group samples — no sample is ever excluded silently.");
+            let (samples, blanks, qcs) = (
+                config.samples.iter().filter(|x| x.role == Role::Sample).count(),
+                config.samples.iter().filter(|x| x.role == Role::Blank).count(),
+                config.samples.iter().filter(|x| x.role == Role::Qc).count(),
+            );
+            ui.small(format!(
+                "{} samples · {} blanks · {} QCs · {:?} polarity",
+                samples, blanks, qcs, config.polarity
+            ));
+            if config.samples.is_empty() {
+                ui.weak("No samples yet — use project datasets or select mzML files above.");
+            }
+            let mut remove = None;
+            for (index, sample) in config.samples.iter_mut().enumerate() {
+                ui.push_id(("routine_sample", index), |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(sample.id.clone());
+                        egui::ComboBox::from_id_salt(("routine_role", index))
+                            .selected_text(format!("{:?}", sample.role))
+                            .show_ui(ui, |ui| {
+                                for role in [Role::Sample, Role::Blank, Role::Qc] {
+                                    changed |= ui
+                                        .selectable_value(
+                                            &mut sample.role,
+                                            role,
+                                            format!("{role:?}"),
+                                        )
+                                        .changed();
+                                }
+                            });
+                        if ui.small_button("Remove").clicked() {
+                            remove = Some(index);
+                        }
+                    });
+                    ui.add(egui::Label::new(sample.source.clone()).truncate())
+                        .on_hover_text(sample.source.clone());
+                });
+            }
+            if let Some(index) = remove {
+                config.samples.remove(index);
+                changed = true;
+            }
+            ui.separator();
+            ui.strong("Feature detection");
+            ui.small("Mass tolerance links neighboring scans into one trace; noise intensity drops detector chatter; peak width keeps plausible chromatography.");
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Polarity");
+                egui::ComboBox::from_id_salt("routine_polarity")
+                    .selected_text(format!("{:?}", config.polarity))
+                    .show_ui(ui, |ui| {
+                        for polarity in [
+                            crate::spectral::Polarity::Positive,
+                            crate::spectral::Polarity::Negative,
+                        ] {
+                            changed |= ui
+                                .selectable_value(
+                                    &mut config.polarity,
+                                    polarity,
+                                    format!("{polarity:?}"),
+                                )
+                                .changed();
+                        }
+                    });
+                changed |= ui
+                    .checkbox(
+                        &mut config.centroid_profile,
+                        "Profile spectra (pick peaks before tracing)",
+                    )
+                    .changed();
+            });
+            egui::Grid::new("routine_detection")
+                .num_columns(2)
+                .striped(true)
+                .show(ui, |ui| {
+                    ui.label("Detection tolerance (ppm)");
+                    changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut config.detection_ppm)
+                                .range(0.1..=1000.0)
+                                .speed(0.5),
+                        )
+                        .changed();
+                    ui.end_row();
+                    ui.label("Noise intensity");
+                    changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut config.noise_intensity)
+                                .range(0.0..=1.0e9)
+                                .speed(100.0),
+                        )
+                        .changed();
+                    ui.end_row();
+                    ui.label("Minimum trace length (s)");
+                    changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut config.min_trace_seconds)
+                                .range(1.0..=3600.0)
+                                .speed(0.5),
+                        )
+                        .changed();
+                    ui.end_row();
+                    ui.label("Typical peak width (s)");
+                    changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut config.peak_fwhm_seconds)
+                                .range(0.5..=3600.0)
+                                .speed(0.5),
+                        )
+                        .changed();
+                    ui.end_row();
+                    ui.label("Accepted width range (s)");
+                    changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut config.min_fwhm_seconds)
+                                .range(0.5..=3600.0)
+                                .speed(0.5),
+                        )
+                        .changed();
+                    changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut config.max_fwhm_seconds)
+                                .range(0.5..=3600.0)
+                                .speed(0.5),
+                        )
+                        .changed();
+                    ui.end_row();
+                });
+            ui.separator();
+            ui.strong("Alignment across samples");
+            ui.small("Retention-time tolerance links the same compound across runs; correspondence tolerance links its mass.");
+            egui::Grid::new("routine_alignment")
+                .num_columns(2)
+                .striped(true)
+                .show(ui, |ui| {
+                    ui.label("Correspondence tolerance (ppm)");
+                    changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut config.correspondence_ppm)
+                                .range(0.1..=1000.0)
+                                .speed(0.5),
+                        )
+                        .changed();
+                    ui.end_row();
+                    ui.label("Retention-time tolerance (s)");
+                    changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut config.rt_tolerance_seconds)
+                                .range(1.0..=300.0)
+                                .speed(0.5),
+                        )
+                        .changed();
+                    ui.end_row();
+                });
+            ui.separator();
+            ui.strong("Filtering");
+            ui.small("Blank ratio, QC repeatability, and sample coverage flag rows — flagged features stay in the matrix, never deleted.");
+            egui::Grid::new("routine_filtering")
+                .num_columns(2)
+                .striped(true)
+                .show(ui, |ui| {
+                    ui.label("Blank ratio (sample ÷ blank)");
+                    changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut config.blank_ratio)
+                                .range(1.0..=1000.0)
+                                .speed(0.1),
+                        )
+                        .changed();
+                    ui.end_row();
+                    ui.label("Maximum QC variation (fraction)");
+                    changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut config.max_qc_cv)
+                                .range(0.0..=5.0)
+                                .speed(0.01),
+                        )
+                        .changed();
+                    ui.end_row();
+                    ui.label("Minimum sample fraction");
+                    changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut config.min_sample_fraction)
+                                .range(0.0..=1.0)
+                                .speed(0.05),
+                        )
+                        .changed();
+                    ui.end_row();
+                });
+            ui.horizontal_wrapped(|ui| {
+                changed |= ui
+                    .checkbox(&mut config.gap_fill, "Fill gaps by re-integration")
+                    .on_hover_text("Re-integrate missing values from raw data instead of leaving them missing")
+                    .changed();
+                if config.gap_fill {
+                    ui.label("Minimum scans");
+                    changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut config.gap_min_scans).range(1..=100),
+                        )
+                        .changed();
+                }
+            });
+            if changed {
+                match check_routine(&config) {
+                    Ok(()) => {
+                        s.draft = serde_json::to_string_pretty(&config).unwrap();
+                    }
+                    Err(problem) => s.message = problem,
+                }
+            }
+        });
+}
+
+/// Routine-range validation in scientific language. Expert ranges stay with
+/// the engine; this only rejects values that cannot be chromatography.
+fn check_routine(config: &Config) -> Result<(), String> {
+    if !(0.1..=1000.0).contains(&config.detection_ppm) {
+        return Err(
+            "Detection tolerance must be 0.1–1000 ppm; wider windows merge neighboring compounds."
+                .into(),
+        );
+    }
+    if !(0.1..=1000.0).contains(&config.correspondence_ppm) {
+        return Err(
+            "Correspondence tolerance must be 0.1–1000 ppm; wider windows merge distinct features across samples."
+                .into(),
+        );
+    }
+    if !(1.0..=300.0).contains(&config.rt_tolerance_seconds) {
+        return Err(
+            "Retention-time tolerance must be 1–300 s; wider windows link unrelated peaks across runs."
+                .into(),
+        );
+    }
+    if !config.noise_intensity.is_finite() || config.noise_intensity < 0.0 {
+        return Err("Noise intensity must be a finite nonnegative intensity.".into());
+    }
+    if !(1.0..=3600.0).contains(&config.min_trace_seconds) {
+        return Err("Minimum trace length must be 1–3600 s.".into());
+    }
+    if !(0.5..=3600.0).contains(&config.min_fwhm_seconds)
+        || !(0.5..=3600.0).contains(&config.peak_fwhm_seconds)
+        || !(0.5..=3600.0).contains(&config.max_fwhm_seconds)
+        || config.min_fwhm_seconds > config.peak_fwhm_seconds
+        || config.peak_fwhm_seconds > config.max_fwhm_seconds
+    {
+        return Err(
+            "Peak widths must satisfy minimum ≤ typical ≤ maximum within 0.5–3600 s.".into(),
+        );
+    }
+    if !config.blank_ratio.is_finite() || config.blank_ratio < 1.0 {
+        return Err("Blank ratio below 1 keeps every background feature; use 1 or higher.".into());
+    }
+    if !config.max_qc_cv.is_finite() || config.max_qc_cv < 0.0 {
+        return Err("QC variation limit must be a finite nonnegative number.".into());
+    }
+    if !(0.0..=1.0).contains(&config.min_sample_fraction) {
+        return Err("Sample fraction must be 0–1.".into());
+    }
+    if config.gap_min_scans < 1 {
+        return Err("Gap filling needs at least one supporting scan.".into());
+    }
+    Ok(())
+}
 pub(super) fn show(app: &mut super::MzViewerApp, ctx: &egui::Context) {
     let mut loaded: Vec<_> = app
         .files
@@ -96,7 +384,8 @@ pub(super) fn show(app: &mut super::MzViewerApp, ctx: &egui::Context) {
                 s.draft = serde_json::to_string_pretty(&config).unwrap();
             }
         }
-        ui.label("OpenMS 3.5.0 • RT seconds • monoisotopic MS1 intensity × seconds • positive or negative batches");
+        ui.small("Requires the OpenMS 3.5.0 runtime; results record its version and refuse other versions. Retention times are in seconds and intensities are monoisotopic MS1 intensity × seconds. Checkpointing lets long multi-sample runs resume after interruption.");
+        ui.small("A checkpoint directory stores verified intermediate results so processing can resume. Results from a different OpenMS version are rejected, not silently reused.");
         if ui
             .add_enabled(
                 s.pending.is_none(),
@@ -127,12 +416,14 @@ pub(super) fn show(app: &mut super::MzViewerApp, ctx: &egui::Context) {
                 }
             }
         }
+        routine_setup(ui, s);
         super::forms::typed::<Config>(
             ui,
-            "Sample sheet and feature processing settings",
+            "Advanced sample sheet and full processing settings",
             &mut s.draft,
         );
-        ui.collapsing("Advanced configuration JSON", |ui| {
+        ui.collapsing("Advanced configuration JSON — expert full-parameter audit", |ui| {
+            ui.small("Routine samples, detection, alignment, and filtering are configured in the guided section above. This editor is intentionally retained for exact-parameter review and reproducibility.");
             ui.add(
                 egui::TextEdit::multiline(&mut s.draft)
                     .code_editor()
@@ -539,6 +830,26 @@ pub(crate) mod tests {
                 ],
             ));
         }
+    }
+    #[test]
+    fn routine_setup_rejects_non_chromatographic_values() {
+        assert!(check_routine(&Config::default()).is_ok());
+        assert!(check_routine(&Config {
+            detection_ppm: 0.0,
+            ..Default::default()
+        })
+        .is_err());
+        assert!(check_routine(&Config {
+            min_fwhm_seconds: 10.0,
+            peak_fwhm_seconds: 5.0,
+            ..Default::default()
+        })
+        .is_err());
+        assert!(check_routine(&Config {
+            blank_ratio: 0.5,
+            ..Default::default()
+        })
+        .is_err());
     }
     #[test]
     fn matrix_links_sample_eic_and_retains_original_on_worker_failure() {
