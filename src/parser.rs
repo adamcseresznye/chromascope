@@ -354,6 +354,7 @@ impl MzData {
         let mut min_mz = f64::MAX;
         let mut max_mz = f64::MIN;
         let mut missing_scan_windows = false;
+        let mut invalid_scan_windows: usize = 0;
 
         reader.set_detail_level(DetailLevel::MetadataOnly);
         let mut observed_scans = 0;
@@ -402,10 +403,15 @@ impl MzData {
                         if !window.is_empty() {
                             let lo = window.lower_bound as f64;
                             let hi = window.upper_bound as f64;
+                            // Some converters write non-finite placeholders
+                            // (e.g. value="nan" for SIM data with no scan range).
+                            // mzdata's ScanWindow::is_empty only checks for 0/0,
+                            // so NaN slips through. Treat any malformed window
+                            // as missing and fall back to peak arrays below
+                            // instead of failing the whole file open.
                             if !lo.is_finite() || !hi.is_finite() || lo < 0. || hi < lo {
-                                return Err(ChromascopeError::MzDataError(
-                                    "Invalid scan window bounds".into(),
-                                ));
+                                invalid_scan_windows += 1;
+                                continue;
                             }
                             has_window = true;
                             min_mz = min_mz.min(lo);
@@ -421,6 +427,13 @@ impl MzData {
         })();
         reader.set_detail_level(DetailLevel::Full);
         metadata_pass?;
+        if invalid_scan_windows > 0 {
+            warn!(
+                "Ignored {} malformed scan windows (non-finite or inverted bounds) in {:?} — using peak arrays for those spectra",
+                invalid_scan_windows, self.file_name
+            );
+            missing_scan_windows = true;
+        }
         if observed_scans != scan_count {
             return Err(ChromascopeError::MzDataError(format!(
                 "Incomplete spectrum traversal: expected {scan_count}, read {observed_scans}"
@@ -2316,5 +2329,36 @@ mod tests {
             hi > f64::MIN,
             "MS1 max m/z should have been populated from scan windows"
         );
+    }
+
+    #[test]
+    fn test_nan_scan_windows_fall_back_to_peak_arrays() {
+        // Regression test: some converters write value="nan" for scan window
+        // limits (e.g. SIM data with no scan range). These must be treated as
+        // missing metadata with peak-array fallback, not a fatal open error.
+        let original =
+            std::fs::read_to_string(get_test_file_path()).expect("read test mzML");
+        let text = original
+            .replace(
+                "accession=\"MS:1000501\" name=\"scan window lower limit\" value=\"150.0\"",
+                "accession=\"MS:1000501\" name=\"scan window lower limit\" value=\"nan\"",
+            )
+            .replace(
+                "accession=\"MS:1000500\" name=\"scan window upper limit\" value=\"1000.0\"",
+                "accession=\"MS:1000500\" name=\"scan window upper limit\" value=\"nan\"",
+            );
+        assert!(text.contains("value=\"nan\""), "test file must contain scan windows to corrupt");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nan-windows.mzML");
+        std::fs::write(&path, &text).unwrap();
+        let mut data = MzData::new();
+        data.open_msfile(&path)
+            .expect("NaN scan windows should fall back to peak arrays");
+        assert!(data.bounds.max_mz > data.bounds.min_mz);
+        assert!(data.bounds.scan_count > 0);
+        let tic = data
+            .get_tic(1, ScanPolarity::Positive, None, None)
+            .expect("TIC after NaN fallback");
+        assert!(!tic.retention_time.is_empty());
     }
 }
