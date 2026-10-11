@@ -140,6 +140,7 @@ pub fn parse(
             xic_params,
             mz_range: t.mz_range.map(|[a, b]| (a, b)),
             precursor_mz: t.precursor_mz,
+            native_chromatogram: None,
         };
         if specs.iter().any(|(_, p)| p == &params) {
             return Err(format!(

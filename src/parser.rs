@@ -70,6 +70,31 @@ impl DataReader {
             Self::Gzip(r) => r.get_spectrum_by_index(index),
         }
     }
+    fn count_chromatograms(&self) -> usize {
+        use mzdata::prelude::ChromatogramSource;
+        match self {
+            Self::Plain(r) => r.count_chromatograms(),
+            Self::Gzip(r) => r.count_chromatograms(),
+        }
+    }
+    fn get_chromatogram_by_index(
+        &mut self,
+        index: usize,
+    ) -> Option<mzdata::spectrum::Chromatogram> {
+        use mzdata::prelude::ChromatogramSource;
+        match self {
+            Self::Plain(r) => r.get_chromatogram_by_index(index),
+            Self::Gzip(r) => r.get_chromatogram_by_index(index),
+        }
+    }
+    #[allow(dead_code)]
+    fn get_chromatogram_by_id(&mut self, id: &str) -> Option<mzdata::spectrum::Chromatogram> {
+        use mzdata::prelude::ChromatogramSource;
+        match self {
+            Self::Plain(r) => r.get_chromatogram_by_id(id),
+            Self::Gzip(r) => r.get_chromatogram_by_id(id),
+        }
+    }
 }
 
 /// Validate before indexing or summing; a malformed scan is never a zero signal.
@@ -175,6 +200,89 @@ pub struct MassSpectrum {
     pub retention_time: f32,
 }
 
+/// Metadata for one pre-recorded (native) chromatogram stored in the file's
+/// `<chromatogramList>` — e.g. SRM/MRM transitions or a stored TIC.
+///
+/// Spectrum-based files extract TIC/BPC/XIC from peak arrays; chromatogram-only
+/// files (no `<spectrumList>`) can only be displayed through these entries.
+#[cfg_attr(feature = "mcp-headless", derive(rmcp::schemars::JsonSchema))]
+#[cfg_attr(feature = "mcp-headless", schemars(crate = "rmcp::schemars"))]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+pub struct NativeChromatogramInfo {
+    /// Position in the file's chromatogram list (for `get_native_chromatogram`)
+    pub index: usize,
+    /// Native chromatogram id string from the file
+    pub id: String,
+    /// Human-readable label (e.g. `TIC`, `SRM 89.0 → 41.0`)
+    pub label: String,
+    /// Chromatogram type as reported by mzdata (e.g. `TotalIonCurrentChromatogram`)
+    pub chromatogram_type: String,
+    /// Ion polarity
+    #[cfg_attr(
+        feature = "mcp-headless",
+        schemars(with = "crate::processing::PolaritySchema")
+    )]
+    #[serde(with = "crate::processing::polarity_serde")]
+    pub polarity: ScanPolarity,
+    /// Precursor (Q1) m/z parsed from the native id (`Q1=...`), if present
+    pub precursor_mz: Option<f64>,
+    /// Product (Q3) m/z parsed from the native id (`Q3=...`), if present
+    pub product_mz: Option<f64>,
+    /// Number of (time, intensity) points
+    pub point_count: usize,
+    /// First time value in minutes
+    pub min_rt: f32,
+    /// Last time value in minutes
+    pub max_rt: f32,
+    /// Maximum intensity across the trace
+    pub max_intensity: f32,
+}
+
+/// Parse `Q1=` / `Q3=` tokens out of a native SRM chromatogram id such as
+/// `- SRM SIC Q1=89 Q3=40.996 start=5.21 end=15.20`.
+///
+/// mzdata's precursor record for these entries holds the *product* target
+/// (the second `<isolationWindow>` overwrites the first), so the id string is
+/// the reliable source for the Q1/Q3 pair.
+fn parse_transition_mzs(id: &str) -> (Option<f64>, Option<f64>) {
+    fn token_value(id: &str, key: &str) -> Option<f64> {
+        id.split_whitespace().find_map(|tok| {
+            let rest = tok.strip_prefix(key)?;
+            let num: String = rest
+                .chars()
+                .take_while(|c| c.is_ascii_digit() || *c == '.' || *c == '-' || *c == '+')
+                .collect();
+            if num.is_empty() {
+                return None;
+            }
+            num.parse::<f64>().ok().filter(|v| v.is_finite() && *v > 0.0)
+        })
+    }
+    (token_value(id, "Q1="), token_value(id, "Q3="))
+}
+
+/// Infos plus global RT extrema and optional m/z extrema from Q1/Q3 labels.
+type NativeChromatogramBounds = (Vec<NativeChromatogramInfo>, f32, f32, Option<f64>, Option<f64>);
+
+fn native_chromatogram_label(id: &str, chrom_type: &str, precursor: Option<f64>, product: Option<f64>) -> String {
+    match (precursor, product) {
+        (Some(q1), Some(q3)) => format!("SRM {q1} → {q3}"),
+        (Some(q1), None) => format!("Q1 {q1} ({id})"),
+        (None, Some(q3)) => format!("Q3 {q3} ({id})"),
+        (None, None) => {
+            if id.eq_ignore_ascii_case("TIC") || chrom_type.contains("TotalIonCurrent") {
+                "TIC".to_string()
+            } else if id.is_empty() {
+                format!("Chromatogram ({chrom_type})")
+            } else if id.len() > 80 {
+                format!("{}…", &id[..80])
+            } else {
+                id.to_string()
+            }
+        }
+    }
+}
+
 /// Represents a data structure for parsing mass spectrometry files.
 pub struct MzData {
     pub(crate) job_control: Option<crate::jobs::JobControl>,
@@ -191,6 +299,12 @@ pub struct MzData {
     /// in this file. For MS1 entries precursor_mz is None; for MS2+ entries it holds the
     /// isolation target m/z so each precursor gets its own dropdown entry.
     pub available_scan_filters: Vec<(u8, ScanPolarity, Option<f64>, f64, f64)>,
+    /// Pre-recorded chromatograms from `<chromatogramList>` (SRM/MRM, stored TIC…).
+    /// Empty for pure spectrum files without a chromatogram list.
+    pub available_chromatograms: Vec<NativeChromatogramInfo>,
+    /// Acquisition modes (FS/SIM/MRM) with at least one matching spectrum.
+    /// Lets callers drop stale acquisition filters instead of failing the open.
+    pub available_acquisitions: Vec<crate::processing::AcquisitionMode>,
 }
 
 impl core::fmt::Debug for MzData {
@@ -200,6 +314,8 @@ impl core::fmt::Debug for MzData {
             .field("msfile", &"Option<MZReader>")
             .field("bounds", &self.bounds)
             .field("available_scan_filters", &self.available_scan_filters)
+            .field("available_chromatograms", &self.available_chromatograms)
+            .field("available_acquisitions", &self.available_acquisitions)
             .finish()
     }
 }
@@ -224,7 +340,47 @@ impl MzData {
             msfile: None,
             bounds: DataBounds::unrestricted(),
             available_scan_filters: Vec::new(),
+            available_chromatograms: Vec::new(),
+            available_acquisitions: Vec::new(),
         }
+    }
+
+    /// One-line summary of what the file holds for acquisition-mismatch errors.
+    pub fn acquisition_summary(&self) -> String {
+        if self.has_spectra() {
+            let modes: Vec<String> = self
+                .available_acquisitions
+                .iter()
+                .map(|m| format!("{m:?}"))
+                .collect();
+            let modes = if modes.is_empty() {
+                "untagged".to_string()
+            } else {
+                modes.join("/")
+            };
+            format!(
+                "{} spectra ({})",
+                self.bounds.scan_count, modes
+            )
+        } else if self.has_native_chromatograms() {
+            format!(
+                "{} stored chromatograms and no spectra",
+                self.available_chromatograms.len()
+            )
+        } else {
+            "no spectra or chromatograms".to_string()
+        }
+    }
+
+    /// True when the file contains spectra (scan filters were extracted).
+    pub fn has_spectra(&self) -> bool {
+        !self.available_scan_filters.is_empty()
+    }
+
+    /// True when the file stores pre-recorded chromatograms in
+    /// `<chromatogramList>` (SRM/MRM transitions, stored TIC…).
+    pub fn has_native_chromatograms(&self) -> bool {
+        !self.available_chromatograms.is_empty()
     }
     /// Opens a mass spectrometry file at the specified path and sets it as the current file for the `self` object.
     ///
@@ -315,6 +471,10 @@ impl MzData {
     /// `<scanWindowList>` element), checks every mass array so interior signals
     /// cannot be excluded by approximate end-of-run bounds.
     ///
+    /// Chromatogram-only files (SRM/MRM with no `<spectrumList>`) take a
+    /// separate path: bounds come from the stored time/intensity arrays and
+    /// Q1/Q3 transition labels, exposed via `available_chromatograms`.
+    ///
     /// # Returns
     /// * `Ok(())` - If bounds were successfully extracted
     /// * `Err(ChromascopeError::FileNotOpened)` - If no peaks or windows found
@@ -324,6 +484,7 @@ impl MzData {
     /// - File is not opened
     /// - No valid peaks or scan windows found in any spectrum
     fn extract_bounds(&mut self) -> Result<()> {
+        use crate::processing::AcquisitionMode;
         info!("Extracting data bounds from {:?}", self.file_name);
 
         let reader = self
@@ -333,10 +494,14 @@ impl MzData {
 
         // -- O(1): scan count -----------------------------------------------------
         let scan_count = reader.len();
-        if scan_count == 0 {
+        let chromatogram_count = reader.count_chromatograms();
+        if scan_count == 0 && chromatogram_count == 0 {
             return Err(ChromascopeError::FileNotOpened(
-                "File contains no spectra".into(),
+                "File contains no spectra or chromatograms".into(),
             ));
+        }
+        if scan_count == 0 {
+            return self.extract_chromatogram_only_bounds();
         }
 
         // Determine extrema during the metadata pass: acquisition order need not
@@ -355,6 +520,11 @@ impl MzData {
         let mut max_mz = f64::MIN;
         let mut missing_scan_windows = false;
         let mut invalid_scan_windows: usize = 0;
+        // Per-mode spectrum counts so callers can tell a stale acquisition
+        // filter (e.g. SIM on full-scan data) from genuinely missing data.
+        let mut fs_scans = 0usize;
+        let mut sim_scans = 0usize;
+        let mut mrm_scans = 0usize;
 
         reader.set_detail_level(DetailLevel::MetadataOnly);
         let mut observed_scans = 0;
@@ -376,6 +546,15 @@ impl MzData {
                 max_rt = max_rt.max(rt);
                 let ms_level = spectrum.description.ms_level;
                 let polarity = spectrum.description.polarity;
+                if AcquisitionMode::SIM.matches(&spectrum.description) {
+                    sim_scans += 1;
+                }
+                if AcquisitionMode::MRM.matches(&spectrum.description) {
+                    mrm_scans += 1;
+                }
+                if AcquisitionMode::FS.matches(&spectrum.description) {
+                    fs_scans += 1;
+                }
                 // For MS2+ spectra key by the precursor isolation target m/z.
                 let precursor_key: Option<f64> = if ms_level > 1 {
                     spectrum
@@ -532,14 +711,215 @@ impl MzData {
                 })
         });
         self.available_scan_filters = filter_ranges;
+        self.available_acquisitions = [
+            (AcquisitionMode::FS, fs_scans),
+            (AcquisitionMode::SIM, sim_scans),
+            (AcquisitionMode::MRM, mrm_scans),
+        ]
+        .into_iter()
+        .filter(|(_, n)| *n > 0)
+        .map(|(mode, _)| mode)
+        .collect();
+
+        // Best-effort: files with both spectra and a chromatogram list expose
+        // the stored traces as well. A corrupt chromatogram list must not fail
+        // a spectrum-bearing file open.
+        match self.read_native_chromatogram_infos() {
+            Ok((infos, _, _, _, _)) => self.available_chromatograms = infos,
+            Err(e) => {
+                warn!("Ignoring unreadable chromatogram list in {:?}: {}", self.file_name, e);
+                self.available_chromatograms = Vec::new();
+            }
+        }
 
         info!(
-        "Extracted bounds: m/z [{:.2}-{:.2}], RT [{:.2}-{:.2}] min, {} scans, {} unique scan filters",
+        "Extracted bounds: m/z [{:.2}-{:.2}], RT [{:.2}-{:.2}] min, {} scans, {} unique scan filters, {} stored chromatograms",
         self.bounds.min_mz, self.bounds.max_mz, min_rt, max_rt, scan_count,
-        self.available_scan_filters.len()
+        self.available_scan_filters.len(), self.available_chromatograms.len()
     );
 
         Ok(())
+    }
+
+    /// Bounds path for chromatogram-only files (no `<spectrumList>`).
+    ///
+    /// RT bounds come from the stored time arrays; m/z bounds come from the
+    /// Q1/Q3 transition labels parsed out of the native chromatogram ids.
+    /// `bounds.scan_count` is set to the number of stored chromatograms so
+    /// smoothing validation and file summaries keep working.
+    fn extract_chromatogram_only_bounds(&mut self) -> Result<()> {
+        let (infos, min_rt, max_rt, min_mz_opt, max_mz_opt) =
+            self.read_native_chromatogram_infos()?;
+        if infos.is_empty() {
+            return Err(ChromascopeError::FileNotOpened(
+                "File contains no spectra or chromatograms".into(),
+            ));
+        }
+        let (min_mz, max_mz) = match (min_mz_opt, max_mz_opt) {
+            (Some(lo), Some(hi)) => (lo.floor(), hi.ceil()),
+            // TIC-only chromatogram files carry no m/z dimension.
+            _ => (0.0, 0.0),
+        };
+        let scan_count = infos.len();
+        self.bounds = DataBounds {
+            min_mz,
+            max_mz,
+            min_rt,
+            max_rt,
+            scan_count,
+        };
+        self.available_scan_filters = Vec::new();
+        self.available_chromatograms = infos;
+        self.available_acquisitions = Vec::new();
+        info!(
+            "Extracted chromatogram-only bounds: m/z [{:.2}-{:.2}], RT [{:.2}-{:.2}] min, {} chromatograms",
+            self.bounds.min_mz, self.bounds.max_mz, min_rt, max_rt, scan_count,
+        );
+        Ok(())
+    }
+
+    /// Read metadata for every stored chromatogram in `<chromatogramList>`.
+    ///
+    /// Returns the infos plus global RT extrema and optional m/z extrema from
+    /// Q1/Q3 transition labels. Empty time/intensity arrays are kept (with
+    /// zero points) so indices stay aligned with the file; fully unreadable
+    /// arrays are an error.
+    fn read_native_chromatogram_infos(&mut self) -> Result<NativeChromatogramBounds> {
+        let reader = self
+            .msfile
+            .as_mut()
+            .ok_or_else(|| ChromascopeError::FileNotOpened("No file opened".to_string()))?;
+        let count = reader.count_chromatograms();
+        let mut infos = Vec::with_capacity(count);
+        let mut min_rt = f32::INFINITY;
+        let mut max_rt = f32::NEG_INFINITY;
+        let mut min_mz: Option<f64> = None;
+        let mut max_mz: Option<f64> = None;
+        for index in 0..count {
+            if let Some(control) = &self.job_control {
+                control
+                    .check()
+                    .map_err(|e| ChromascopeError::MzDataError(e.to_string()))?;
+            }
+            let chrom = reader.get_chromatogram_by_index(index).ok_or_else(|| {
+                ChromascopeError::MzDataError(format!(
+                    "Incomplete chromatogram traversal: expected {count}, read {index}"
+                ))
+            })?;
+            let desc = chrom.description().clone();
+            let times = chrom
+                .time()
+                .map_err(|e| ChromascopeError::MzDataError(format!("Cannot read chromatogram {index} time array: {e:?}")))?;
+            let intensities = chrom
+                .intensity()
+                .map_err(|e| ChromascopeError::MzDataError(format!("Cannot read chromatogram {index} intensity array: {e:?}")))?;
+            if times.len() != intensities.len() {
+                return Err(ChromascopeError::MzDataError(format!(
+                    "Chromatogram {index} time/intensity length mismatch ({} vs {})",
+                    times.len(),
+                    intensities.len()
+                )));
+            }
+            for (&t, &i) in times.iter().zip(intensities.iter()) {
+                if !t.is_finite() || !i.is_finite() || t < 0.0 || i < 0.0 {
+                    return Err(ChromascopeError::MzDataError(format!(
+                        "Chromatogram {index} has non-finite or negative time/intensity"
+                    )));
+                }
+            }
+            let (rt_lo, rt_hi, max_intensity) = if times.is_empty() {
+                (f32::INFINITY, f32::NEG_INFINITY, 0.0f32)
+            } else {
+                let lo = times.iter().fold(f64::INFINITY, |a, &b| a.min(b)) as f32;
+                let hi = times.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b)) as f32;
+                let peak = intensities.iter().fold(0.0f32, |a, &b| a.max(b));
+                min_rt = min_rt.min(lo);
+                max_rt = max_rt.max(hi);
+                (lo, hi, peak)
+            };
+            let (precursor_mz, product_mz) = parse_transition_mzs(&desc.id);
+            for mz in [precursor_mz, product_mz].into_iter().flatten() {
+                min_mz = Some(min_mz.map_or(mz, |m: f64| m.min(mz)));
+                max_mz = Some(max_mz.map_or(mz, |m: f64| m.max(mz)));
+            }
+            let chrom_type = format!("{:?}", desc.chromatogram_type);
+            let label = native_chromatogram_label(&desc.id, &chrom_type, precursor_mz, product_mz);
+            infos.push(NativeChromatogramInfo {
+                index,
+                id: desc.id.clone(),
+                label,
+                chromatogram_type: chrom_type,
+                polarity: desc.polarity,
+                precursor_mz,
+                product_mz,
+                point_count: times.len(),
+                min_rt: if rt_lo.is_finite() { rt_lo } else { 0.0 },
+                max_rt: if rt_hi.is_finite() { rt_hi } else { 0.0 },
+                max_intensity,
+            });
+        }
+        if infos.is_empty() {
+            return Err(ChromascopeError::FileNotOpened(
+                "File contains no chromatograms".into(),
+            ));
+        }
+        if !min_rt.is_finite() || !max_rt.is_finite() {
+            return Err(ChromascopeError::FileNotOpened(
+                "Stored chromatograms contain no time points".into(),
+            ));
+        }
+        Ok((infos, min_rt, max_rt, min_mz, max_mz))
+    }
+
+    /// Fetch one pre-recorded chromatogram by its `<chromatogramList>` index.
+    ///
+    /// Returns [`ChromatogramData`] with `retention_time` in minutes and the
+    /// stored intensities. Points are sorted by time. The `index` vector is
+    /// filled with `usize::MAX` (no spectrum backing) and kept the same length
+    /// as the data so downstream length invariants hold; double-click spectrum
+    /// lookup on such traces fails gracefully with "no spectrum found".
+    pub fn get_native_chromatogram(&mut self, index: usize) -> Result<ChromatogramData> {
+        let reader = self.msfile.as_mut().ok_or_else(|| {
+            ChromascopeError::FileNotOpened("File must be opened before extracting chromatogram".into())
+        })?;
+        let count = reader.count_chromatograms();
+        if index >= count {
+            return Err(ChromascopeError::MzDataError(format!(
+                "No native chromatogram at index {index} (file holds {count})"
+            )));
+        }
+        let chrom = reader.get_chromatogram_by_index(index).ok_or_else(|| {
+            ChromascopeError::MzDataError(format!("No native chromatogram at index {index}"))
+        })?;
+        let times = chrom
+            .time()
+            .map_err(|e| ChromascopeError::MzDataError(format!("Cannot read native chromatogram time array: {e:?}")))?;
+        let intensities = chrom
+            .intensity()
+            .map_err(|e| ChromascopeError::MzDataError(format!("Cannot read native chromatogram intensity array: {e:?}")))?;
+        if times.len() != intensities.len() {
+            return Err(ChromascopeError::MzDataError(
+                "Native chromatogram time/intensity length mismatch".into(),
+            ));
+        }
+        let mut pairs: Vec<(f32, f32)> = Vec::with_capacity(times.len());
+        for (&t, &i) in times.iter().zip(intensities.iter()) {
+            let rt = t as f32;
+            if !rt.is_finite() || rt < 0.0 || !i.is_finite() || i < 0.0 {
+                return Err(ChromascopeError::MzDataError(
+                    "Native chromatogram has non-finite or negative time/intensity".into(),
+                ));
+            }
+            pairs.push((rt, i));
+        }
+        pairs.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let n = pairs.len();
+        Ok(ChromatogramData {
+            retention_time: pairs.iter().map(|v| v.0).collect(),
+            intensity: pairs.iter().map(|v| v.1).collect(),
+            mz: Vec::new(),
+            index: vec![usize::MAX; n],
+        })
     }
 
     /// Extract Base Peak Intensity Chromatogram (BIC).
@@ -2360,5 +2740,310 @@ mod tests {
             .get_tic(1, ScanPolarity::Positive, None, None)
             .expect("TIC after NaN fallback");
         assert!(!tic.retention_time.is_empty());
+    }
+
+    /// Build a minimal chromatogram-only mzML (no `<spectrumList>`) with one
+    /// stored TIC and one SRM transition, using uncompressed base64 arrays.
+    ///
+    /// mzdata only indexes `<chromatogram>` elements through the trailing
+    /// `<indexList>` of an `indexedmzML` document (its streaming fallback
+    /// covers spectra alone), so the helper writes byte-exact footer offsets
+    /// just like real converter output.
+    fn write_chromatogram_only_mzml(dir: &tempfile::TempDir, name: &str) -> PathBuf {
+        use base64::{engine::general_purpose::STANDARD as B64, Engine};
+        fn b64_f64(values: &[f64]) -> String {
+            let bytes: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+            B64.encode(&bytes)
+        }
+        fn b64_f32(values: &[f32]) -> String {
+            let bytes: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+            B64.encode(&bytes)
+        }
+        fn time_array(b64: &str) -> String {
+            format!(
+                r#"          <binaryDataArray encodedLength="{len}">
+            <cvParam cvRef="MS" accession="MS:1000523" name="64-bit float" value=""/>
+            <cvParam cvRef="MS" accession="MS:1000576" name="no compression" value=""/>
+            <cvParam cvRef="MS" accession="MS:1000595" name="time array" value="" unitCvRef="UO" unitAccession="UO:0000031" unitName="minute"/>
+            <binary>{b64}</binary>
+          </binaryDataArray>
+"#,
+                len = b64.len(),
+            )
+        }
+        fn intensity_array(b64: &str) -> String {
+            format!(
+                r#"          <binaryDataArray encodedLength="{len}">
+            <cvParam cvRef="MS" accession="MS:1000521" name="32-bit float" value=""/>
+            <cvParam cvRef="MS" accession="MS:1000576" name="no compression" value=""/>
+            <cvParam cvRef="MS" accession="MS:1000515" name="intensity array" value="" unitCvRef="MS" unitAccession="MS:1000131" unitName="number of detector counts"/>
+            <binary>{b64}</binary>
+          </binaryDataArray>
+"#,
+                len = b64.len(),
+            )
+        }
+        // TIC: 4 points; SRM Q1=100 -> Q3=50: 3 points.
+        let tic_time = b64_f64(&[1.0, 2.0, 3.0, 4.0]);
+        let tic_int = b64_f32(&[10.0, 20.0, 15.0, 5.0]);
+        let srm_time = b64_f64(&[1.0, 2.0, 3.0]);
+        let srm_int = b64_f32(&[0.0, 100.0, 10.0]);
+        let chrom0 = format!(
+            r#"      <chromatogram index="0" id="TIC" defaultArrayLength="4">
+        <cvParam cvRef="MS" accession="MS:1000235" name="total ion current chromatogram" value=""/>
+        <binaryDataArrayList count="2">
+{time}{intensity}        </binaryDataArrayList>
+      </chromatogram>
+"#,
+            time = time_array(&tic_time),
+            intensity = intensity_array(&tic_int),
+        );
+        let chrom1 = format!(
+            r#"      <chromatogram index="1" id="SRM SIC Q1=100 Q3=50 start=1 end=3" defaultArrayLength="3">
+        <cvParam cvRef="MS" accession="MS:1001473" name="selected reaction monitoring chromatogram" value=""/>
+        <cvParam cvRef="MS" accession="MS:1000128" name="positive scan" value=""/>
+        <precursor>
+          <isolationWindow>
+            <cvParam cvRef="MS" accession="MS:1000827" name="isolation window target m/z" value="100.0" unitCvRef="MS" unitAccession="MS:1000040" unitName="m/z"/>
+          </isolationWindow>
+          <activation>
+            <cvParam cvRef="MS" accession="MS:1000133" name="collision-induced dissociation" value=""/>
+          </activation>
+        </precursor>
+        <product>
+          <isolationWindow>
+            <cvParam cvRef="MS" accession="MS:1000827" name="isolation window target m/z" value="50.0" unitCvRef="MS" unitAccession="MS:1000040" unitName="m/z"/>
+          </isolationWindow>
+        </product>
+        <binaryDataArrayList count="2">
+{time}{intensity}        </binaryDataArrayList>
+      </chromatogram>
+"#,
+            time = time_array(&srm_time),
+            intensity = intensity_array(&srm_int),
+        );
+        let mut doc = String::from(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<indexedmzML xmlns="http://psi.hupo.org/ms/mzml" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://psi.hupo.org/ms/mzml http://psidev.info/files/ms/mzML/xsd/mzML1.1.2_idx.xsd">
+  <mzML xmlns="http://psi.hupo.org/ms/mzml" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://psi.hupo.org/ms/mzml http://psidev.info/files/ms/mzML/xsd/mzML1.1.0.xsd" id="synth-chrom" version="1.1.0">
+    <cvList count="2">
+      <cv id="MS" fullName="Proteomics Standards Initiative Mass Spectrometry Ontology" version="4.0.1" URI="http://example.invalid/psi-ms.obo"/>
+      <cv id="UO" fullName="Unit Ontology" version="12:10:2011" URI="http://example.invalid/unit.obo"/>
+    </cvList>
+    <fileDescription>
+      <fileContent>
+        <cvParam cvRef="MS" accession="MS:1000235" name="total ion current chromatogram" value=""/>
+        <cvParam cvRef="MS" accession="MS:1001473" name="selected reaction monitoring chromatogram" value=""/>
+      </fileContent>
+    </fileDescription>
+    <run id="synth-chrom">
+      <chromatogramList count="2">
+"#,
+        );
+        let offset0 = doc.len();
+        doc.push_str(&chrom0);
+        let offset1 = doc.len();
+        doc.push_str(&chrom1);
+        doc.push_str("      </chromatogramList>\n    </run>\n  </mzML>\n");
+        let index_offset = doc.len();
+        doc.push_str(&format!(
+            "  <indexList count=\"1\">\n    <index name=\"chromatogram\">\n      <offset idRef=\"TIC\">{offset0}</offset>\n      <offset idRef=\"SRM SIC Q1=100 Q3=50 start=1 end=3\">{offset1}</offset>\n    </index>\n  </indexList>\n  <indexListOffset>{index_offset}</indexListOffset>\n  <fileChecksum>0000000000000000000000000000000000000000</fileChecksum>\n</indexedmzML>\n"
+        ));
+        let path = dir.path().join(name);
+        std::fs::write(&path, &doc).unwrap();
+        path
+    }
+
+    #[test]
+    fn test_chromatogram_only_file_opens_with_transition_labels() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_chromatogram_only_mzml(&dir, "chrom-only.mzML");
+        let mut data = MzData::new();
+        data.open_msfile(&path)
+            .expect("chromatogram-only file should open");
+        assert!(!data.has_spectra());
+        assert!(data.has_native_chromatograms());
+        assert_eq!(data.available_chromatograms.len(), 2);
+        assert!(data.available_scan_filters.is_empty());
+        assert_eq!(data.bounds.scan_count, 2);
+        assert_eq!(data.available_chromatograms[0].label, "TIC");
+        assert_eq!(data.available_chromatograms[1].label, "SRM 100 → 50");
+        assert_eq!(data.available_chromatograms[1].precursor_mz, Some(100.0));
+        assert_eq!(data.available_chromatograms[1].product_mz, Some(50.0));
+        // m/z bounds come from the Q1/Q3 pair; RT bounds from time arrays.
+        assert_eq!(data.bounds.min_mz, 50.0);
+        assert_eq!(data.bounds.max_mz, 100.0);
+        assert_eq!(data.bounds.min_rt, 1.0);
+        assert_eq!(data.bounds.max_rt, 4.0);
+
+        let tic = data.get_native_chromatogram(0).expect("native TIC");
+        assert_eq!(tic.retention_time, vec![1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(tic.intensity, vec![10.0, 20.0, 15.0, 5.0]);
+        assert_eq!(tic.retention_time.len(), tic.index.len());
+
+        let srm = data.get_native_chromatogram(1).expect("native SRM");
+        assert_eq!(srm.retention_time, vec![1.0, 2.0, 3.0]);
+        assert_eq!(srm.intensity, vec![0.0, 100.0, 10.0]);
+
+        assert!(data.get_native_chromatogram(2).is_err());
+    }
+
+    #[test]
+    fn test_chromatogram_only_rejects_count_mismatch() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_chromatogram_only_mzml(&dir, "chrom-only.mzML");
+        let text = std::fs::read_to_string(&path).unwrap();
+        let bad = text.replacen(
+            "<chromatogramList count=\"2\">",
+            "<chromatogramList count=\"5\">",
+            1,
+        );
+        let bad_path = dir.path().join("chrom-count-mismatch.mzML");
+        std::fs::write(&bad_path, &bad).unwrap();
+        let mut data = MzData::new();
+        assert!(data.open_msfile(&bad_path).is_err());
+    }
+
+    #[test]
+    fn test_native_chromatogram_process_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_chromatogram_only_mzml(&dir, "chrom-only.mzML");
+        let mut data = MzData::new();
+        data.open_msfile(&path).unwrap();
+        let params = crate::processing::ProcessingParams {
+            acquisition: None,
+            plot_type: crate::plotting_parameters::PlotType::Tic,
+            ms_level: 1,
+            polarity: ScanPolarity::Unknown,
+            smoothing: 0,
+            xic_params: None,
+            mz_range: None,
+            precursor_mz: None,
+            native_chromatogram: Some(1),
+        };
+        let (plot, raw) =
+            crate::processing::process_chromatogram(&mut data, &params).unwrap();
+        assert_eq!(plot, vec![[1.0, 0.0], [2.0, 100.0], [3.0, 10.0]]);
+        assert_eq!(raw.retention_time.len(), 3);
+    }
+
+    #[test]
+    fn test_full_scan_file_reports_fs_acquisition() {
+        use crate::processing::AcquisitionMode;
+        let mut data = MzData::new();
+        data.open_msfile(&get_test_file_path()).unwrap();
+        assert!(data.has_spectra());
+        assert_eq!(data.available_acquisitions, vec![AcquisitionMode::FS]);
+    }
+
+    /// Minimal spectrum file tagged as SIM (single MS1 spectrum with the SIM
+    /// CV term), using uncompressed base64 arrays and no index footer —
+    /// spectra fall back to mzdata's streaming index.
+    fn write_sim_mzml(dir: &tempfile::TempDir, name: &str) -> PathBuf {
+        use base64::{engine::general_purpose::STANDARD as B64, Engine};
+        let mzs: Vec<u8> = [100.0f64, 200.0]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
+        let intensities: Vec<u8> = [5.0f32, 50.0]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
+        let mz_b64 = B64.encode(&mzs);
+        let int_b64 = B64.encode(&intensities);
+        let text = format!(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<mzML xmlns="http://psi.hupo.org/ms/mzml" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://psi.hupo.org/ms/mzml http://psidev.info/files/ms/mzML/xsd/mzML1.1.0.xsd" id="synth-sim" version="1.1.0">
+  <run id="synth-sim">
+    <spectrumList count="1">
+      <spectrum index="0" id="scan=1" defaultArrayLength="2">
+        <cvParam cvRef="MS" accession="MS:1000511" name="ms level" value="1"/>
+        <cvParam cvRef="MS" accession="MS:1000582" name="SIM spectrum" value=""/>
+        <scanList count="1">
+          <scan>
+            <cvParam cvRef="MS" accession="MS:1000016" name="scan start time" value="1.5" unitCvRef="UO" unitAccession="UO:0000031" unitName="minute"/>
+          </scan>
+        </scanList>
+        <binaryDataArrayList count="2">
+          <binaryDataArray encodedLength="{mz_len}">
+            <cvParam cvRef="MS" accession="MS:1000523" name="64-bit float" value=""/>
+            <cvParam cvRef="MS" accession="MS:1000576" name="no compression" value=""/>
+            <cvParam cvRef="MS" accession="MS:1000514" name="m/z array" value="" unitCvRef="MS" unitAccession="MS:1000040" unitName="m/z"/>
+            <binary>{mz_b64}</binary>
+          </binaryDataArray>
+          <binaryDataArray encodedLength="{int_len}">
+            <cvParam cvRef="MS" accession="MS:1000521" name="32-bit float" value=""/>
+            <cvParam cvRef="MS" accession="MS:1000576" name="no compression" value=""/>
+            <cvParam cvRef="MS" accession="MS:1000515" name="intensity array" value="" unitCvRef="MS" unitAccession="MS:1000131" unitName="number of detector counts"/>
+            <binary>{int_b64}</binary>
+          </binaryDataArray>
+        </binaryDataArrayList>
+      </spectrum>
+    </spectrumList>
+  </run>
+</mzML>
+"#,
+            mz_len = mz_b64.len(),
+            int_len = int_b64.len(),
+        );
+        let path = dir.path().join(name);
+        std::fs::write(&path, &text).unwrap();
+        path
+    }
+
+    #[test]
+    fn test_sim_file_reports_sim_acquisition_and_extracts() {
+        use crate::processing::AcquisitionMode;
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_sim_mzml(&dir, "sim.mzML");
+        let mut data = MzData::new();
+        data.open_msfile(&path).expect("SIM file should open");
+        assert_eq!(data.available_acquisitions, vec![AcquisitionMode::SIM]);
+        let sim_params = crate::processing::ProcessingParams {
+            acquisition: Some(AcquisitionMode::SIM),
+            plot_type: crate::plotting_parameters::PlotType::Tic,
+            ms_level: 1,
+            polarity: ScanPolarity::Unknown,
+            smoothing: 0,
+            xic_params: None,
+            mz_range: None,
+            precursor_mz: None,
+            native_chromatogram: None,
+        };
+        let (plot, _) =
+            crate::processing::process_chromatogram(&mut data, &sim_params).unwrap();
+        assert_eq!(plot.len(), 1);
+        // An FS filter matches nothing in a SIM-only file: the error must say
+        // what the file actually holds.
+        let fs_params = crate::processing::ProcessingParams {
+            acquisition: Some(AcquisitionMode::FS),
+            ..sim_params
+        };
+        let err = crate::processing::process_chromatogram(&mut data, &fs_params).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("No matching FS scans"), "got: {msg}");
+        assert!(msg.contains("SIM"), "got: {msg}");
+    }
+
+    #[test]
+    fn test_sim_filter_on_full_scan_file_errors_clearly() {
+        use crate::processing::AcquisitionMode;
+        let mut data = MzData::new();
+        data.open_msfile(&get_test_file_path()).unwrap();
+        let params = crate::processing::ProcessingParams {
+            acquisition: Some(AcquisitionMode::SIM),
+            plot_type: crate::plotting_parameters::PlotType::Tic,
+            ms_level: 1,
+            polarity: ScanPolarity::Positive,
+            smoothing: 0,
+            xic_params: None,
+            mz_range: None,
+            precursor_mz: None,
+            native_chromatogram: None,
+        };
+        let err = crate::processing::process_chromatogram(&mut data, &params).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("No matching SIM scans"), "got: {msg}");
+        assert!(msg.contains("FS"), "got: {msg}");
     }
 }

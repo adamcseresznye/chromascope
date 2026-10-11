@@ -97,6 +97,10 @@ pub struct UserInput {
     pub precursor_mz: Option<f64>,
     #[serde(default)]
     pub acquisition: Option<crate::processing::AcquisitionMode>,
+    /// Selected pre-recorded (native) chromatogram index for chromatogram-only
+    /// files (SRM/MRM). None means spectrum-based TIC/BPC/XIC extraction.
+    #[serde(default)]
+    pub native_chromatogram: Option<usize>,
 }
 
 impl Default for UserInput {
@@ -118,6 +122,7 @@ impl Default for UserInput {
             range_window_open: false,
             precursor_mz: None,
             acquisition: None,
+            native_chromatogram: None,
         }
     }
 }

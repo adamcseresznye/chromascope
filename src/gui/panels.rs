@@ -189,13 +189,17 @@ pub fn add_display_options(app: &mut MzViewerApp, ui: &mut Ui) {
         }
         response.on_hover_text("Adjust the level of moving average smoothing");
 
-        // Show warning if smoothing is too large for file
+        // Show warning if smoothing is too large for file.
+        // Stored (native) chromatograms validate against trace points, not the
+        // chromatogram count, so the scan-count heuristic does not apply.
         if let Some(active_id) = app.active_file_id {
             if let Some(file) = app.files.get(&active_id) {
+                let native_mode = file.data.available_scan_filters.is_empty()
+                    && !file.data.available_chromatograms.is_empty();
                 let bounds = &file.data.bounds;
                 let max_reasonable = (bounds.scan_count / 10).max(3) as u8;
 
-                if app.user_input.smoothing > max_reasonable && bounds.scan_count > 0 {
+                if !native_mode && app.user_input.smoothing > max_reasonable && bounds.scan_count > 0 {
                     ui.add_space(5.0);
                     ui.colored_label(
                         egui::Color32::from_rgb(255, 100, 100),
@@ -623,7 +627,28 @@ pub fn update_file_information_panel(app: &mut MzViewerApp, ctx: &egui::Context)
                     app.user_input.retention_time_ms_spectrum = None;
                     if let Some(file) = app.files.get(&id) {
                         app.user_input.line_color = file.display.color;
+                        // Keep the stored-trace selection in sync when moving
+                        // between spectrum files and chromatogram-only files.
+                        if file.data.available_scan_filters.is_empty()
+                            && !file.data.available_chromatograms.is_empty()
+                        {
+                            let valid = app.user_input.native_chromatogram.is_some_and(|i| {
+                                file.data.available_chromatograms.iter().any(|c| c.index == i)
+                            });
+                            if !valid {
+                                app.user_input.native_chromatogram = file
+                                    .data
+                                    .available_chromatograms
+                                    .iter()
+                                    .find(|c| c.label == "TIC")
+                                    .or(file.data.available_chromatograms.first())
+                                    .map(|c| c.index);
+                            }
+                        } else {
+                            app.user_input.native_chromatogram = None;
+                        }
                     }
+                    app.state_changed = StateChange::Changed;
                     super::workspace::activate_file(app, id);
                 }
             }
@@ -751,10 +776,23 @@ pub fn update_central_panel(app: &mut MzViewerApp, ctx: &Context) {
 ///
 /// This function does not return any errors. It handles the rendering of the plot properties UI elements within the provided `Ui`.
 pub fn add_plot_properties(app: &mut MzViewerApp, ui: &mut Ui) {
+    // Chromatogram-only files (SRM/MRM, no spectra) render a stored trace
+    // selected below; spectrum filters do not apply.
+    let native_mode = app
+        .active_file_id
+        .and_then(|id| app.files.get(&id))
+        .is_some_and(|f| {
+            f.data.available_scan_filters.is_empty() && !f.data.available_chromatograms.is_empty()
+        });
     egui::Grid::new("PlotPropertiesGrid")
         .num_columns(2)
         .striped(true)
         .show(ui, |ui| {
+            if native_mode {
+                add_native_chromatogram_dropdown(app, ui);
+                ui.end_row();
+                return;
+            }
             // Row 1: Scan Filter (dropdown selector)
             add_scan_filter_dropdown(app, ui);
             ui.end_row();
@@ -768,6 +806,52 @@ pub fn add_plot_properties(app: &mut MzViewerApp, ui: &mut Ui) {
                 ui.label("Range (m/z):");
                 add_range_options(app, ui);
                 ui.end_row();
+            }
+        });
+}
+
+/// Dropdown for pre-recorded chromatograms in chromatogram-only files.
+///
+/// Lists stored SRM/MRM transitions and TIC traces with point counts, e.g.
+/// `SRM 89 → 41 (962 pts)`. Selecting a trace re-runs the background
+/// extraction for the new `native_chromatogram` index.
+pub fn add_native_chromatogram_dropdown(app: &mut MzViewerApp, ui: &mut Ui) {
+    ui.label("Stored trace");
+    let available: Vec<crate::parser::NativeChromatogramInfo> =
+        if let Some(active_id) = app.active_file_id {
+            if let Some(file) = app.files.get(&active_id) {
+                file.data.available_chromatograms.clone()
+            } else {
+                vec![]
+            }
+        } else {
+            vec![]
+        };
+    if available.is_empty() {
+        ui.colored_label(egui::Color32::GRAY, "No file opened");
+        return;
+    }
+    let current = app.user_input.native_chromatogram.and_then(|sel| {
+        available
+            .iter()
+            .find(|c| c.index == sel)
+            .map(|c| format!("{} ({} pts)", c.label, c.point_count))
+    });
+    let current_text = current.unwrap_or_else(|| "Select trace…".to_string());
+    egui::ComboBox::from_label("")
+        .width(ui.available_width())
+        .truncate()
+        .selected_text(current_text)
+        .show_ui(ui, |ui| {
+            for chrom in &available {
+                let label = format!("{} ({} pts)", chrom.label, chrom.point_count);
+                let is_selected =
+                    app.user_input.native_chromatogram == Some(chrom.index);
+                if ui.selectable_label(is_selected, &label).clicked() {
+                    app.user_input.native_chromatogram = Some(chrom.index);
+                    app.state_changed = StateChange::Changed;
+                    info!("Stored trace changed to: {} [{}]", chrom.label, chrom.id);
+                }
             }
         });
 }

@@ -149,6 +149,10 @@ pub fn validate_params(p: &ProcessingParams) -> crate::error::Result<()> {
     if p.smoothing > 10 {
         return Err(E::InvalidSmoothingWindow(p.smoothing));
     }
+    // Native stored chromatograms bypass spectrum filters; only smoothing applies.
+    if p.native_chromatogram.is_some() {
+        return Ok(());
+    }
     if p.ms_level == 0
         || p.precursor_mz.is_some_and(|m| !m.is_finite() || m <= 0.0)
         || p.mz_range

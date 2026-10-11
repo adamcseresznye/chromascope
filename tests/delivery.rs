@@ -166,6 +166,7 @@ fn raw_extraction_reproduces_after_portable_relocation() {
         xic_params: None,
         mz_range: None,
         precursor_mz: None,
+        native_chromatogram: None,
     };
     let r = engine::execute(
         &fixture(),

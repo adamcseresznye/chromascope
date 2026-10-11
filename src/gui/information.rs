@@ -61,7 +61,16 @@ pub(super) fn show(app: &MzViewerApp, ctx: &Context) {
             .show(ctx, |ui| {
                 if let Some(file) = app.files.get(&id) {
                     ui.heading(&file.name);
-                    ui.label(format!("{} scans", file.data.bounds.scan_count));
+                    if file.data.available_scan_filters.is_empty()
+                        && !file.data.available_chromatograms.is_empty()
+                    {
+                        ui.label(format!(
+                            "{} stored chromatograms (SRM/MRM, no spectra)",
+                            file.data.bounds.scan_count
+                        ));
+                    } else {
+                        ui.label(format!("{} scans", file.data.bounds.scan_count));
+                    }
                     ui.label(format!(
                         "Retention time: {:.2}–{:.2} min",
                         file.data.bounds.min_rt, file.data.bounds.max_rt

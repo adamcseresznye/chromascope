@@ -118,6 +118,7 @@ fn extraction_parameters(
         },
         mz_range: mz_range.map(range).transpose()?.map(|[a, z]| (a, z)),
         precursor_mz,
+        native_chromatogram: None,
     };
 
     Ok(params)
@@ -238,6 +239,8 @@ impl MzViewerApp {
                                     path: path.to_string_lossy().into_owned(),
                                     bounds: data.bounds,
                                     scan_filters: data.available_scan_filters.clone(),
+                                    chromatograms: data.available_chromatograms.clone(),
+                                    acquisitions: data.available_acquisitions.clone(),
                                 })
                                 .map_err(err);
                             (path, result)
@@ -297,6 +300,8 @@ impl MzViewerApp {
                         data.open_reader_only(&path).map_err(err)?;
                         data.bounds = run.bounds;
                         data.available_scan_filters = run.scan_filters;
+                        data.available_chromatograms = run.chromatograms;
+                        data.available_acquisitions = run.acquisitions;
                         let id = self.next_file_id;
                         self.next_file_id += 1;
                         self.files.insert(
@@ -931,6 +936,7 @@ impl MzViewerApp {
         self.user_input.smoothing = p.smoothing;
         self.user_input.precursor_mz = p.precursor_mz;
         self.user_input.acquisition = p.acquisition;
+        self.user_input.native_chromatogram = p.native_chromatogram;
         self.user_input.range_enabled = p.mz_range.is_some();
         if let Some((a, z)) = p.mz_range {
             self.user_input.range_min = ValidatedInput::new(a);

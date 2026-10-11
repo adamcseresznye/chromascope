@@ -329,6 +329,7 @@ fn repaired_traces_are_equivalent_in_gui_compatibility_engine_and_cli() {
             xic_params: None,
             mz_range: None,
             precursor_mz: None,
+            native_chromatogram: None,
         };
         let mut reader = MzData::new();
         reader.open_msfile(&path).unwrap();

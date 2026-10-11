@@ -48,6 +48,7 @@ fn params(kind: PlotType) -> ProcessingParams {
         },
         mz_range: None,
         precursor_mz: None,
+        native_chromatogram: None,
     }
 }
 #[test]

@@ -30,6 +30,15 @@ pub fn handle_chromatogram_click(
         rt_clicked, file.name
     );
 
+    // Stored SRM/MRM traces have no backing spectra to inspect.
+    if file.data.available_scan_filters.is_empty() && file.data.has_native_chromatograms() {
+        warn!(
+            "No spectra in {} — double-click spectrum lookup is unavailable for stored traces",
+            file.name
+        );
+        return;
+    }
+
     if let Some(rt) = rt_clicked {
         let maybe_index = file
             .cache

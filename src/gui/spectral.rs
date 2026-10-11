@@ -399,6 +399,7 @@ spectra:query.inputs,background:query.background,config:query.config}
                             xic_params: None,
                             mz_range: None,
                             precursor_mz: None,
+                            native_chromatogram: None,
                         };
                         p.plot_type = crate::plotting_parameters::PlotType::Xic;
                         p.ms_level = 1;

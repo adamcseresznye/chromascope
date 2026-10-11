@@ -28,6 +28,8 @@ pub(crate) fn validate_mzml(path: &Path, control: Option<&crate::jobs::JobContro
     let mut scan_time: Option<bool> = None;
     let mut declared_count = None;
     let mut spectra = 0usize;
+    let mut declared_chromatograms: Option<usize> = None;
+    let mut chromatograms = 0usize;
     let mut root_seen = false;
     let mut open_tags = Vec::new();
     let mut spectrum_has_scan = None;
@@ -35,6 +37,10 @@ pub(crate) fn validate_mzml(path: &Path, control: Option<&crate::jobs::JobContro
     let mut has_mz_array = false;
     let mut has_intensity_array = false;
     let mut in_binary_array = false;
+    let mut chromatogram_length: Option<usize> = None;
+    let mut chromatogram_has_time = false;
+    let mut chromatogram_has_intensity = false;
+    let mut in_chromatogram = false;
     loop {
         if let Some(control) = control {
             control.check().map_err(invalid)?;
@@ -47,6 +53,11 @@ pub(crate) fn validate_mzml(path: &Path, control: Option<&crate::jobs::JobContro
             }
             _ => {}
         }
+        // `cvParam` elements are always self-closing (`<cvParam .../>`), so
+        // array/scan metadata must be handled for both Start and Empty.
+        // Only Start opens multi-line state (spectrum/scan/chromatogram/
+        // binary array); Empty chromatograms count immediately when length 0.
+        let is_empty = matches!(&event, Event::Empty(_));
         match event {
             Event::Start(tag) | Event::Empty(tag) => {
                 let name = tag.local_name();
@@ -66,7 +77,48 @@ pub(crate) fn validate_mzml(path: &Path, control: Option<&crate::jobs::JobContro
                         }
                     }
                 }
-                if name.as_ref() == b"spectrum" {
+                if name.as_ref() == b"chromatogramList" {
+                    for attr in tag.attributes() {
+                        let attr = attr.map_err(invalid)?;
+                        if attr.key.as_ref() == b"count" {
+                            declared_chromatograms = Some(
+                                attr.unescape_value()
+                                    .map_err(invalid)?
+                                    .parse::<usize>()
+                                    .map_err(invalid)?,
+                            );
+                        }
+                    }
+                }
+                if name.as_ref() == b"chromatogram" {
+                    chromatograms += 1;
+                    let mut length: Option<usize> = None;
+                    for attr in tag.attributes() {
+                        let attr = attr.map_err(invalid)?;
+                        if attr.key.as_ref() == b"defaultArrayLength" {
+                            length = Some(
+                                attr.unescape_value()
+                                    .map_err(invalid)?
+                                    .parse::<usize>()
+                                    .map_err(invalid)?,
+                            );
+                        }
+                    }
+                    if is_empty {
+                        // Self-closing chromatograms carry no child arrays.
+                        if length != Some(0) {
+                            return Err(invalid(
+                                "nonempty chromatogram requires declared length and time/intensity arrays",
+                            ));
+                        }
+                    } else {
+                        in_chromatogram = true;
+                        chromatogram_length = length;
+                        chromatogram_has_time = false;
+                        chromatogram_has_intensity = false;
+                    }
+                }
+                if name.as_ref() == b"spectrum" && !is_empty {
                     spectra += 1;
                     spectrum_has_scan = Some(false);
                     spectrum_length = None;
@@ -84,15 +136,26 @@ pub(crate) fn validate_mzml(path: &Path, control: Option<&crate::jobs::JobContro
                         }
                     }
                 }
-                if name.as_ref() == b"binaryDataArray" {
+                if name.as_ref() == b"binaryDataArray" && !is_empty {
                     in_binary_array = true;
                 }
-                if name.as_ref() == b"scan" {
+                if name.as_ref() == b"scan" && !is_empty {
                     if scan_time.is_some() {
                         return Err(invalid("nested scan metadata"));
                     }
                     scan_time = Some(false);
                     spectrum_has_scan = Some(true);
+                }
+                if name.as_ref() == b"cvParam" && in_chromatogram && in_binary_array {
+                    for attr in tag.attributes() {
+                        let attr = attr.map_err(invalid)?;
+                        if attr.key.as_ref() == b"accession" {
+                            let text =
+                                attr.unescape_value().map_err(invalid)?.into_owned();
+                            chromatogram_has_time |= text == "MS:1000595";
+                            chromatogram_has_intensity |= text == "MS:1000515";
+                        }
+                    }
                 }
                 if name.as_ref() == b"cvParam" && spectrum_has_scan.is_some() {
                     let mut accession = None;
@@ -167,21 +230,52 @@ pub(crate) fn validate_mzml(path: &Path, control: Option<&crate::jobs::JobContro
             Event::End(tag) if tag.local_name().as_ref() == b"binaryDataArray" => {
                 in_binary_array = false
             }
+            Event::End(tag) if tag.local_name().as_ref() == b"chromatogram" => {
+                if !in_chromatogram {
+                    return Err(invalid("mismatched chromatogram closing tag"));
+                }
+                in_chromatogram = false;
+                match chromatogram_length.take() {
+                    Some(0) => {}
+                    Some(_) if chromatogram_has_time && chromatogram_has_intensity => {}
+                    _ => {
+                        return Err(invalid(
+                            "nonempty chromatogram requires declared length and time/intensity arrays",
+                        ))
+                    }
+                }
+            }
             Event::Eof => break,
             _ => {}
         }
         buffer.clear();
     }
-    if !root_seen
-        || !open_tags.is_empty()
-        || spectrum_has_scan.is_some()
-        || scan_time.is_some()
-        || declared_count != Some(spectra)
-        || spectra == 0
+    if !root_seen || !open_tags.is_empty() || spectrum_has_scan.is_some() || scan_time.is_some()
     {
         return Err(invalid(
             "incomplete mzML root, spectrum count or scan metadata",
         ));
     }
-    Ok(())
+    if in_chromatogram {
+        return Err(invalid("incomplete mzML chromatogram metadata"));
+    }
+    // Spectrum-bearing files keep the original strict contract. A mismatched
+    // chromatogram count does not fail these files: stored traces are exposed
+    // best-effort and unreadable ones are skipped during bounds extraction.
+    if spectra > 0 {
+        if declared_count != Some(spectra) {
+            return Err(invalid(
+                "incomplete mzML root, spectrum count or scan metadata",
+            ));
+        }
+        return Ok(());
+    }
+    // Chromatogram-only files (e.g. SRM/MRM with no <spectrumList>) are valid
+    // when the chromatogram list count matches the observed chromatograms.
+    if declared_chromatograms == Some(chromatograms) && chromatograms > 0 {
+        return Ok(());
+    }
+    Err(invalid(
+        "incomplete mzML root, spectrum count or scan metadata",
+    ))
 }

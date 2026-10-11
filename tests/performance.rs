@@ -273,6 +273,7 @@ fn analytical_workloads() {
         ),
         mz_range: None,
         precursor_mz: None,
+        native_chromatogram: None,
     };
     let job = scheduler
         .submit(

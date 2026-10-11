@@ -398,6 +398,8 @@ impl MzViewerApp {
                     file.cache.import_workspace = workspace.clone();
                     file.data.bounds = run.bounds;
                     file.data.available_scan_filters = run.scan_filters.clone();
+                    file.data.available_chromatograms = run.chromatograms.clone();
+                    file.data.available_acquisitions = run.acquisitions.clone();
                     file.is_loading = false;
                     if index == 0 {
                         file.display.color = color;
@@ -408,17 +410,30 @@ impl MzViewerApp {
                         continue;
                     }
                     if first_loaded && index == 0 {
-                        if let Some((ms, pol, pre, _, _)) = run
-                            .scan_filters
-                            .iter()
-                            .find(|(ms, pol, _, _, _)| {
-                                *ms == 1 && *pol == mzdata::spectrum::ScanPolarity::Positive
-                            })
-                            .or_else(|| run.scan_filters.first())
-                        {
-                            self.user_input.ms_level = *ms;
-                            self.user_input.polarity = *pol;
-                            self.user_input.precursor_mz = *pre;
+                        if run.scan_filters.is_empty() && !run.chromatograms.is_empty() {
+                            // Chromatogram-only file (SRM/MRM): default to the
+                            // stored TIC when present, else the first trace.
+                            let default_native = run
+                                .chromatograms
+                                .iter()
+                                .find(|c| c.label == "TIC")
+                                .or(run.chromatograms.first())
+                                .map(|c| c.index);
+                            self.user_input.native_chromatogram = default_native;
+                        } else {
+                            self.user_input.native_chromatogram = None;
+                            if let Some((ms, pol, pre, _, _)) = run
+                                .scan_filters
+                                .iter()
+                                .find(|(ms, pol, _, _, _)| {
+                                    *ms == 1 && *pol == mzdata::spectrum::ScanPolarity::Positive
+                                })
+                                .or_else(|| run.scan_filters.first())
+                            {
+                                self.user_input.ms_level = *ms;
+                                self.user_input.polarity = *pol;
+                                self.user_input.precursor_mz = *pre;
+                            }
                         }
                     }
                 }
@@ -469,7 +484,10 @@ impl MzViewerApp {
         if self.workspace.restore_input.is_some() {
             return;
         }
-        if self.user_input.plot_type == PlotType::Xic
+        // Native stored chromatograms bypass XIC mass entry entirely.
+        let native_mode = self.user_input.native_chromatogram.is_some();
+        if !native_mode
+            && self.user_input.plot_type == PlotType::Xic
             && (self.user_input.mass.value <= 0.0 || self.user_input.mass_tolerance.value <= 0.0)
         {
             return;
@@ -506,11 +524,32 @@ impl MzViewerApp {
             ChromascopeError::FileNotOpened(format!("Active file ID {} not found", active_id))
         })?;
 
-        // Validate smoothing against file size
-        active_file
-            .data
-            .bounds
-            .validate_smoothing(self.user_input.smoothing)?;
+        // Chromatogram-only files render a stored trace; spectrum filters do
+        // not apply. Clamp a stale selection back into range.
+        let native_chromatogram = if active_file.data.available_scan_filters.is_empty()
+            && !active_file.data.available_chromatograms.is_empty()
+        {
+            let n = active_file.data.available_chromatograms.len();
+            match self.user_input.native_chromatogram {
+                Some(i) if i < n => Some(
+                    active_file.data.available_chromatograms[i].index,
+                ),
+                _ => active_file
+                    .data
+                    .available_chromatograms
+                    .first()
+                    .map(|c| c.index),
+            }
+        } else {
+            None
+        };
+        if native_chromatogram.is_none() {
+            // Validate smoothing against file size
+            active_file
+                .data
+                .bounds
+                .validate_smoothing(self.user_input.smoothing)?;
+        }
 
         // For XIC, validate and construct XicParams with file bounds
         let xic_params = if self.user_input.plot_type == PlotType::Xic {
@@ -537,8 +576,28 @@ impl MzViewerApp {
             None
         };
 
+        // Drop a stale acquisition filter left over from another file or an
+        // MCP call: filtering full-scan data down to zero scans is never what
+        // the interactive view wants. Explicit method runs (presets, quant,
+        // MCP) keep the hard error downstream.
+        let acquisition = match self.user_input.acquisition {
+            Some(mode)
+                if native_chromatogram.is_none()
+                    && active_file.data.has_spectra()
+                    && !active_file.data.available_acquisitions.contains(&mode) =>
+            {
+                log::info!(
+                    "Clearing inapplicable {mode:?} acquisition filter for {} (file holds {})",
+                    active_file.name,
+                    active_file.data.acquisition_summary()
+                );
+                None
+            }
+            other => other,
+        };
+
         Ok(ProcessingParams {
-            acquisition: self.user_input.acquisition,
+            acquisition,
             plot_type: self.user_input.plot_type,
             ms_level: self.user_input.ms_level,
             polarity: self.user_input.polarity,
@@ -546,6 +605,7 @@ impl MzViewerApp {
             xic_params,
             mz_range,
             precursor_mz: self.user_input.precursor_mz,
+            native_chromatogram,
         })
     }
 }
@@ -774,6 +834,64 @@ mod tests {
         assert_eq!(params.polarity, mzdata::spectrum::ScanPolarity::Negative);
         assert_eq!(params.smoothing, 3);
         assert!(params.xic_params.is_none());
+    }
+
+    #[test]
+    fn test_build_processing_params_drops_stale_acquisition_filter() {
+        use crate::processing::AcquisitionMode;
+        let mut app = MzViewerApp::default();
+
+        // Mock full-scan file: spectra present, only FS acquisition available.
+        let mut mock_data = parser::MzData::new();
+        mock_data.bounds = crate::validation::DataBounds {
+            min_mz: 100.0,
+            max_mz: 1000.0,
+            min_rt: 0.0,
+            max_rt: 60.0,
+            scan_count: 1000,
+        };
+        mock_data.available_scan_filters = vec![(
+            1,
+            mzdata::spectrum::ScanPolarity::Positive,
+            None,
+            100.0,
+            1000.0,
+        )];
+        mock_data.available_acquisitions = vec![AcquisitionMode::FS];
+
+        let file_id = 0;
+        app.files.insert(
+            file_id,
+            OpenFile {
+                id: file_id,
+                name: "test.mzML".to_string(),
+                path: "test.mzML".to_string(),
+                data: mock_data,
+                display: FileDisplaySettings {
+                    color: LineColor::Red,
+                    visible: true,
+                },
+                cache: FileCache::default(),
+                is_loading: false,
+            },
+        );
+        app.active_file_id = Some(file_id);
+        app.user_input.plot_type = PlotType::Tic;
+
+        // Stale SIM filter left over from another file is dropped silently.
+        app.user_input.acquisition = Some(AcquisitionMode::SIM);
+        let params = app.build_processing_params().unwrap();
+        assert_eq!(params.acquisition, None);
+
+        // A matching filter is kept.
+        app.user_input.acquisition = Some(AcquisitionMode::FS);
+        let params = app.build_processing_params().unwrap();
+        assert_eq!(params.acquisition, Some(AcquisitionMode::FS));
+
+        // No filter stays unset.
+        app.user_input.acquisition = None;
+        let params = app.build_processing_params().unwrap();
+        assert_eq!(params.acquisition, None);
     }
 
     #[test]
@@ -1121,6 +1239,7 @@ mod tests {
             xic_params: None,
             mz_range: None,
             precursor_mz: None,
+            native_chromatogram: None,
         };
 
         app.files.insert(

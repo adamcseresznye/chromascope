@@ -1,8 +1,52 @@
 # Chromascope
 
-Chromascope is an AI-native LC-MS workbench with an egui desktop, a JSON CLI, and local MCP interfaces. External clients supply AI reasoning; Chromascope computes and retains analytical evidence through shared kernels.
+**Let an AI assistant drive your LC-MS analysis — while every number stays traceable.**
 
-**Development release preparation, 2026-10-08; final checks continued 2026-10-09.** Cargo version remains `0.3.0`. This checkout includes uncommitted work beyond the published baseline. This is not a published release or instrument-validation claim. See the [feature matrix](docs/FEATURE_STATUS.md), [release notes](docs/RELEASE_NOTES.md), [validation report](docs/VALIDATION_REPORT.md), and [backlog](docs/RELEASE_BACKLOG.md).
+Chromascope is an open-source LC-MS workbench written in Rust. You can use it like a normal desktop app, script it from the command line, or hand the controls to an AI assistant over [MCP](https://modelcontextprotocol.io). The assistant does the reasoning; Chromascope does the maths, keeps the evidence and records exactly what happened.
+
+https://github.com/user-attachments/assets/cfbe286f-962d-41b3-ad6f-ffa3f33bebf3
+
+<sub>Video not playing? Open [assets/demo.mp4](assets/demo.mp4) directly.</sub>
+
+### What you are seeing in the demo (32 seconds)
+
+On the left is an ordinary AI chat client. On the right is the Chromascope desktop. The only thing typed is a plain-English request: *open `8.mzML`, extract the XIC for m/z 258.1109 (10 ppm), zoom into the main peak around 3.2 min, smooth it moderately, propose integration boundaries and calculate the area without making permanent changes.*
+
+1. **0–10 s: the assistant opens the data itself.** The empty viewer fills with a loaded file and a freshly extracted XIC. The assistant works through Chromascope's own tools while the GUI updates live.
+2. **10–22 s: it zooms in and compares.** The raw trace (blue) and a smoothed copy (orange) appear side by side, so the effect of smoothing is visible rather than assumed.
+3. **25–32 s: it inspects, then reports.** The two traces are overlaid, and the assistant answers: *apex at 3.1935 min, proposed boundaries 3.11–3.36 min, area 409,563.44 a.u.·min with a straight-chord baseline.*
+4. **The last line matters most.** The area was calculated with `integrate(apply=false)`, a preview. The assistant proposed a result; it did not silently change your data.
+
+Not shown in the video: the same engine also runs targeted quantification, QC, spectral identification, untargeted analysis and statistics, from the GUI, the CLI or an AI client.
+
+### Why you might care
+
+- **AI as a lab assistant, not a black box.** Models inspect, propose and prepare drafts. Similarity scores never confirm an identity, and a reviewer's acknowledgement cannot turn a failing QC rule into a pass.
+- **Everything is auditable.** Raw files are never modified. Results keep their units, parameters, software versions and source hashes, and project history is append-only.
+- **One engine, three front ends.** The desktop app, JSON CLI and MCP servers share the same analysis code, so a number from the GUI is the number from the CLI.
+- **Honest about gaps.** Missing runtimes give explicit errors, not quiet fallbacks. [Limitations](#analytical-capabilities-and-limitations) are listed in plain sight.
+
+### What you can do with it
+
+| Workflow | Highlights |
+|---|---|
+| **Explore** | TIC / BPC / XIC, overlays and grids, spectrum inspection, full-resolution peak integration |
+| **Quantify** | Weighted calibration, internal standards, qualifiers, dilution, batch QC rules |
+| **Identify** | MSP / MGF / MassBank search, formula and isotope evidence, reasoned annotations |
+| **Discover** | Untargeted feature detection and alignment through OpenMS, tentative metabolite and lipid hypotheses |
+| **Compare** | PCA, clustered heatmaps, volcano plots, Welch tests with corrected q-values |
+| **Deliver** | Verified project bundles and draft reports (JSON, CSV, TSV, SVG, HTML) |
+
+### Quick start
+
+```sh
+cargo build --locked --release --bin chromascope
+target/release/chromascope        # chromascope.exe on Windows
+```
+
+Open an mzML file from **File**, pick **XIC**, and double-click a trace to see its spectrum. To let an AI client drive it, see [MCP setup](#mcp-setup-and-ai-assisted-analysis). Other builds (CLI-only, headless MCP) are listed under [Installation](#installation).
+
+> **Status:** development build, Cargo version `0.3.0`, preparing a release (2026-10-09). It is not instrument-validated. See the [feature matrix](docs/FEATURE_STATUS.md), [release notes](docs/RELEASE_NOTES.md), [validation report](docs/VALIDATION_REPORT.md) and [backlog](docs/RELEASE_BACKLOG.md).
 
 ## Architecture
 
@@ -58,7 +102,7 @@ The [user guide](docs/USER_GUIDE.md) covers established viewer controls; [exampl
 
 ## Verified media references
 
-The repository contains [the existing demonstration video](assets/demo.mp4), a historical desktop MCP demonstration. It does not demonstrate all new workspaces. Deleted screenshot/GIF assets are not referenced. Test-generated previews are software-rendered egui fixtures, not native screenshots; no new screenshot or benchmark is asserted here.
+The [demonstration video](assets/demo.mp4) shows an AI client driving the desktop through MCP (XIC extraction, smoothing and a preview integration). It does not demonstrate the newer workspaces. Test-generated previews under `docs/ux-evidence/` are software-rendered egui fixtures, not native screenshots; no benchmark is asserted here.
 
 Project toolbar **Create project…** / **Open project…** retains workspace snapshots. This recently integrated path remains experimental pending native/recovery acceptance.
 

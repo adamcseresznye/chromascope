@@ -818,6 +818,7 @@ fn json_annotation_roundtrip_and_linked_source_checks() {
         xic_params: Some(x),
         mz_range: None,
         precursor_mz: None,
+        native_chromatogram: None,
     };
     assert!(engine::execute(
         &path,

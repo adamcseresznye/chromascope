@@ -32,6 +32,7 @@ use std::path::PathBuf;
 ///     xic_params: None,
 ///     mz_range: None,
 ///     precursor_mz: None,
+///     native_chromatogram: None,
 /// };
 /// ```
 #[cfg_attr(feature = "mcp-headless", derive(rmcp::schemars::JsonSchema))]
@@ -61,6 +62,11 @@ pub struct ProcessingParams {
     /// Some(mz) restricts extraction to spectra whose precursor isolation target is
     /// within 0.01 Da of `mz` — used to render per-precursor MS2 chromatograms.
     pub precursor_mz: Option<f64>,
+    /// Pre-recorded (native) chromatogram from `<chromatogramList>`, by list index.
+    /// Some(i) renders the stored SRM/MRM/TIC trace directly instead of extracting
+    /// TIC/BPC/XIC from spectra. Used for chromatogram-only files with no spectra.
+    #[serde(default)]
+    pub native_chromatogram: Option<usize>,
 }
 
 /// Result of a background chromatogram processing task.
@@ -90,6 +96,8 @@ pub struct LoadedRun {
     pub path: String,
     pub bounds: DataBounds,
     pub scan_filters: Vec<(u8, ScanPolarity, Option<f64>, f64, f64)>,
+    pub chromatograms: Vec<crate::parser::NativeChromatogramInfo>,
+    pub acquisitions: Vec<AcquisitionMode>,
 }
 
 #[derive(Debug)]
@@ -142,6 +150,8 @@ pub fn import_file_in_background(
                 path: run_path.to_string_lossy().into_owned(),
                 bounds: data.bounds,
                 scan_filters: data.available_scan_filters.clone(),
+                chromatograms: data.available_chromatograms.clone(),
+                acquisitions: data.available_acquisitions.clone(),
             });
         }
         Ok((runs, imported.workspace))
@@ -266,6 +276,7 @@ pub fn run_in_background(
 ///     xic_params: None,
 ///     mz_range: None,
 ///     precursor_mz: None,
+///     native_chromatogram: None,
 /// };
 ///
 /// let (plot_data, chromatogram) = process_chromatogram(&mut data, &params)?;
@@ -279,6 +290,18 @@ pub fn process_chromatogram(
 ) -> Result<(Vec<[f64; 2]>, ChromatogramData)> {
     crate::engine::validate_params(params)?;
     data.acquisition_filter = params.acquisition;
+    // Native (pre-recorded) chromatograms bypass spectrum extraction entirely.
+    if let Some(native_index) = params.native_chromatogram {
+        let chromatogram = data.get_native_chromatogram(native_index)?;
+        if chromatogram.retention_time.is_empty() {
+            return Err(ChromascopeError::MzDataError(
+                "Selected stored chromatogram contains no points".into(),
+            ));
+        }
+        let prepared = prepare_chromatogram_for_plot(&chromatogram)?;
+        let plot_data = smooth_chromatogram(prepared, params.smoothing)?;
+        return Ok((plot_data, chromatogram));
+    }
     // Step 1: Extract raw chromatogram based on type, returning owned ChromatogramData
     let chromatogram = match params.plot_type {
         PlotType::Tic => data.get_tic(
@@ -311,7 +334,10 @@ pub fn process_chromatogram(
 
     if let Some(mode) = params.acquisition {
         if chromatogram.index.is_empty() {
-            return Err(ChromascopeError::MzDataError(format!("No matching {mode:?} scans. The source must contain matching acquisition metadata and spectra for this mode.")));
+            return Err(ChromascopeError::MzDataError(format!(
+                "No matching {mode:?} scans (file holds {}). Clear the acquisition filter or pick a mode the file contains.",
+                data.acquisition_summary()
+            )));
         }
     }
     // Step 2: Prepare for visualization (aggregate duplicates, format)
@@ -657,6 +683,7 @@ mod tests {
             ms_level: 1,
             mz_range: None,
             precursor_mz: None,
+            native_chromatogram: None,
         };
 
         // Act
@@ -689,6 +716,7 @@ mod tests {
             ms_level: 1,
             mz_range: None,
             precursor_mz: None,
+            native_chromatogram: None,
         };
 
         // Act
@@ -717,6 +745,7 @@ mod tests {
             ms_level: 1,
             mz_range: None,
             precursor_mz: None,
+            native_chromatogram: None,
         };
 
         // Act
@@ -753,6 +782,7 @@ mod tests {
             ms_level: 1,
             mz_range: None,
             precursor_mz: None,
+            native_chromatogram: None,
         };
 
         // Act
@@ -782,6 +812,7 @@ mod tests {
             ms_level: 1,
             mz_range: None,
             precursor_mz: None,
+            native_chromatogram: None,
         };
 
         // Act
@@ -813,6 +844,7 @@ mod tests {
             ms_level: 1,
             mz_range: None,
             precursor_mz: None,
+            native_chromatogram: None,
         };
 
         // Act
@@ -840,6 +872,7 @@ mod tests {
             ms_level: 1,
             mz_range: None,
             precursor_mz: None,
+            native_chromatogram: None,
         };
 
         // Act
@@ -872,6 +905,7 @@ mod tests {
             ms_level: 1,
             mz_range: None,
             precursor_mz: None,
+            native_chromatogram: None,
         };
 
         let (plot_data, chromatogram) =
@@ -1141,6 +1175,7 @@ mod acquisition_tests {
             xic_params: None,
             mz_range: None,
             precursor_mz: None,
+            native_chromatogram: None,
         };
         let (_, full) = process_chromatogram(&mut data, &params).unwrap();
         assert!(!full.index.is_empty());

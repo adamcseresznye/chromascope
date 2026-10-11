@@ -801,6 +801,7 @@ mod tests {
                                 xic_params: None,
                                 mz_range: None,
                                 precursor_mz: None,
+                                native_chromatogram: None,
                             }),
                             mass_spectrum: Some(crate::parser::MassSpectrum {
                                 mz: vec![153.0, 389.0, 483.0, 501.0],

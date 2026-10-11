@@ -1530,6 +1530,7 @@ mod tests {
             ),
             mz_range: None,
             precursor_mz: None,
+            native_chromatogram: None,
         };
         let points = vec![[1.0, 0.0], [2.0, 100.0], [3.0, 0.0]];
         app.files.insert(
