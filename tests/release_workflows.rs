@@ -1,5 +1,6 @@
 //! Real adapter regression: documented release example retains scientific missing
 //! states, a failed QC after acknowledgement, and local reference search evidence.
+#[cfg(feature = "experimental")]
 #[test]
 fn release_example_retains_evidence_and_refuses_existing_directory() {
     let temporary = tempfile::tempdir().unwrap();

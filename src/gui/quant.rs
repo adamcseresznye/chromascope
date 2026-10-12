@@ -788,37 +788,36 @@ pub(super) fn show(app: &mut MzViewerApp, ctx: &egui::Context) {
         }
     }
     egui::CentralPanel::default().show(ctx, |ui| {
-        egui::ScrollArea::vertical().id_salt("quantification_content").show(ui, |ui| {
-        ui.heading("Quantification and QC");
-        ui.label("1 Select samples → 2 define an extraction method → 3 run and review peaks → 4 calibrate and assess QC → 5 export.");
-        // The live state was moved into `q`; restore it around the workflow
-        // banner so step status and navigation see the real batch.
-        app.quant = std::mem::take(&mut q);
-        super::workflow::banner(app, ctx, ui);
-        ui.horizontal_wrapped(|ui| {
-            ui.small("Workflow:");
-            if ui.small_button("← Inspect data").clicked() {
-                super::workflow::go(app, ctx, super::workflow::Destination::Data);
-            }
-            if ui.small_button("Continue to Reports →").clicked() {
-                super::workflow::go(app, ctx, super::workflow::Destination::Reports);
-            }
+        let mut destination = None;
+        ui.horizontal(|ui| {
+            ui.heading("Quantification and QC");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.small_button("Continue to Reports →").clicked() {
+                    destination = Some(super::workflow::Destination::Reports);
+                }
+                if ui.small_button("← Inspect data").clicked() {
+                    destination = Some(super::workflow::Destination::Data);
+                }
+            });
         });
-        q = std::mem::take(&mut app.quant);
-        ui.horizontal_wrapped(|ui| {
-            if ui.button("Edit method…").clicked() {
-                q.method_open = true;
-            }
-            let batch_ready = {
+        if let Some(destination) = destination {
+            // The live state was moved into `q`; restore it so workflow navigation sees the real batch.
+            app.quant = std::mem::take(&mut q);
+            super::workflow::go(app, ctx, destination);
+            q = std::mem::take(&mut app.quant);
+        }
+        ui.add_space(4.0);
+        egui::Frame::group(ui.style())
+            .inner_margin(egui::Margin::symmetric(10, 8))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
                 let selected = app
                     .files
                     .iter()
                     .filter(|(id, _)| q.selected_samples.contains(id))
-                    .count();
-                let importing = app.files.iter().any(|(id, f)| {
-                    q.selected_samples.contains(id) && f.is_loading
-                });
-                if selected == 0 {
+                    .collect::<Vec<_>>();
+                let importing = selected.iter().any(|(_, f)| f.is_loading);
+                let batch_ready = if selected.is_empty() {
                     Some("Select at least one loaded sample on the left to enable Run batch.")
                 } else if importing {
                     Some("Waiting for selected samples to finish importing…")
@@ -826,130 +825,148 @@ pub(super) fn show(app: &mut MzViewerApp, ctx: &egui::Context) {
                     Some("Define a valid extraction method (Edit method…) before running.")
                 } else {
                     None
-                }
-            };
-            ui.add_enabled_ui(q.rx.is_none(), |ui| {
-                let selected = app
-                    .files
-                    .iter()
-                    .filter(|(id, _)| q.selected_samples.contains(id))
-                    .collect::<Vec<_>>();
-                let ready = !selected.is_empty()
-                    && selected.iter().all(|(_, f)| !f.is_loading)
-                    && validate(&q.method).is_ok();
-                if ui
-                    .add_enabled(
-                        ready,
-                        egui::Button::new(egui::RichText::new("Run batch").strong())
-                            .fill(ui.visuals().selection.bg_fill),
-                    )
-                    .on_hover_text(
-                        "Select loaded samples and define a valid method to run the batch",
-                    )
-                    .clicked()
-                {
-                    app.quant = std::mem::take(&mut q);
-                    let result = run(app);
-                    q = std::mem::take(&mut app.quant);
-                    if let Err(e) = result {
-                        q.message = e;
-                    }
-                }
-                ui.menu_button("Batch session", |ui| {
-                    if ui.button("Open batch…").clicked() {
-                        q.confirm_replace = true;
-                        ui.close();
-                    }
-                    if ui.button("Save batch…").clicked() {
-                        if let Err(e) = batch_file(&mut q, true) {
-                            q.message = e;
+                };
+                let ready = batch_ready.is_none();
+                ui.horizontal_wrapped(|ui| {
+                    ui.add_enabled_ui(q.rx.is_none(), |ui| {
+                        if ui
+                            .add_enabled(
+                                ready,
+                                egui::Button::new(egui::RichText::new("▶ Run batch").strong())
+                                    .fill(ui.visuals().selection.bg_fill)
+                                    .min_size(egui::vec2(110.0, 28.0)),
+                            )
+                            .on_hover_text(
+                                "Select loaded samples and define a valid method to run the batch",
+                            )
+                            .clicked()
+                        {
+                            app.quant = std::mem::take(&mut q);
+                            let result = run(app);
+                            q = std::mem::take(&mut app.quant);
+                            if let Err(e) = result {
+                                q.message = e;
+                            }
                         }
-                        ui.close();
+                    });
+                    if q.rx.is_some() {
+                        ui.spinner();
+                        ui.label(format!("{} / {}", q.completed, q.total));
+                        if ui.button("Cancel").clicked() {
+                            q.cancel.store(true, Ordering::Relaxed);
+                            q.message = "Stopping after the current extraction…".into();
+                        }
+                    }
+                    ui.separator();
+                    ui.label(egui::RichText::new(format!("Method: {}", q.method.name)).strong());
+                    ui.weak(format!("{} {}", q.method.analytes.len(), if q.method.analytes.len() == 1 { "analyte" } else { "analytes" }));
+                    if signature(&q.method) != q.saved_method {
+                        ui.colored_label(ui.visuals().warn_fg_color, "● unsaved")
+                            .on_hover_text("Method has unsaved changes. Save it in the method editor for future batches.");
+                    }
+                    if ui.button("Edit method…").clicked() {
+                        q.method_open = true;
+                    }
+                    ui.separator();
+                    ui.add_enabled_ui(q.rx.is_none(), |ui| {
+                        ui.menu_button("Batch session ▾", |ui| {
+                            if ui.button("Open batch…").clicked() {
+                                q.confirm_replace = true;
+                                ui.close();
+                            }
+                            if ui.button("Save batch…").clicked() {
+                                if let Err(e) = batch_file(&mut q, true) {
+                                    q.message = e;
+                                }
+                                ui.close();
+                            }
+                        });
+                    });
+                    if ui
+                        .add_enabled(
+                            !q.results.is_empty() && q.rx.is_none(),
+                            egui::Button::new("Export CSV…"),
+                        )
+                        .clicked()
+                    {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .add_filter("CSV", &["csv"])
+                            .set_file_name("quantification.csv")
+                            .save_file()
+                        {
+                            match std::fs::write(path, csv(&q.results, &q.method)) {
+                                Ok(()) => {
+                                    q.message =
+                                        "Results exported, including review status and method snapshots."
+                                            .into()
+                                }
+                                Err(e) => q.message = e.to_string(),
+                            }
+                        }
                     }
                 });
-            });
-            if q.rx.is_some() {
-                ui.spinner();
-                ui.label(format!("{} / {}", q.completed, q.total));
-                if ui.button("Cancel").clicked() {
-                    q.cancel.store(true, Ordering::Relaxed);
-                    q.message = "Stopping after the current extraction…".into();
-                }
-            }
-            if let Some(reason) = batch_ready {
-                if q.rx.is_none() {
-                    ui.small(reason);
-                }
-            }
-            if ui
-                .add_enabled(
-                    !q.results.is_empty() && q.rx.is_none(),
-                    egui::Button::new("Export CSV…"),
-                )
-                .clicked()
-            {
-                if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("CSV", &["csv"])
-                    .set_file_name("quantification.csv")
-                    .save_file()
-                {
-                    match std::fs::write(path, csv(&q.results, &q.method)) {
-                        Ok(()) => {
-                            q.message =
-                                "Results exported, including review status and method snapshots."
-                                    .into()
-                        }
-                        Err(e) => q.message = e.to_string(),
+                if let Some(reason) = batch_ready {
+                    if q.rx.is_none() {
+                        ui.weak(reason);
                     }
                 }
-            }
-        });
-        if !q.message.is_empty() {
-            ui.label(&q.message);
-        }
-        ui.separator();
-        ui.label(format!(
-            "Method: {} · {} analytes",
-            q.method.name,
-            q.method.analytes.len()
-        ));
-        if signature(&q.method) != q.saved_method {
-            ui.small(
-                "Method has unsaved changes. Save it in the method editor for future batches.",
-            );
-        }
-        ui.separator();
+                if !q.message.is_empty() {
+                    ui.label(&q.message);
+                }
+            });
+        ui.add_space(6.0);
         let current = signature(&q.method);
         let unresolved = q
             .results
             .iter()
-            .filter(|r| {
-                r.method != current
-                    || matches!(
-                        r.status,
-                        Status::Missing
-                            | Status::Ambiguous
-                            | Status::Failed
-                            | Status::Cancelled
-                            | Status::Pending
-                    )
-            })
+            .filter(|r| r.method != current || is_unresolved(&r.status))
             .count();
-        let stage_id=egui::Id::new("quantification_stage");
-        let mut stage=ui.ctx().data(|d|d.get_temp::<usize>(stage_id)).unwrap_or(0);
-        ui.horizontal_wrapped(|ui|{
-            ui.selectable_value(&mut stage,0,if unresolved > 0 {format!("1 · Areas and peak review ({unresolved} unresolved)")} else {"1 · Areas and peak review".to_string()});
-            ui.selectable_value(&mut stage,1,"2 · Calibration and concentrations");
-            ui.selectable_value(&mut stage,2,"3 · Batch QC and validation");
+        let stage_id = egui::Id::new("quantification_stage");
+        let mut stage = ui.ctx().data(|d| d.get_temp::<usize>(stage_id)).unwrap_or(0);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().button_padding = egui::vec2(12.0, 5.0);
+            ui.selectable_value(
+                &mut stage,
+                0,
+                if unresolved > 0 {
+                    format!("1 · Areas and peak review ({unresolved} unresolved)")
+                } else {
+                    "1 · Areas and peak review".to_string()
+                },
+            );
+            ui.selectable_value(&mut stage, 1, "2 · Calibration and concentrations");
+            ui.selectable_value(&mut stage, 2, "3 · Batch QC and validation");
         });
-        ui.ctx().data_mut(|d|d.insert_temp(stage_id,stage));
-        match stage {
-            1=>{let samples=if q.batch_samples.is_empty(){let mut samples:Vec<_>=app.files.values().filter(|f|!f.is_loading&&q.selected_samples.contains(&f.id)).map(|f|(f.path.clone(),f.name.clone())).collect();samples.sort();samples}else{q.batch_samples.clone()};super::targeted::panel(&mut q.targeted,&q.method,&samples,ui);},
-            2=>q.targeted.qc_panel(ui),
-            _=>{results_table(&mut q,ui);ui.separator();review(&mut q,ui);}
+        ui.ctx().data_mut(|d| d.insert_temp(stage_id, stage));
+        ui.separator();
+        if stage == 0 {
+            // Master/detail layout manages its own scrolling so the plot can use the full height.
+            review_stage(&mut q, ui);
+        } else {
+            egui::ScrollArea::vertical()
+                .id_salt("quantification_content")
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    if stage == 1 {
+                        let samples = if q.batch_samples.is_empty() {
+                            let mut samples: Vec<_> = app
+                                .files
+                                .values()
+                                .filter(|f| !f.is_loading && q.selected_samples.contains(&f.id))
+                                .map(|f| (f.path.clone(), f.name.clone()))
+                                .collect();
+                            samples.sort();
+                            samples
+                        } else {
+                            q.batch_samples.clone()
+                        };
+                        super::targeted::panel(&mut q.targeted, &q.method, &samples, ui);
+                    } else {
+                        q.targeted.qc_panel(ui);
+                    }
+                    super::workbench::scroll_new_focus(ui);
+                });
         }
-        super::workbench::scroll_new_focus(ui);
-        });
     });
     if q.method_open {
         let mut open = true;
@@ -1085,251 +1102,368 @@ fn method_editor(q: &mut QuantState, ui: &mut egui::Ui) {
         if !q.message.is_empty() { ui.small(&q.message); }
     });
 }
-fn results_table(q: &mut QuantState, ui: &mut egui::Ui) {
-    ui.horizontal(|ui| {
-        ui.strong("Batch results");
-        if ui.button("Next unresolved").clicked() && !q.results.is_empty() {
-            let start = q.selected.map_or(0, |i| i + 1);
-            if let Some(i) = (0..q.results.len())
-                .map(|offset| (start + offset) % q.results.len())
-                .find(|&i| {
-                    matches!(
-                        q.results[i].status,
-                        Status::Missing
-                            | Status::Ambiguous
-                            | Status::Failed
-                            | Status::Cancelled
-                            | Status::Pending
-                    ) || q.results[i].method != signature(&q.method)
-                })
-            {
-                select(q, i);
-            }
-        }
-    });
+fn is_unresolved(status: &Status) -> bool {
+    matches!(
+        status,
+        Status::Missing | Status::Ambiguous | Status::Failed | Status::Cancelled | Status::Pending
+    )
+}
+/// Review state as `(label, colour)`: green is settled, amber needs a decision, red failed.
+fn state_tone(visuals: &egui::Visuals, status: &Status, stale: bool) -> (String, Color32) {
+    if stale {
+        return ("Recalculate".into(), visuals.warn_fg_color);
+    }
+    let color = match status {
+        Status::Automatic | Status::Reviewed | Status::Manual => Color32::from_rgb(80, 175, 120),
+        Status::Ambiguous => visuals.warn_fg_color,
+        Status::Missing | Status::Failed => visuals.error_fg_color,
+        Status::Pending | Status::Cancelled => visuals.weak_text_color(),
+    };
+    (format!("{status:?}"), color)
+}
+fn next_unresolved(q: &mut QuantState) {
     if q.results.is_empty() {
-        ui.label("No batch results yet.");
-        ui.small("1 Select samples on the left · 2 choose Edit method… to define analytes · 3 press Run batch. Reviewed peaks appear here for boundary correction.");
         return;
     }
+    let current = signature(&q.method);
+    let start = q.selected.map_or(0, |i| i + 1);
+    if let Some(i) = (0..q.results.len())
+        .map(|offset| (start + offset) % q.results.len())
+        .find(|&i| is_unresolved(&q.results[i].status) || q.results[i].method != current)
+    {
+        select(q, i);
+    }
+}
+fn empty_state(q: &mut QuantState, ui: &mut egui::Ui) {
+    ui.add_space(40.0);
+    ui.vertical_centered(|ui| {
+        ui.heading("No batch results yet");
+        ui.add_space(4.0);
+        ui.label("Measure the peak area of every analyte in every selected sample.");
+        ui.add_space(12.0);
+        for step in [
+            "1   Select samples in the panel on the left",
+            "2   Define the analytes and their extraction windows",
+            "3   Press Run batch, then review each peak here",
+        ] {
+            ui.label(step);
+        }
+        ui.add_space(12.0);
+        if ui.button("Edit method…").clicked() {
+            q.method_open = true;
+        }
+    });
+}
+/// Peak review: results table on the left, integration detail on the right.
+fn review_stage(q: &mut QuantState, ui: &mut egui::Ui) {
+    if q.results.is_empty() {
+        empty_state(q, ui);
+        return;
+    }
+    let current = signature(&q.method);
+    let unresolved = q
+        .results
+        .iter()
+        .filter(|r| r.method != current || is_unresolved(&r.status))
+        .count();
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(format!("{} {}", q.results.len(), if q.results.len() == 1 { "result" } else { "results" })).strong());
+        if unresolved > 0 {
+            ui.colored_label(ui.visuals().warn_fg_color, format!("● {unresolved} need review"));
+        } else {
+            ui.colored_label(Color32::from_rgb(80, 175, 120), "● all resolved");
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui
+                .add_enabled(unresolved > 0, egui::Button::new("Next unresolved ›"))
+                .clicked()
+            {
+                next_unresolved(q);
+            }
+        });
+    });
+    ui.add_space(4.0);
+    let size = ui.available_size();
+    if size.x >= 900.0 {
+        let left = (size.x * 0.42).clamp(380.0, 620.0);
+        ui.horizontal_top(|ui| {
+            ui.allocate_ui_with_layout(
+                egui::vec2(left, size.y),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    ui.set_width(left);
+                    results_table(q, ui, size.y - 64.0);
+                },
+            );
+            ui.separator();
+            let width = ui.available_width();
+            ui.allocate_ui_with_layout(
+                egui::vec2(width, size.y),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| review(q, ui),
+            );
+        });
+    } else {
+        egui::ScrollArea::vertical()
+            .id_salt("quant_review_narrow")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                results_table(q, ui, 220.0);
+                ui.separator();
+                review(q, ui);
+            });
+    }
+}
+fn results_table(q: &mut QuantState, ui: &mut egui::Ui, body_height: f32) {
     use super::table::{Cell, Row};
     let current = signature(&q.method);
+    let visuals = ui.visuals().clone();
     let rows: Vec<_> = q
         .results
         .iter()
         .enumerate()
-        .map(|(i, r)| Row {
-            key: format!("{i}/{}", r.source),
-            cells: vec![
-                Cell::text(&r.sample),
-                Cell::text(&r.analyte),
-                Cell::number(r.peak.as_ref().map(|p| p.area)),
-                Cell::text(if r.method != current {
-                    "Recalculate".into()
-                } else {
-                    format!("{:?}", r.status)
-                }),
-                Cell::text(&r.diagnostic),
-            ],
+        .map(|(i, r)| {
+            let (label, color) = state_tone(&visuals, &r.status, r.method != current);
+            Row {
+                key: format!("{i}/{}", r.source),
+                cells: vec![
+                    Cell::text(&r.sample),
+                    Cell::text(&r.analyte),
+                    Cell::number(r.peak.as_ref().map(|p| p.area)),
+                    Cell::text(format!("● {label}")).colored(color),
+                ],
+            }
         })
         .collect();
     let selected = q.selected.and_then(|i| rows.get(i)).map(|r| r.key.as_str());
-    if let Some(i) = super::table::show(
+    if let Some(i) = super::table::show_with(
         ui,
         "quant_result_matrix",
-        &[
-            "Sample",
-            "Analyte",
-            "Area (intensity*min)",
-            "State",
-            "Diagnostic",
-        ],
+        &["Sample", "Analyte", "Area (a.u.·min)", "State"],
         &rows,
         selected,
+        body_height,
+        &[120.0, 70.0, 120.0, 110.0],
     ) {
         select(q, i);
     }
+}
+fn metric(ui: &mut egui::Ui, label: &str, value: String) {
+    egui::Frame::group(ui.style())
+        .inner_margin(egui::Margin::symmetric(10, 6))
+        .show(ui, |ui| {
+            ui.vertical(|ui| {
+                ui.small(label);
+                ui.label(egui::RichText::new(value).strong().size(16.0));
+            });
+        });
 }
 fn review(q: &mut QuantState, ui: &mut egui::Ui) {
     if q.results.is_empty() {
         return;
     }
     let Some(i) = q.selected.filter(|&i| i < q.results.len()) else {
-        ui.small("Select a result above to inspect or adjust its integration.");
+        ui.add_space(40.0);
+        ui.vertical_centered(|ui| {
+            ui.weak("Select a result to inspect or adjust its integration.");
+        });
         return;
     };
-    advanced_review(q, i, ui);
-    let r = &q.results[i];
-    ui.strong(format!("{} / {}", r.sample, r.analyte));
-    if r.trace.is_empty() {
-        ui.label(&r.diagnostic);
-        return;
-    }
-    let stale = r.method != signature(&q.method);
-    if stale {
-        ui.colored_label(
-            Color32::from_rgb(210, 110, 50),
-            "Method changed: rerun this sample before adjusting the result.",
-        );
-    }
+    let pane_height = ui.available_height();
+    let stale = q.results[i].method != signature(&q.method);
+    let (state_label, state_color) = state_tone(ui.visuals(), &q.results[i].status, stale);
     let mut apply = false;
     let mut reset = false;
-    let draft_changed = r
-        .peak
-        .as_ref()
-        .is_none_or(|p| p.start != q.start || p.end != q.end);
-    if let Some(p) = &r.peak {
-        ui.horizontal_wrapped(|ui| {
-            ui.strong(format!("Recorded area: {:.4e} a.u.·min", p.area));
-            ui.label(format!("Apex: {:.3} min", p.apex_rt));
-            ui.label(format!("{:?}", r.status));
-        });
-    }
-    ui.add_enabled_ui(!stale && q.rx.is_none(), |ui| {
-        ui.horizontal_wrapped(|ui| {
-            ui.label("Start (min)");
-            ui.add(egui::DragValue::new(&mut q.start).speed(0.01));
-            ui.label("End (min)");
-            ui.add(egui::DragValue::new(&mut q.end).speed(0.01));
-            apply = ui
-                .add_enabled(draft_changed, egui::Button::new("Apply bounds"))
-                .clicked();
-            reset = ui
-                .add_enabled(
-                    r.peak != r.automatic || r.status != r.automatic_status,
-                    egui::Button::new("Reset to automatic"),
+    let mut accept = false;
+    egui::ScrollArea::vertical()
+        .id_salt("quant_review_detail")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.heading(format!("{} / {}", q.results[i].sample, q.results[i].analyte));
+                ui.colored_label(state_color, format!("● {state_label}"));
+            });
+            if !q.results[i].diagnostic.is_empty() {
+                ui.weak(&q.results[i].diagnostic);
+            }
+            if q.results[i].trace.is_empty() {
+                advanced_review(q, i, ui);
+                return;
+            }
+            if stale {
+                ui.colored_label(
+                    Color32::from_rgb(210, 110, 50),
+                    "Method changed: rerun this sample before adjusting the result.",
+                );
+            }
+            let draft_changed = q.results[i]
+                .peak
+                .as_ref()
+                .is_none_or(|p| p.start != q.start || p.end != q.end);
+            if let Some(p) = &q.results[i].peak {
+                ui.horizontal(|ui| {
+                    metric(ui, "Area (a.u.·min)", format!("{:.4e}", p.area));
+                    metric(ui, "Apex", format!("{:.3} min", p.apex_rt));
+                    metric(ui, "Window", format!("{:.3} – {:.3} min", p.start, p.end));
+                });
+            }
+            ui.add_space(4.0);
+            let plot_height = if pane_height.is_finite() {
+                (pane_height - 320.0).clamp(200.0, 640.0)
+            } else {
+                320.0
+            };
+            let mut mouse = None;
+            let mut boundaries = None;
+            let r = &q.results[i];
+            let plot = super::plot_controls::plot(ui, ("quant_review", i))
+                .height(plot_height)
+                .x_axis_label("Retention time (min)")
+                .y_axis_label("Intensity (instrument units)")
+                .allow_boxed_zoom(false)
+                .allow_drag(false);
+            let response = plot.show(ui, |plot_ui| {
+                let display = processing::decimate_for_display(&r.trace);
+                plot_ui.line(
+                    Line::new("Unsmoothed XIC", PlotPoints::from(display))
+                        .color(Color32::from_rgb(75, 150, 215)),
+                );
+                plot_ui.vline(VLine::new("Start", q.start).color(Color32::from_rgb(50, 160, 115)));
+                plot_ui.vline(VLine::new("End", q.end).color(Color32::from_rgb(220, 140, 60)));
+                if q.start < q.end {
+                    let y0 = processing::interpolate_at(&r.trace, q.start);
+                    let y1 = processing::interpolate_at(&r.trace, q.end);
+                    plot_ui.line(
+                        Line::new("Baseline", vec![[q.start, y0], [q.end, y1]]).color(Color32::GRAY),
+                    );
+                    let mut points = vec![[q.start, y0]];
+                    let region: Vec<_> = r
+                        .trace
+                        .iter()
+                        .copied()
+                        .filter(|p| p[0] > q.start && p[0] < q.end)
+                        .collect();
+                    points.extend(processing::decimate_for_display(&region));
+                    points.push([q.end, y1]);
+                    plot_ui.polygon(
+                        Polygon::new("Integrated peak", points)
+                            .stroke(egui::Stroke::new(
+                                1.0_f32,
+                                Color32::from_rgba_unmultiplied(75, 150, 215, 100),
+                            ))
+                            .fill_color(Color32::from_rgba_unmultiplied(75, 150, 215, 45)),
+                    );
+                }
+                // This plot does not pan; pointer_coordinate compensates for drag movement
+                // and would otherwise leave an integration handle at its press position.
+                mouse = plot_ui
+                    .ctx()
+                    .input(|i| i.pointer.latest_pos())
+                    .map(|pos| plot_ui.plot_from_screen(pos).x);
+                boundaries = Some((
+                    plot_ui
+                        .screen_from_plot(egui_plot::PlotPoint::new(q.start, 0.0))
+                        .x,
+                    plot_ui
+                        .screen_from_plot(egui_plot::PlotPoint::new(q.end, 0.0))
+                        .x,
+                ));
+            });
+            #[cfg(test)]
+            ui.ctx().data_mut(|d| {
+                d.insert_temp(
+                    egui::Id::new("quant_test_plot"),
+                    (response.response.rect, response.transform),
                 )
-                .clicked();
-        });
-    });
-    let accept = ui
-        .add_enabled(
-            !stale
-                && q.rx.is_none()
-                && r.peak.is_some()
-                && !draft_changed
-                && matches!(r.status, Status::Automatic | Status::Ambiguous),
-            egui::Button::new("Accept peak"),
-        )
-        .clicked();
-    ui.small("Drag a boundary with the left mouse button, or right-drag an interval. Manual edits affect only this sample and analyte.");
-    ui.small(if draft_changed && r.peak.is_some() {
-        "Boundary edits are not yet applied."
-    } else {
-        " "
-    });
-    let mut mouse = None;
-    let mut boundaries = None;
-    super::plot_controls::export(
-        ui,
-        &q.results[i].trace,
-        "RT (min)",
-        "Instrument intensity (unsmoothed)",
-    );
-    let plot = super::plot_controls::plot(ui, ("quant_review", i))
-        .height(ui.available_height().max(100.0))
-        .x_axis_label("Retention time (min)")
-        .y_axis_label("Intensity (instrument units)")
-        .allow_boxed_zoom(false)
-        .allow_drag(false);
-    let response = plot.show(ui, |plot_ui| {
-        let display = processing::decimate_for_display(&r.trace);
-        plot_ui.line(
-            Line::new("Unsmoothed XIC", PlotPoints::from(display))
-                .color(Color32::from_rgb(75, 150, 215)),
-        );
-        plot_ui.vline(VLine::new("Start", q.start).color(Color32::from_rgb(50, 160, 115)));
-        plot_ui.vline(VLine::new("End", q.end).color(Color32::from_rgb(220, 140, 60)));
-        if q.start < q.end {
-            let y0 = processing::interpolate_at(&r.trace, q.start);
-            let y1 = processing::interpolate_at(&r.trace, q.end);
-            plot_ui
-                .line(Line::new("Baseline", vec![[q.start, y0], [q.end, y1]]).color(Color32::GRAY));
-            let mut points = vec![[q.start, y0]];
-            let region: Vec<_> = r
-                .trace
-                .iter()
-                .copied()
-                .filter(|p| p[0] > q.start && p[0] < q.end)
-                .collect();
-            points.extend(processing::decimate_for_display(&region));
-            points.push([q.end, y1]);
-            plot_ui.polygon(
-                Polygon::new("Integrated peak", points)
-                    .stroke(egui::Stroke::new(
-                        1.0_f32,
-                        Color32::from_rgba_unmultiplied(75, 150, 215, 100),
-                    ))
-                    .fill_color(Color32::from_rgba_unmultiplied(75, 150, 215, 45)),
-            );
-        }
-        // This plot does not pan; pointer_coordinate compensates for drag movement
-        // and would otherwise leave an integration handle at its press position.
-        mouse = plot_ui
-            .ctx()
-            .input(|i| i.pointer.latest_pos())
-            .map(|pos| plot_ui.plot_from_screen(pos).x);
-        boundaries = Some((
-            plot_ui
-                .screen_from_plot(egui_plot::PlotPoint::new(q.start, 0.0))
-                .x,
-            plot_ui
-                .screen_from_plot(egui_plot::PlotPoint::new(q.end, 0.0))
-                .x,
-        ));
-    });
-    #[cfg(test)]
-    ui.ctx().data_mut(|d| {
-        d.insert_temp(
-            egui::Id::new("quant_test_plot"),
-            (response.response.rect, response.transform),
-        )
-    });
-    if !stale && q.rx.is_none() {
-        let resp = &response.response;
-        if let Some(x) = mouse {
-            if resp.drag_started_by(egui::PointerButton::Secondary) {
-                q.start = ui
-                    .input(|i| i.pointer.press_origin())
-                    .map(|pos| response.transform.value_from_position(pos).x)
-                    .unwrap_or(x);
-                q.end = x;
-                q.drag_boundary = None;
-            }
-            if resp.dragged_by(egui::PointerButton::Secondary) {
-                q.end = x;
-            }
-            if resp.drag_stopped_by(egui::PointerButton::Secondary) {
-                q.end = x;
-                if q.start > q.end {
-                    std::mem::swap(&mut q.start, &mut q.end);
-                }
-                apply = true;
-            }
-            if resp.drag_started_by(egui::PointerButton::Primary) {
-                if let (Some((s, e)), Some(pos)) =
-                    (boundaries, ui.input(|i| i.pointer.press_origin()))
-                {
-                    if (pos.x - s).abs().min((pos.x - e).abs()) < 15.0 {
-                        q.drag_boundary = Some((pos.x - s).abs() < (pos.x - e).abs());
+            });
+            if !stale && q.rx.is_none() {
+                let resp = &response.response;
+                if let Some(x) = mouse {
+                    if resp.drag_started_by(egui::PointerButton::Secondary) {
+                        q.start = ui
+                            .input(|i| i.pointer.press_origin())
+                            .map(|pos| response.transform.value_from_position(pos).x)
+                            .unwrap_or(x);
+                        q.end = x;
+                        q.drag_boundary = None;
                     }
-                }
-            }
-            if resp.dragged_by(egui::PointerButton::Primary) {
-                if let Some(start) = q.drag_boundary {
-                    if start {
-                        q.start = x;
-                    } else {
+                    if resp.dragged_by(egui::PointerButton::Secondary) {
                         q.end = x;
                     }
-                    apply = true;
+                    if resp.drag_stopped_by(egui::PointerButton::Secondary) {
+                        q.end = x;
+                        if q.start > q.end {
+                            std::mem::swap(&mut q.start, &mut q.end);
+                        }
+                        apply = true;
+                    }
+                    if resp.drag_started_by(egui::PointerButton::Primary) {
+                        if let (Some((s, e)), Some(pos)) =
+                            (boundaries, ui.input(|i| i.pointer.press_origin()))
+                        {
+                            if (pos.x - s).abs().min((pos.x - e).abs()) < 15.0 {
+                                q.drag_boundary = Some((pos.x - s).abs() < (pos.x - e).abs());
+                            }
+                        }
+                    }
+                    if resp.dragged_by(egui::PointerButton::Primary) {
+                        if let Some(start) = q.drag_boundary {
+                            if start {
+                                q.start = x;
+                            } else {
+                                q.end = x;
+                            }
+                            apply = true;
+                        }
+                    }
+                }
+                if resp.drag_stopped_by(egui::PointerButton::Primary) {
+                    q.drag_boundary = None;
                 }
             }
-        }
-        if resp.drag_stopped_by(egui::PointerButton::Primary) {
-            q.drag_boundary = None;
-        }
-    }
+            ui.add_space(6.0);
+            let r = &q.results[i];
+            ui.add_enabled_ui(!stale && q.rx.is_none(), |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Integration window");
+                    ui.add(egui::DragValue::new(&mut q.start).speed(0.01).suffix(" min"));
+                    ui.label("to");
+                    ui.add(egui::DragValue::new(&mut q.end).speed(0.01).suffix(" min"));
+                    apply |= ui
+                        .add_enabled(draft_changed, egui::Button::new("Apply"))
+                        .on_hover_text("Integrate between these boundaries")
+                        .clicked();
+                    reset = ui
+                        .add_enabled(
+                            r.peak != r.automatic || r.status != r.automatic_status,
+                            egui::Button::new("Reset to automatic"),
+                        )
+                        .clicked();
+                    ui.separator();
+                    accept = ui
+                        .add_enabled(
+                            r.peak.is_some()
+                                && !draft_changed
+                                && matches!(r.status, Status::Automatic | Status::Ambiguous),
+                            egui::Button::new(egui::RichText::new("✓ Accept peak").strong())
+                                .fill(ui.visuals().selection.bg_fill),
+                        )
+                        .clicked();
+                });
+            });
+            if draft_changed && r.peak.is_some() {
+                ui.colored_label(ui.visuals().warn_fg_color, "Boundary edits are not yet applied.");
+            }
+            ui.small("Drag a boundary with the left mouse button, or right-drag across the plot to set a new window. Edits affect only this sample and analyte.");
+            super::plot_controls::export(
+                ui,
+                &q.results[i].trace,
+                "RT (min)",
+                "Instrument intensity (unsmoothed)",
+            );
+            ui.add_space(4.0);
+            advanced_review(q, i, ui);
+        });
     if accept && q.results[i].status != Status::Manual {
         q.results[i].status = Status::Reviewed;
     }
@@ -1475,7 +1609,7 @@ fn advanced_review(q: &mut QuantState, i: usize, ui: &mut egui::Ui) {
             let old=match cfg.baseline {Baseline::None=>0,Baseline::EndpointChord=>1,Baseline::AsymmetricLeastSquares{..}=>2,Baseline::RollingQuantile{..}=>3};
             if old!=model {cfg.baseline=match model {0=>Baseline::None,1=>Baseline::EndpointChord,2=>Baseline::AsymmetricLeastSquares {lambda:1e5,asymmetry:0.01,iterations:10},_=>Baseline::RollingQuantile{window:101,quantile:0.1}};}
             match &mut cfg.baseline {
-                Baseline::AsymmetricLeastSquares{lambda,asymmetry,iterations}=> {ui.horizontal(|ui| {ui.label("Î»");ui.add(egui::DragValue::new(lambda).speed(100.0));ui.label("Asymmetry");ui.add(egui::DragValue::new(asymmetry).speed(0.001));ui.label("Iterations");ui.add(egui::DragValue::new(iterations).range(1..=100));});}
+                Baseline::AsymmetricLeastSquares{lambda,asymmetry,iterations}=> {ui.horizontal(|ui| {ui.label("λ");ui.add(egui::DragValue::new(lambda).speed(100.0));ui.label("Asymmetry");ui.add(egui::DragValue::new(asymmetry).speed(0.001));ui.label("Iterations");ui.add(egui::DragValue::new(iterations).range(1..=100));});}
                 Baseline::RollingQuantile{window,quantile}=> {ui.horizontal(|ui| {ui.label("Window (odd samples)");ui.add(egui::DragValue::new(window));ui.label("Quantile");ui.add(egui::DragValue::new(quantile).speed(0.01));});}
                 _=>()
             }

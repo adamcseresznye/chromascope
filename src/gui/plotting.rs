@@ -385,10 +385,14 @@ pub fn plot_chromatogram(
                             / selected.len().div_ceil(columns).max(1) as f32
                             - 48.0)
                             .clamp(115.0, 280.0);
-                        for row in selected.chunks(columns) {
+                        for (row_index, row) in selected.chunks(columns).enumerate() {
                             let group_width = card_width * row.len() as f32
                                 + ui.spacing().item_spacing.x * (row.len() - 1) as f32;
-                            ui.horizontal(|ui| {
+                            // Top-aligned with equalised heights so a row of cards sits flush.
+                            let row_id = egui::Id::new(("card_row_height", row_index, columns));
+                            let row_height = ui.ctx().data(|d| d.get_temp::<f32>(row_id)).unwrap_or(0.0);
+                            let mut measured = 0.0_f32;
+                            ui.horizontal_top(|ui| {
                                 ui.add_space(((width - group_width) / 2.0).max(0.0));
                                 for key in row {
                                     ui.allocate_ui_with_layout(
@@ -398,12 +402,13 @@ pub fn plot_chromatogram(
                                             ui.push_id(
                                                 format!("stack_{}_{:?}", key.0, key.1),
                                                 |ui| {
-                                                    egui::Frame::group(ui.style())
+                                                    let card = egui::Frame::group(ui.style())
                                                         .inner_margin(8.0)
                                                         .show(ui, |ui| {
                                                             ui.set_width(
                                                                 (card_width - 16.0).max(1.0),
                                                             );
+                                                            ui.set_min_height((row_height - 18.0).max(0.0));
                                                             super::workspace::trace_row(
                                                                 app, ui, key.0, &key.1, true,
                                                             );
@@ -423,12 +428,17 @@ pub fn plot_chromatogram(
                                                                 Some(key),
                                                             );
                                                         });
+                                                    measured = measured.max(card.response.rect.height());
                                                 },
                                             );
                                         },
                                     );
                                 }
                             });
+                            if (measured - row_height).abs() > 0.5 {
+                                ui.ctx().data_mut(|d| d.insert_temp(row_id, measured));
+                                ui.ctx().request_repaint();
+                            }
                             ui.add_space(8.0);
                         }
                     });
@@ -715,13 +725,7 @@ pub fn plot_mass_spectrum(app: &mut MzViewerApp, ui: &mut egui::Ui) -> egui::Res
                     .flatten();
                 app.workspace.apply_spectrum_bounds = false;
                 let mut spectrum_bounds = None;
-                let full_resolution: Vec<_> = mz
-                    .iter()
-                    .zip(&intensity)
-                    .map(|(&mz, &intensity)| [mz, intensity as f64])
-                    .collect();
-                super::plot_controls::export_spectrum(ui, &full_resolution, "Instrument intensity");
-                let response = super::plot_controls::plot(ui, "mass_spectrum")
+                let response = super::plot_controls::plot_bare(ui, "mass_spectrum")
                     .width(ui.available_width() * 0.99)
                     .height(ui.available_height())
                     .x_axis_label("m/z (Th)")

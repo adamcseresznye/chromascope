@@ -67,8 +67,8 @@ impl Row {
         if !["XIC", "TIC", "BPC"].contains(&self.kind.as_str()) {
             return Err("Trace must be XIC, TIC, or BPC.".into());
         }
-        if !["positive", "negative"].contains(&self.polarity.as_str()) {
-            return Err("Polarity must be positive or negative.".into());
+        if !["positive", "negative", "unknown"].contains(&self.polarity.as_str()) {
+            return Err("Polarity must be positive, negative, or unknown.".into());
         }
         if self.name.trim().is_empty() {
             return Err("Enter an analyte name.".into());
@@ -409,7 +409,7 @@ fn pasted_rows(text: &str) -> Result<Vec<Row>, String> {
                 "smoothing" => row.smoothing = value.into(),
                 "polarity" => {
                     row.polarity = value.to_lowercase();
-                    if !["positive", "negative"].contains(&row.polarity.as_str()) {
+                    if !["positive", "negative", "unknown"].contains(&row.polarity.as_str()) {
                         return Err(format!("Pasted row {}: invalid polarity.", i + 1));
                     }
                 }
@@ -515,7 +515,7 @@ fn analyte_rows(ui: &mut egui::Ui, rows: &mut [Row], dirty: &mut bool) -> Option
                             .width(85.0)
                             .selected_text(&row.polarity)
                             .show_ui(ui, |ui| {
-                                for polarity in ["positive", "negative"] {
+                                for polarity in ["positive", "negative", "unknown"] {
                                     ui.selectable_value(
                                         &mut row.polarity,
                                         polarity.into(),
@@ -719,6 +719,6 @@ mod tests {
         let rows=pasted_rows("Name\tAcquisition\tPrecursor m/z\tMass\tppm\tSmoothing\tPolarity\nA\tMRM\t483.0\t100.0\t5\t2\tnegative").unwrap();
         assert_eq!(rows[0].spec().unwrap().precursor_mz, Some(483.0));
         assert!(pasted_rows("Name\tMass\nA\twrong").is_err());
-        assert!(pasted_rows("Name\tMass\tPolarity\nA\t100\tunknown").is_err());
+        assert!(pasted_rows("Name\tMass\tPolarity\nA\t100\tsideways").is_err());
     }
 }

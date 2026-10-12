@@ -7,12 +7,12 @@ use chromascope::{
     spectral::*,
     untargeted::*,
 };
+#[cfg(feature = "experimental")]
 use std::{
-    collections::BTreeMap,
     io::Write,
-    path::Path,
     process::{Command, Stdio},
 };
+use std::{collections::BTreeMap, path::Path};
 fn fixture() -> Report {
     let roles = [Role::Sample, Role::Blank, Role::Qc, Role::Qc, Role::Qc];
     let samples = roles
@@ -345,6 +345,7 @@ fn library_isomers_remain_unknown_and_conflicting_evidence_fails() {
     h.msms.as_mut().unwrap().query.inputs[0].id = "other-scan".into();
     assert!(add(&l, h, 0).is_err());
 }
+#[cfg(feature = "experimental")]
 #[test]
 fn engine_cli_review_and_no_overwrite_export() {
     let (l, c) = glucose();
@@ -465,6 +466,7 @@ fn response_replay_rejects_changed_history_or_candidate() {
     }
     assert!(verify_response(&r).is_err());
 }
+#[cfg(feature = "experimental")]
 #[cfg(feature = "mcp-headless")]
 #[test]
 fn actual_mcp_propose_review_export() {

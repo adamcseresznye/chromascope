@@ -17,7 +17,7 @@ On the left is an ordinary AI chat client. On the right is the Chromascope deskt
 3. **25–32 s: it inspects, then reports.** The two traces are overlaid, and the assistant answers: *apex at 3.1935 min, proposed boundaries 3.11–3.36 min, area 409,563.44 a.u.·min with a straight-chord baseline.*
 4. **The last line matters most.** The area was calculated with `integrate(apply=false)`, a preview. The assistant proposed a result; it did not silently change your data.
 
-Not shown in the video: the same engine also runs targeted quantification, QC, spectral identification, untargeted analysis and statistics, from the GUI, the CLI or an AI client.
+Not shown in the video: the same engine also runs targeted quantification and QC, from the GUI, the CLI or an AI client.
 
 ### Why you might care
 
@@ -32,9 +32,6 @@ Not shown in the video: the same engine also runs targeted quantification, QC, s
 |---|---|
 | **Explore** | TIC / BPC / XIC, overlays and grids, spectrum inspection, full-resolution peak integration |
 | **Quantify** | Weighted calibration, internal standards, qualifiers, dilution, batch QC rules |
-| **Identify** | MSP / MGF / MassBank search, formula and isotope evidence, reasoned annotations |
-| **Discover** | Untargeted feature detection and alignment through OpenMS, tentative metabolite and lipid hypotheses |
-| **Compare** | PCA, clustered heatmaps, volcano plots, Welch tests with corrected q-values |
 | **Deliver** | Verified project bundles and draft reports (JSON, CSV, TSV, SVG, HTML) |
 
 ### Quick start
@@ -50,7 +47,7 @@ Open an mzML file from **File**, pick **XIC**, and double-click a trace to see i
 
 ## Architecture
 
-One Rust package provides typed `domain` requests, `engine::execute`, bounded `jobs`, append-only `project` revisions and `delivery`. GUI, CLI and headless MCP use shared chromatography, targeted quantification, QC, spectral, annotation and statistics modules. Legacy viewer/desktop MCP paths retain shared parser/processing kernels and GUI presentation state. View commands require the desktop; headless analysis does not.
+One Rust package provides typed `domain` requests, `engine::execute`, bounded `jobs`, append-only `project` revisions and `delivery`. GUI, CLI and headless MCP use shared chromatography, targeted quantification and QC modules. Legacy viewer/desktop MCP paths retain shared parser/processing kernels and GUI presentation state. View commands require the desktop; headless analysis does not.
 
 ```mermaid
 flowchart LR
@@ -58,8 +55,7 @@ flowchart LR
   CLI[JSON CLI] --> Engine
   MCP[Headless stdio MCP] --> Engine
   Engine --> Rust[Rust kernels / mzdata]
-  Engine --> Python[Optional local OpenMS / NumPy / SciPy]
-  Engine --> Project[Immutable revisions and provenance]
+    Engine --> Project[Immutable revisions and provenance]
   Project --> Delivery[JSON / CSV / TSV / SVG / HTML drafts]
 ```
 
@@ -82,8 +78,6 @@ mzML and mzML.gz open directly. Vendor import requires separately installed comp
 
 | Optional capability | Operator-supplied runtime |
 |---|---|
-| Untargeted features | pyOpenMS **3.5.0**; select Python with `CHROMASCOPE_OPENMS_PYTHON` |
-| Statistics | Python >=3.11, NumPy >=1.26,<3, SciPy >=1.11,<2; `CHROMASCOPE_STATS_PYTHON` |
 | Independent reference regeneration | Existing NumPy/SciPy/mpmath environment |
 
 Nothing auto-installs. Missing/incompatible runtimes return explicit errors without numerical fallbacks. Preserve recorded runtime versions for replay.
@@ -93,10 +87,7 @@ Nothing auto-installs. Missing/incompatible runtimes return explicit errors with
 1. Select **Data explorer** and open data with the file controls. Choose TIC/BPC/XIC and acquisition, polarity and mass filters. Retain traces for overlay/grid/stacked comparison. Double-click a trace for its spectrum; right-drag to integrate; middle-drag to box zoom. Integration uses full resolution rather than display decimation.
 2. Select **Quantification and QC** for batch methods, peak diagnostics, boundary review and CSV. Expand **Targeted concentrations, calibration and QC** for standards/blanks/QC/unknowns, internal standards, qualifiers, calibration and dilution. Inspect flags and missing states before export.
 3. Within targeted quantification, expand **Batch QC and method validation**. Load a study/report or prepare batch evidence, supply explicit rules, evaluate, inspect pass/fail/indeterminate results and acknowledge with reasons. Acknowledgement cannot make a failing rule pass.
-4. Select **Identification…** to open **Spectra and compound identification** for native scan inspection/averaging, local MSP/MGF/MassBank import, candidate search/overlays, formula/isotope evidence and reasoned annotations. Similarity alone does not confirm identity.
-5. Select **Untargeted analysis…** to open **Untargeted LC-HRMS** with an existing OpenMS runtime and explicit sample roles. Review raw/aligned RT, detected/filled/missing values and blank/QC filters. Retained matrices expose tentative metabolite/lipid hypothesis ledgers.
-6. Select **Statistics…** to open the **Statistical analysis workspace** to load a quantitative table or retained feature/targeted response, define groups/preprocessing and inspect PCA, clustered heatmap, volcano and Welch effects/CI/p/q. Earlier original tables/settings remain restorable.
-7. Select **Reports…** to open **Project reports and delivery** to inspect a CLI-created project, verify sources, configure a new draft report/bundle and reprocess retained results without replacing them.
+4. Select **Reports…** to open **Project reports and delivery** to inspect a CLI-created project, verify sources, configure a new draft report/bundle and reprocess retained results without replacing them.
 
 The [user guide](docs/USER_GUIDE.md) covers established viewer controls; [examples](examples/README.md) and [project delivery](docs/PROJECT_DELIVERY.md) cover newer workspaces. **AI activity…** shows desktop MCP session activity and launch permissions when connected. Some advanced settings use structured JSON editors. Native dialogs and end-to-end desktop workflows still need platform smoke testing.
 
@@ -114,11 +105,10 @@ The CLI reads a version-1 request on stdin and returns `{ "ok": true, "result": 
 '{"version":1,"operation_id":"703ee3bb-3a18-47b1-b51d-dfe001963bfe","actor":"local-analyst","operation":{"operation":"metadata"}}' | target/debug/chromascope-cli.exe run test_file/data_dependent_02.mzML
 Get-Content examples/targeted-request.json -Raw | target/debug/chromascope-cli.exe run -
 Get-Content examples/qc-request.json -Raw | target/debug/chromascope-cli.exe run -
-Get-Content examples/spectral-request.json -Raw | target/debug/chromascope-cli.exe run -
 python examples/release_workflows.py --cli target/debug/chromascope-cli.exe --output NEW_OUTPUT_DIRECTORY
 ```
 
-The targeted starter contains **only an unknown** and cannot establish calibration or valid concentration. QC/spectral starters contain authored demonstration inputs, not instrument-validation data. Supply real standards and justified settings for scientific use. The release helper retains hashes, requests, responses, logs, original/reviewed QC and explicit spectral self-search evidence. [Examples](examples/README.md) also cover full targeted/MCP and statistics workflows.
+The targeted starter contains **only an unknown** and cannot establish calibration or valid concentration. The QC starter contains authored demonstration inputs, not instrument-validation data. Supply real standards and justified settings for scientific use. The release helper retains hashes, requests, responses, logs and original/reviewed QC evidence; it also exercises the experimental spectral search, so it needs a CLI built with `--features experimental`. [Examples](examples/README.md) also cover full targeted/MCP workflows.
 
 ```powershell
 target/debug/chromascope-cli.exe project-create NEW_PROJECT_DIRECTORY
@@ -155,9 +145,13 @@ python examples/mcp_targeted_workflow.py YOUR_TARGETED_REQUEST.json NEW_AI_DRAFT
 
 Example agent instruction: inspect calibration and QC evidence, identify unresolved results, propose scientifically justified review actions, and prepare a draft retaining original quantities, flags and provenance. No model, hidden thresholds, automatic identity promotion or automatic human approval is built in.
 
+## Experimental workflows
+
+Spectral **Identification** (library search, formula and isotope evidence, annotations), **Untargeted analysis** (OpenMS feature detection and alignment) and **Statistics** (PCA, heatmaps, volcano plots, Welch tests) are implemented but not yet verified or manually tested. They are compiled into every build but hidden from the GUI, the headless MCP server and the CLI. Hidden operations are rejected with `experimental_unavailable`; projects that already contain their results still open. To try them, build with the `experimental` Cargo feature, for example `cargo build --features experimental`. Their runtimes are operator-supplied: pyOpenMS **3.5.0** via `CHROMASCOPE_OPENMS_PYTHON` for untargeted features, and Python >=3.11 with NumPy >=1.26,<3 and SciPy >=1.11,<2 via `CHROMASCOPE_STATS_PYTHON` for statistics.
+
 ## Analytical capabilities and limitations
 
-Operational slices include chromatographic smoothing/baselines/noise/peak gates and reversible boundaries; weighted linear/quadratic calibration and dilution/qualifier/internal-standard checks; explicit QC study metrics; local spectral matching/formula/isotope evidence; OpenMS detection/affine alignment/correspondence with labelled window gap filling; tentative feature/lipid hypotheses; and local descriptive/two-group statistics. The [complete status matrix](docs/FEATURE_STATUS.md) distinguishes implemented, partial, integrated, experimental and absent capabilities.
+Operational slices include chromatographic smoothing/baselines/noise/peak gates and reversible boundaries; weighted linear/quadratic calibration and dilution/qualifier/internal-standard checks, and explicit QC study metrics. Spectral identification, untargeted analysis and statistics exist as [experimental workflows](#experimental-workflows). The [complete status matrix](docs/FEATURE_STATUS.md) distinguishes implemented, partial, integrated, experimental and absent capabilities.
 
 No DIA deconvolution, calibrated identity probability/FDR, general specialist lipid-fragment engine, paired/covariate/repeated-measures inference, authenticated approved-only release, PDF/raster report delivery or durable restartable general jobs is provided. Raw mzML source-unit preflight and full-run fallback bounds now have dedicated regression fixtures; comprehensive XML/binary/decompression validation remains open. Other risks include retained evidence/history memory growth, synchronous GUI replay/import, abandoned project locks and unverified OneDrive crash recovery. See [remaining defects](docs/REMAINING_DEFECTS.md) and [backlog](docs/RELEASE_BACKLOG.md). Synthetic/reference tests do not certify instruments or regulatory compliance.
 

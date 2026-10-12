@@ -456,6 +456,7 @@ fn real_massbank_reference_preserves_license_annotations_and_energy() {
     assert!(r.annotations.is_empty());
     verify_report(&r).unwrap();
 }
+#[cfg(feature = "experimental")]
 #[test]
 fn engine_cli_identical_search_and_annotation() {
     use std::io::Write;
@@ -530,6 +531,7 @@ fn native_scan_inspection_retains_isolation_and_rt() {
         _ => panic!("Incorrect output"),
     }
 }
+#[cfg(feature = "experimental")]
 #[cfg(feature = "mcp-headless")]
 #[test]
 fn actual_mcp_import_search_annotation_and_root_policy() {
@@ -741,6 +743,7 @@ fn greedy_ambiguity_and_dense_pair_cap_are_explicit() {
         "resource_limit"
     );
 }
+#[cfg(feature = "experimental")]
 #[test]
 fn cli_candidate_export_is_create_new_and_preserves_confidence() {
     use std::io::Write;

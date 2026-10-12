@@ -334,9 +334,16 @@ pub fn process_chromatogram(
 
     if let Some(mode) = params.acquisition {
         if chromatogram.index.is_empty() {
+            // Files opened reader-only skip the scan survey, so the summary would claim an empty file.
+            let holds = if data.has_spectra() || data.has_native_chromatograms() {
+                format!(" (file holds {})", data.acquisition_summary())
+            } else {
+                String::new()
+            };
             return Err(ChromascopeError::MzDataError(format!(
-                "No matching {mode:?} scans (file holds {}). Clear the acquisition filter or pick a mode the file contains.",
-                data.acquisition_summary()
+                "No matching {mode:?} scans at MS level {} with {:?} polarity{holds}. Check the acquisition mode, MS level and polarity; files without polarity tags need \"unknown\".",
+                params.ms_level,
+                params.polarity
             )));
         }
     }

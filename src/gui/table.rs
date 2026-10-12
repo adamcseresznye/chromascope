@@ -5,13 +5,20 @@ use std::cmp::Ordering;
 pub(super) struct Cell {
     pub text: String,
     pub number: Option<f64>,
+    pub color: Option<egui::Color32>,
 }
 impl Cell {
     pub fn text(value: impl ToString) -> Self {
         Self {
             text: value.to_string(),
             number: None,
+            color: None,
         }
+    }
+    /// Tint the cell text, e.g. to signal review status.
+    pub fn colored(mut self, color: egui::Color32) -> Self {
+        self.color = Some(color);
+        self
     }
     pub fn number(value: Option<f64>) -> Self {
         Self {
@@ -19,6 +26,7 @@ impl Cell {
                 .map(|v| format!("{v:.6e}"))
                 .unwrap_or_else(|| "Unavailable".into()),
             number: value,
+            color: None,
         }
     }
 }
@@ -77,20 +85,40 @@ pub(super) fn show(
     rows: &[Row],
     selected: Option<&str>,
 ) -> Option<usize> {
+    show_with(ui, id, headers, rows, selected, 280., &[])
+}
+const ROW_HEIGHT: f32 = 26.;
+/// Table with a filter bar, sortable/resizable header and striped, click-to-select rows.
+/// `body_height` bounds the scrolling row area; `weights` seed relative column widths.
+pub(super) fn show_with(
+    ui: &mut egui::Ui,
+    id: &str,
+    headers: &[&str],
+    rows: &[Row],
+    selected: Option<&str>,
+    body_height: f32,
+    weights: &[f32],
+) -> Option<usize> {
     let key = egui::Id::new(("analytical_table", id));
     let mut state = ui
         .ctx()
         .data(|d| d.get_temp::<State>(key))
         .unwrap_or_default();
-    state.widths.resize(headers.len(), 150.);
+    if state.widths.len() != headers.len() {
+        state.widths = (0..headers.len())
+            .map(|i| weights.get(i).copied().unwrap_or(150.))
+            .collect();
+    }
     ui.push_id(id, |ui| {
-        ui.horizontal_wrapped(|ui| {
-            ui.label("Filter rows");
-            ui.add(egui::TextEdit::singleline(&mut state.filter).desired_width(200.));
-            if ui.button("Clear filter").clicked() {
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut state.filter)
+                    .hint_text("Filter rows…")
+                    .desired_width(220.),
+            );
+            if !state.filter.is_empty() && ui.small_button("✕").on_hover_text("Clear filter").clicked() {
                 state.filter.clear();
             }
-            ui.small(format!("{} total rows", rows.len()));
         });
     });
     use std::hash::{Hash, Hasher};
@@ -110,103 +138,174 @@ pub(super) fn show(
         state.cached_order = order(rows, &state);
         state.signature = Some(signature);
     }
-    let indices = &state.cached_order;
+    let indices = state.cached_order.clone();
+    ui.add_space(4.);
+    let available = ui.available_width();
+    let sum: f32 = state.widths.iter().sum::<f32>().max(1.);
+    // Columns stretch to fill the pane; dragging a header edge changes their relative share.
+    let scale = (available / sum).max(1.);
+    let widths: Vec<f32> = state.widths.iter().map(|w| w * scale).collect();
+    let total = widths.iter().sum::<f32>();
     let mut clicked = None;
     egui::ScrollArea::horizontal()
         .id_salt((id, "horizontal"))
         .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                for (i, header) in headers.iter().enumerate() {
-                    ui.vertical(|ui| {
-                        if ui
-                            .add_sized(
-                                [state.widths[i], 28.],
-                                egui::Button::new(format!(
-                                    "{header}{}",
-                                    if state.column == i {
-                                        if state.descending {
-                                            " ↓"
-                                        } else {
-                                            " ↑"
-                                        }
-                                    } else {
-                                        ""
-                                    }
-                                )),
-                            )
-                            .clicked()
-                        {
-                            if state.column == i {
-                                state.descending = !state.descending;
-                            } else {
-                                state.column = i;
-                                state.descending = false;
-                            }
-                        }
-                        ui.add(
-                            egui::DragValue::new(&mut state.widths[i])
-                                .range(70.0..=600.0)
-                                .prefix("Width ")
-                                .suffix(" px"),
-                        )
-                        .on_hover_text("Resize this column");
-                    });
+            ui.spacing_mut().item_spacing.y = 0.;
+            let (header, _) = ui.allocate_exact_size(egui::vec2(total, ROW_HEIGHT), egui::Sense::hover());
+            ui.painter()
+                .rect_filled(header, 3., ui.visuals().widgets.noninteractive.weak_bg_fill);
+            let mut x = header.left();
+            for (i, title) in headers.iter().enumerate() {
+                let cell = egui::Rect::from_min_size(
+                    egui::pos2(x, header.top()),
+                    egui::vec2(widths[i], ROW_HEIGHT),
+                );
+                x += widths[i];
+                let sort = ui.interact(cell, ui.id().with((id, "sort", i)), egui::Sense::click());
+                if sort.clicked() {
+                    if state.column == i {
+                        state.descending = !state.descending;
+                    } else {
+                        state.column = i;
+                        state.descending = false;
+                    }
                 }
-            });
+                let arrow = if state.column == i {
+                    if state.descending { " ↓" } else { " ↑" }
+                } else {
+                    ""
+                };
+                let color = if sort.hovered() {
+                    ui.visuals().strong_text_color()
+                } else {
+                    ui.visuals().text_color()
+                };
+                ui.painter().with_clip_rect(cell).text(
+                    egui::pos2(cell.left() + 8., cell.center().y),
+                    egui::Align2::LEFT_CENTER,
+                    format!("{title}{arrow}"),
+                    egui::TextStyle::Body.resolve(ui.style()),
+                    color,
+                );
+                sort.on_hover_text("Click to sort");
+                let grip = egui::Rect::from_center_size(
+                    egui::pos2(cell.right(), cell.center().y),
+                    egui::vec2(8., ROW_HEIGHT),
+                );
+                let drag = ui
+                    .interact(grip, ui.id().with((id, "grip", i)), egui::Sense::drag())
+                    .on_hover_cursor(egui::CursorIcon::ResizeColumn);
+                if drag.dragged() {
+                    state.widths[i] = (state.widths[i] + drag.drag_delta().x / scale).clamp(50., 600.);
+                }
+                if i + 1 < headers.len() {
+                    ui.painter().vline(
+                        cell.right(),
+                        cell.y_range().shrink(6.),
+                        ui.visuals().widgets.noninteractive.bg_stroke,
+                    );
+                }
+            }
             egui::ScrollArea::vertical()
                 .id_salt((id, "rows"))
-                .max_height(280.)
-                .show_rows(ui, 28., indices.len(), |ui, range| {
+                .max_height(body_height.max(ROW_HEIGHT * 3.))
+                .auto_shrink([false, true])
+                .show_rows(ui, ROW_HEIGHT, indices.len(), |ui, range| {
                     for visible in range {
                         let index = indices[visible];
                         let row = &rows[index];
-                        ui.push_id(&row.key, |ui| {
-                            ui.horizontal(|ui| {
-                                for (column, cell) in row.cells.iter().enumerate() {
-                                    let width = state.widths.get(column).copied().unwrap_or(150.);
-                                    ui.allocate_ui_with_layout(
-                                        egui::vec2(width, 28.),
-                                        egui::Layout::left_to_right(egui::Align::Center),
-                                        |ui| {
-                                            let button = if cell.number.is_some() {
-                                                egui::Button::new("").right_text(
-                                                    egui::RichText::new(&cell.text).monospace(),
-                                                )
-                                            } else {
-                                                egui::Button::new(&cell.text)
-                                            };
-                                            let response = ui.add_sized(
-                                                [width, 28.],
-                                                button
-                                                    .selected(selected == Some(row.key.as_str()))
-                                                    .truncate(),
-                                            );
-                                            let response = response.on_hover_text(
-                                                cell.number
-                                                    .map(|v| v.to_string())
-                                                    .unwrap_or_else(|| cell.text.clone()),
-                                            );
-                                            if response.clicked() {
-                                                clicked = Some(index);
-                                                ui.ctx().data_mut(|d| {
-                                                    d.insert_temp(
-                                                        egui::Id::new(("table_column", id)),
-                                                        column,
-                                                    )
-                                                });
-                                            }
-                                        },
-                                    );
-                                }
-                            });
+                        let is_selected = selected == Some(row.key.as_str());
+                        let (rect, response) = ui.allocate_exact_size(
+                            egui::vec2(total, ROW_HEIGHT),
+                            egui::Sense::click(),
+                        );
+                        response.widget_info(|| {
+                            egui::WidgetInfo::selected(
+                                egui::WidgetType::SelectableLabel,
+                                true,
+                                is_selected,
+                                row.cells
+                                    .iter()
+                                    .map(|c| c.text.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(", "),
+                            )
                         });
+                        let visuals = ui.visuals();
+                        let fill = if is_selected {
+                            visuals.selection.bg_fill
+                        } else if response.hovered() {
+                            visuals.widgets.hovered.weak_bg_fill
+                        } else if visible % 2 == 1 {
+                            visuals.faint_bg_color
+                        } else {
+                            egui::Color32::TRANSPARENT
+                        };
+                        ui.painter().rect_filled(rect, 0., fill);
+                        let mut x = rect.left();
+                        let mut hovered_text = None;
+                        for (column, cell) in row.cells.iter().enumerate() {
+                            let width = widths.get(column).copied().unwrap_or(150.);
+                            let area = egui::Rect::from_min_size(
+                                egui::pos2(x, rect.top()),
+                                egui::vec2(width, ROW_HEIGHT),
+                            );
+                            x += width;
+                            if response.hover_pos().is_some_and(|p| area.contains(p)) {
+                                hovered_text = Some(
+                                    cell.number
+                                        .map(|v| v.to_string())
+                                        .unwrap_or_else(|| cell.text.clone()),
+                                );
+                            }
+                            if response.clicked()
+                                && response
+                                    .interact_pointer_pos()
+                                    .is_some_and(|p| area.contains(p))
+                            {
+                                ui.ctx().data_mut(|d| {
+                                    d.insert_temp(egui::Id::new(("table_column", id)), column)
+                                });
+                            }
+                            let color = cell.color.unwrap_or(if is_selected {
+                                ui.visuals().strong_text_color()
+                            } else {
+                                ui.visuals().text_color()
+                            });
+                            let painter = ui.painter().with_clip_rect(area);
+                            if cell.number.is_some() {
+                                painter.text(
+                                    egui::pos2(area.right() - 10., area.center().y),
+                                    egui::Align2::RIGHT_CENTER,
+                                    &cell.text,
+                                    egui::TextStyle::Monospace.resolve(ui.style()),
+                                    color,
+                                );
+                            } else {
+                                painter.text(
+                                    egui::pos2(area.left() + 8., area.center().y),
+                                    egui::Align2::LEFT_CENTER,
+                                    &cell.text,
+                                    egui::TextStyle::Body.resolve(ui.style()),
+                                    color,
+                                );
+                            }
+                        }
+                        if response.clicked() {
+                            clicked = Some(index);
+                        }
+                        if let Some(text) = hovered_text {
+                            response.on_hover_text(text);
+                        }
                     }
                 });
         });
-    ui.small(format!(
-        "{} matching rows · select any cell to inspect linked evidence",
-        indices.len()
-    ));
+    ui.add_space(2.);
+    ui.small(if indices.len() == rows.len() {
+        format!("{} {}", rows.len(), if rows.len() == 1 { "row" } else { "rows" })
+    } else {
+        format!("{} of {} rows", indices.len(), rows.len())
+    });
     ui.ctx().data_mut(|d| d.insert_temp(key, state));
     clicked
 }

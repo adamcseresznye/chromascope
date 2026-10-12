@@ -46,6 +46,110 @@ pub struct ResolveProposalArgs {
 pub struct FeatureJobArgs {
     pub job_id: String,
 }
+/// Tools of the experimental untargeted workflow; hidden unless the `experimental` feature is on.
+const EXPERIMENTAL_TOOLS: &[&str] = &[
+    "start_untargeted",
+    "untargeted_status",
+    "cancel_untargeted",
+    "untargeted_features",
+];
+/// `Output` kinds (serde tag) produced only by experimental operations.
+const EXPERIMENTAL_KINDS: &[&str] = &[
+    "statistics",
+    "statistics_table",
+    "feature_annotations",
+    "feature_annotation_table",
+    "feature_matrix",
+    "feature_matrix_table",
+    "spectral_comparison",
+    "spectral_candidate_table",
+    "spectral_processing",
+    "spectral_library",
+    "spectral_search",
+    "formula_candidates",
+    "isotope_analysis",
+];
+fn schema_tag(schema: &serde_json::Value, key: &str) -> Option<String> {
+    let property = schema.get("properties")?.get(key)?;
+    property
+        .get("const")
+        .or_else(|| property.get("enum")?.as_array()?.first())?
+        .as_str()
+        .map(str::to_owned)
+}
+fn is_hidden_variant(schema: &serde_json::Value) -> bool {
+    schema_tag(schema, "operation")
+        .is_some_and(|name| crate::domain::Operation::EXPERIMENTAL_NAMES.contains(&name.as_str()))
+        || schema_tag(schema, "kind").is_some_and(|name| EXPERIMENTAL_KINDS.contains(&name.as_str()))
+}
+fn strip_hidden_variants(schema: &mut serde_json::Value) {
+    match schema {
+        serde_json::Value::Object(map) => {
+            for key in ["oneOf", "anyOf"] {
+                if let Some(serde_json::Value::Array(variants)) = map.get_mut(key) {
+                    variants.retain(|variant| !is_hidden_variant(variant));
+                }
+            }
+            map.values_mut().for_each(strip_hidden_variants);
+        }
+        serde_json::Value::Array(items) => items.iter_mut().for_each(strip_hidden_variants),
+        _ => {}
+    }
+}
+fn collect_refs(schema: &serde_json::Value, refs: &mut Vec<String>) {
+    match schema {
+        serde_json::Value::Object(map) => {
+            if let Some(serde_json::Value::String(target)) = map.get("$ref") {
+                refs.push(target.clone());
+            }
+            map.values().for_each(|value| collect_refs(value, refs));
+        }
+        serde_json::Value::Array(items) => items.iter().for_each(|value| collect_refs(value, refs)),
+        _ => {}
+    }
+}
+/// Drop definitions that no remaining part of the schema references.
+fn prune_unreferenced_definitions(schema: &mut serde_json::Value) {
+    let Some(key) = ["$defs", "definitions"]
+        .into_iter()
+        .find(|key| schema.get(key).is_some_and(|defs| defs.is_object()))
+    else {
+        return;
+    };
+    let Some(definitions) = schema.get_mut(key).map(serde_json::Value::take) else {
+        return;
+    };
+    let mut pending = Vec::new();
+    collect_refs(schema, &mut pending);
+    let mut keep = std::collections::HashSet::new();
+    while let Some(target) = pending.pop() {
+        let Some(name) = target.rsplit('/').next().map(str::to_owned) else {
+            continue;
+        };
+        if let Some(definition) = definitions.get(&name) {
+            if keep.insert(name) {
+                collect_refs(definition, &mut pending);
+            }
+        }
+    }
+    if let (Some(map), Some(slot)) = (definitions.as_object(), schema.get_mut(key)) {
+        *slot = serde_json::Value::Object(
+            map.iter()
+                .filter(|(name, _)| keep.contains(name.as_str()))
+                .map(|(name, value)| (name.clone(), value.clone()))
+                .collect(),
+        );
+    }
+}
+/// Schema as shown to clients: experimental operations and results are removed when disabled.
+fn public_schema(schema: impl serde::Serialize) -> serde_json::Value {
+    let mut value = serde_json::json!(schema);
+    if !crate::EXPERIMENTAL {
+        strip_hidden_variants(&mut value);
+        prune_unreferenced_definitions(&mut value);
+    }
+    value
+}
 fn feature_reply(result: crate::domain::Result<serde_json::Value>) -> CallToolResult {
     let result = result.and_then(|value| {
         if serde_json::to_vec(&value)
@@ -223,6 +327,7 @@ impl EngineMcp {
         audit.push(serde_json::json!({"sequence":sequence,"unix_ms":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis(),"tool":tool,"parameters":parameters,"outcome":outcome}));
     }
     fn authorize_request(&self, request: &Request) -> crate::domain::Result<()> {
+        request.operation.ensure_available()?;
         if let crate::domain::Operation::TargetedBatch { batch } = &request.operation {
             for sample in &batch.samples {
                 self.authorize(&sample.source)?;
@@ -291,9 +396,14 @@ impl EngineMcp {
         )
     )]
     async fn analysis_capabilities(&self) -> CallToolResult {
+        let report_operations = if crate::EXPERIMENTAL {
+            vec!["export_targeted", "export_qc", "export_statistics"]
+        } else {
+            vec!["export_targeted", "export_qc"]
+        };
         feature_reply(Ok(serde_json::json!({
-            "request_schema":schemars::schema_for!(Request),
-            "response_schema":schemars::schema_for!(crate::engine::Response),
+            "request_schema":public_schema(schemars::schema_for!(Request)),
+            "response_schema":public_schema(schemars::schema_for!(crate::engine::Response)),
             "units":{"retention_time":"minute","area":"instrument intensity * minute","concentration":"declared by calibration"},
             "policy":{"project_writes_enabled":self.project_writes,"analysis":"immutable retained computation; no project commit","preview":"revise_chromatogram preview=true; cannot commit","proposal":"annotation/boundary/review revisions are proposed until explicitly committed","commit":"existing project, expected revision, client-attributed approval; never scientific certification","report":"review draft; unresolved/failed/missing evidence preserved; AI narrative unverified"},
             "workflows":[
@@ -302,7 +412,7 @@ impl EngineMcp {
                 {"name":"construct_calibration","prompt":"Build a weighted calibration from my standards and quantify unknowns.","operations":["targeted_batch","evaluate_targeted_qc","review_targeted","export_targeted"],"review":"Declare units, roles, range, dilution, weighting and thresholds; review accuracy, qualifiers and missing states."},
                 {"name":"troubleshoot_qc","prompt":"Explain QC failures using recorded evidence and identify missing measurements.","operations":["evaluate_targeted_qc","evaluate_qc","review_qc","export_qc"],"review":"Acknowledgement does not erase failures; required absent evidence remains indeterminate."},
                 {"name":"compare_processing_methods","prompt":"Compare two processing configurations on the same raw chromatogram.","operations":["extract","process_chromatograms","quantify","validate_method"],"review":"Run separate jobs with frozen parameters; compare evidence and units, not explanations alone."},
-                {"name":"prepare_report","prompt":"Prepare a reproducible draft including questionable results and review history.","operations":["export_targeted","export_qc","export_statistics"],"tools":["analysis_status","analysis_result","session_audit","prepare_analysis_report"],"review":"Include all relevant job IDs; report is a review draft, never approved scientific release."}
+                {"name":"prepare_report","prompt":"Prepare a reproducible draft including questionable results and review history.","operations":report_operations,"tools":["analysis_status","analysis_result","session_audit","prepare_analysis_report"],"review":"Include all relevant job IDs; report is a review draft, never approved scientific release."}
             ]
         })))
     }
@@ -902,6 +1012,7 @@ impl EngineMcp {
             }
             let request: Request = serde_json::from_value(args.request)
                 .map_err(|e| EngineError::new("invalid_parameters", e))?;
+            request.operation.ensure_available()?;
             if let crate::domain::Operation::UntargetedBatch { config } = &request.operation {
                 self.authorize_features(config)?;
             } else {
@@ -1055,7 +1166,7 @@ impl EngineMcp {
         feature_reply(result)
     }
     #[tool(
-        description = "Execute propose_feature_annotations (ledger/config/expected_revision; bounded formula/isotope and optional reproducible local library search), add_feature_hypothesis (ledger/hypothesis/expected_revision), review_feature_annotation (ledger/hypothesis_id/expected_revision/reason/decision accept/reject/reopen), export_feature_annotations (ledger; CSV). Feature identities remain tentative; acceptance never confirms identity. Also execute linked_spectral_chromatogram (source-verified precursor MS1 XIC), compare_spectra (centroid query/reference/tolerance), export_spectral_candidates (report; CSV), inspect_spectra (scan indices/background_indices/config), process_spectra (spectra/background/config), import_spectral_library (text, msp/mgf/massbank format, source/license), search_spectral_library (query/library/config), annotate_spectrum (report/expected_revision/annotation), formula_candidates (CHNOPS bounds/adducts), analyze_isotopes (centroid MS1/config). Similarity never confirms identity. Also execute evaluate_qc (study), validate_method (explicit method_validation study), evaluate_targeted_qc (verified batch/rules), review_qc (report/expected_revision/rule_id/reason/acknowledged) or export_qc (report; CSV). QC decisions retain evidence/calculation/threshold/reason and required missing evidence is indeterminate. Also execute targeted_batch (sample sheet, targets, calibration), review_targeted (batch, expected_revision, sample, target, accepted, reason), export_targeted (batch; CSV) and shared engine metadata, spectrum, extract, integrate, quantify, process_chromatograms (traces/config), revise_chromatogram (analysis/expected_revision/correction/preview) or export_chromatographic_peaks (analyses; returns CSV text). Chromatography supports SG, AsLS/chord/quantile baselines, batch peaks, manual/reference bounds, accept and restore revisions. Missing intensity is null. Paths must be within allowed roots. Version 1 request matches CLI JSON; results preserve signal stages, units and history. Preview is never committed. Statistics: analyze_statistics (table/settings) and export_statistics (report) use explicit frozen metadata, imputation, normalization, transformations, PCA, Euclidean clustering and Welch/BH/BY comparisons through local NumPy/SciPy. No project writes or GUI changes."
+        description = "Execute evaluate_qc (study), validate_method (explicit method_validation study), evaluate_targeted_qc (verified batch/rules), review_qc (report/expected_revision/rule_id/reason/acknowledged) or export_qc (report; CSV). QC decisions retain evidence/calculation/threshold/reason and required missing evidence is indeterminate. Also execute targeted_batch (sample sheet, targets, calibration), review_targeted (batch, expected_revision, sample, target, accepted, reason), export_targeted (batch; CSV) and shared engine metadata, spectrum, extract, integrate, quantify, process_chromatograms (traces/config), revise_chromatogram (analysis/expected_revision/correction/preview) or export_chromatographic_peaks (analyses; returns CSV text). Chromatography supports SG, AsLS/chord/quantile baselines, batch peaks, manual/reference bounds, accept and restore revisions. Missing intensity is null. Paths must be within allowed roots. Version 1 request matches CLI JSON; results preserve signal stages, units and history. Preview is never committed. No project writes or GUI changes."
     )]
     async fn analytical_operation(
         &self,
@@ -1070,6 +1181,7 @@ impl EngineMcp {
             }
             let request: Request = serde_json::from_slice(&bytes)
                 .map_err(|e| EngineError::new("invalid_parameters", e))?;
+            request.operation.ensure_available()?;
             if let crate::domain::Operation::TargetedBatch { batch } = &request.operation {
                 for sample in &batch.samples {
                     self.authorize(&sample.source)?;
@@ -1114,6 +1226,12 @@ impl ServerHandler for EngineMcp {
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> std::result::Result<CallToolResponse, rmcp::ErrorData> {
         let name = request.name.to_string();
+        if !crate::EXPERIMENTAL && EXPERIMENTAL_TOOLS.contains(&name.as_str()) {
+            return Err(rmcp::ErrorData::invalid_params(
+                format!("Unknown tool: {name}"),
+                None,
+            ));
+        }
         let parameters = serde_json::json!(request.arguments);
         let call = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
         let result = self.tool_router.call(call).await;
@@ -1149,6 +1267,19 @@ impl ServerHandler for EngineMcp {
             "untargeted_status",
         ];
         let mut tools = self.tool_router.list_all();
+        if !crate::EXPERIMENTAL {
+            tools.retain(|tool| !EXPERIMENTAL_TOOLS.contains(&tool.name.as_ref()));
+            for tool in &mut tools {
+                if let serde_json::Value::Object(map) = public_schema(&*tool.input_schema) {
+                    tool.input_schema = Arc::new(map);
+                }
+                if let Some(output) = &tool.output_schema {
+                    if let serde_json::Value::Object(map) = public_schema(&**output) {
+                        tool.output_schema = Some(Arc::new(map));
+                    }
+                }
+            }
+        }
         tools.sort_by_key(|tool| {
             (
                 legacy

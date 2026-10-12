@@ -32,11 +32,20 @@ pub const SECTIONS: &[&str] = &[
     "history",
     "versions",
 ];
+/// Sections of hidden workflows. Still accepted when stored in a config, but not offered or enabled by default.
+const EXPERIMENTAL_SECTIONS: &[&str] = &["annotations", "statistics"];
+/// Sections offered to users in this build.
+pub fn visible_sections() -> impl Iterator<Item = &'static str> {
+    SECTIONS
+        .iter()
+        .copied()
+        .filter(|s| crate::EXPERIMENTAL || !EXPERIMENTAL_SECTIONS.contains(s))
+}
 impl Default for Config {
     fn default() -> Self {
         Self {
             title: "Chromascope analytical review draft".into(),
-            sections: SECTIONS.iter().map(|s| (*s).into()).collect(),
+            sections: visible_sections().map(Into::into).collect(),
             figure_width: 2400,
             figure_height: 1200,
         }

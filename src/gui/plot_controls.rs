@@ -5,7 +5,22 @@ type NamedSeries = (String, Vec<[f64; 2]>);
 type ExportCompletion = std::sync::mpsc::Receiver<Result<(), String>>;
 #[derive(Clone)]
 struct ExportJob(std::sync::Arc<std::sync::Mutex<ExportCompletion>>);
+/// Queue a view action (1 reset, 2 zoom in, 3 zoom out, 4 pan left, 5 pan right) for a plot
+/// whose toolbar is hidden behind a context menu.
+pub(super) fn trigger(ctx: &egui::Context, plot_id: egui::Id, action: u8) {
+    ctx.data_mut(|d| d.insert_temp(plot_id.with("action"), action));
+}
+pub(super) fn set_legend(ctx: &egui::Context, plot_id: egui::Id, shown: bool) {
+    ctx.data_mut(|d| d.insert_temp(plot_id.with("legend"), shown));
+}
 pub(super) fn plot(ui: &mut egui::Ui, source: impl std::hash::Hash) -> Plot<'static> {
+    plot_inner(ui, source, true)
+}
+/// Like [`plot`] but without the toolbar row; drive it with [`trigger`] / [`set_legend`].
+pub(super) fn plot_bare(ui: &mut egui::Ui, source: impl std::hash::Hash) -> Plot<'static> {
+    plot_inner(ui, source, false)
+}
+fn plot_inner(ui: &mut egui::Ui, source: impl std::hash::Hash, toolbar: bool) -> Plot<'static> {
     let id = ui.make_persistent_id(source);
     let mut reset = false;
     let mut legend = ui
@@ -20,10 +35,19 @@ pub(super) fn plot(ui: &mut egui::Ui, source: impl std::hash::Hash) -> Plot<'sta
         .unwrap_or(0);
     let mut memory = PlotMemory::load(ui.ctx(), id);
     let (mut zoom_in, mut zoom_out, mut left, mut right) = (false, false, false, false);
+    match ui.ctx().data_mut(|d| d.remove_temp::<u8>(id.with("action"))) {
+        Some(1) => reset = true,
+        Some(2) => zoom_in = true,
+        Some(3) => zoom_out = true,
+        Some(4) => left = true,
+        Some(5) => right = true,
+        _ => {}
+    }
     ui.push_id(id, |ui| {
         // A single non-wrapping row: secondary actions live in the overflow
         // menu so controls never wrap onto axes, peaks, or annotations at
         // narrow widths. The row scrolls horizontally instead of wrapping.
+        if toolbar {
         egui::ScrollArea::horizontal()
             .id_salt(id.with("toolbar_scroll"))
             .show(ui, |ui| {
@@ -85,6 +109,7 @@ pub(super) fn plot(ui: &mut egui::Ui, source: impl std::hash::Hash) -> Plot<'sta
                     });
                 });
             });
+        }
         if let Some(memory) = &mut memory {
             let bounds = *memory.bounds();
             let min = bounds.min();
@@ -177,29 +202,7 @@ fn export_kind(
 ) {
     let job_id = egui::Id::new("plot_export_job");
     let status_id = egui::Id::new("plot_export_status");
-    let job = ui.ctx().data(|d| d.get_temp::<ExportJob>(job_id));
-    let mut busy = false;
-    if let Some(job) = job {
-        match job.0.lock().unwrap().try_recv() {
-            Ok(result) => ui.ctx().data_mut(|d| {
-                d.remove::<ExportJob>(job_id);
-                d.insert_temp(
-                    status_id,
-                    result
-                        .err()
-                        .unwrap_or_else(|| "Saved full-resolution SVG".into()),
-                );
-            }),
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => ui.ctx().data_mut(|d| {
-                d.remove::<ExportJob>(job_id);
-                d.insert_temp(status_id, "SVG export worker disconnected".to_owned());
-            }),
-            Err(std::sync::mpsc::TryRecvError::Empty) => {
-                busy = true;
-                ui.ctx().request_repaint();
-            }
-        }
-    }
+    let busy = poll_export(ui);
     if ui
         .add_enabled(!busy, egui::Button::new("Export full-resolution SVG…"))
         .clicked()
@@ -249,6 +252,40 @@ fn export_kind(
             });
         }
     }
+    export_status(ui);
+}
+/// Polls a running SVG export; true while it is still busy.
+fn poll_export(ui: &mut egui::Ui) -> bool {
+    let job_id = egui::Id::new("plot_export_job");
+    let status_id = egui::Id::new("plot_export_status");
+    let job = ui.ctx().data(|d| d.get_temp::<ExportJob>(job_id));
+    let mut busy = false;
+    if let Some(job) = job {
+        match job.0.lock().unwrap().try_recv() {
+            Ok(result) => ui.ctx().data_mut(|d| {
+                d.remove::<ExportJob>(job_id);
+                d.insert_temp(
+                    status_id,
+                    result
+                        .err()
+                        .unwrap_or_else(|| "Saved full-resolution SVG".into()),
+                );
+            }),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => ui.ctx().data_mut(|d| {
+                d.remove::<ExportJob>(job_id);
+                d.insert_temp(status_id, "SVG export worker disconnected".to_owned());
+            }),
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                busy = true;
+                ui.ctx().request_repaint();
+            }
+        }
+    }
+    busy
+}
+/// Completion/progress text of the latest SVG export.
+pub(super) fn export_status(ui: &mut egui::Ui) {
+    poll_export(ui);
     if let Some(status) = ui
         .ctx()
         .data(|d| d.get_temp::<String>(egui::Id::new("plot_export_status")))

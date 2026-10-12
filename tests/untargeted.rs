@@ -130,6 +130,7 @@ fn independently_replays_area_alignment_and_qc_filters() {
         assert!(verify(&r).is_err());
     }
 }
+#[cfg(feature = "experimental")]
 #[test]
 fn matrix_and_observation_exports_preserve_filtered_evidence() {
     let r = fixture();

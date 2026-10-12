@@ -1,6 +1,8 @@
 # Operational examples
 
-Build `cargo build --locked --all-features --bins` first. Python helpers use the
+Build `cargo build --locked --all-features --bins` first. The spectral, untargeted,
+annotation and statistics examples use the experimental workflows, which the default CLI
+and MCP server hide; `--all-features` (or `--features experimental`) enables them. Python helpers use the
 real executable and do not implement alternative numerical algorithms. Always
 supply a NEW output directory; inspect retained JSON and stderr on failure.
 Commands below use Windows debug executable paths; adjust for other platforms.

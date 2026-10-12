@@ -652,67 +652,79 @@ pub(super) fn scan_navigation(app: &mut MzViewerApp, ui: &mut egui::Ui) {
     };
     let count = file.data.bounds.scan_count;
     let scan = file.cache.mass_spectrum.as_ref().map(|s| s.index);
-    ui.horizontal_wrapped(|ui| {
-        if ui
-            .add_enabled(scan.is_some_and(|s| s > 0), egui::Button::new("Previous"))
-            .clicked()
-        {
-            navigate(app, -1);
-        }
-        if ui
-            .add_enabled(
-                scan.is_some_and(|s| s + 1 < count),
-                egui::Button::new("Next"),
-            )
-            .clicked()
-        {
-            navigate(app, 1);
-        }
-        if count > 0 {
-            let edit_id = egui::Id::new(("scan_jump", id));
-            let mut number = ui
-                .ctx()
-                .data_mut(|d| *d.get_temp_mut_or(edit_id, scan.unwrap_or(0) + 1));
-            ui.add(
-                egui::DragValue::new(&mut number)
-                    .range(1..=count)
-                    .prefix("Scan "),
-            );
-            ui.ctx().data_mut(|d| d.insert_temp(edit_id, number));
-            if ui.button("Go").clicked() {
-                load_scan(app, id, number.clamp(1, count) - 1);
-            }
-        }
+    if ui
+        .add_enabled(scan.is_some_and(|s| s > 0), egui::Button::new("Previous").small())
+        .clicked()
+    {
+        navigate(app, -1);
+    }
+    if ui
+        .add_enabled(
+            scan.is_some_and(|s| s + 1 < count),
+            egui::Button::new("Next").small(),
+        )
+        .clicked()
+    {
+        navigate(app, 1);
+    }
+    if let Some(s) = scan {
+        ui.weak(format!("{} / {}", s + 1, count));
+        refresh_metadata(app, id, s);
+    }
+}
+fn refresh_metadata(app: &mut MzViewerApp, id: usize, index: usize) {
+    if app
+        .workspace
+        .metadata
+        .as_ref()
+        .map(|(file, scan, _)| (*file, *scan))
+        != Some((id, index))
+    {
         if let Some(file) = app.files.get_mut(&id) {
-            if let Some(s) = &file.cache.mass_spectrum {
-                ui.weak(format!("{} / {}", s.index + 1, count));
-                let index = s.index;
-                if app
-                    .workspace
-                    .metadata
-                    .as_ref()
-                    .map(|(file, scan, _)| (*file, *scan))
-                    != Some((id, index))
-                {
-                    app.workspace.metadata = file
-                        .data
-                        .scan_metadata(index)
-                        .ok()
-                        .map(|text| (id, index, text));
-                }
-                if let Some((_, _, text)) = &app.workspace.metadata {
-                    ui.menu_button("Acquisition details…", |ui| {
-                        ui.set_max_width(420.0);
-                        egui::ScrollArea::vertical()
-                            .max_height(300.0)
-                            .show(ui, |ui| {
-                                ui.label(text);
-                            });
-                    });
-                }
-            }
+            app.workspace.metadata = file
+                .data
+                .scan_metadata(index)
+                .ok()
+                .map(|text| (id, index, text));
+        }
+    }
+}
+/// Jump-to-scan control, shown in the spectrum context menu.
+pub(super) fn scan_jump(app: &mut MzViewerApp, ui: &mut egui::Ui, id: usize, count: usize) {
+    let scan = app
+        .files
+        .get(&id)
+        .and_then(|f| f.cache.mass_spectrum.as_ref())
+        .map(|s| s.index);
+    let edit_id = egui::Id::new(("scan_jump", id));
+    let mut number = ui
+        .ctx()
+        .data_mut(|d| *d.get_temp_mut_or(edit_id, scan.unwrap_or(0) + 1));
+    ui.horizontal(|ui| {
+        ui.add(
+            egui::DragValue::new(&mut number)
+                .range(1..=count)
+                .prefix("Scan "),
+        );
+        if ui.button("Go").clicked() {
+            load_scan(app, id, number.clamp(1, count) - 1);
+            ui.close();
         }
     });
+    ui.ctx().data_mut(|d| d.insert_temp(edit_id, number));
+}
+/// Acquisition metadata of the displayed scan, shown in the spectrum context menu.
+pub(super) fn acquisition_details(app: &mut MzViewerApp, ui: &mut egui::Ui) {
+    if let Some((_, _, text)) = &app.workspace.metadata {
+        ui.menu_button("Acquisition details…", |ui| {
+            ui.set_max_width(420.0);
+            egui::ScrollArea::vertical()
+                .max_height(300.0)
+                .show(ui, |ui| {
+                    ui.label(text);
+                });
+        });
+    }
 }
 pub(super) fn navigate(app: &mut MzViewerApp, delta: isize) {
     let Some(id) = app.active_file_id else { return };

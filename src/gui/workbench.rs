@@ -11,43 +11,60 @@ const PANEL_WIDTH: f32 = 270.0;
 
 /// Workflow launchers stay in one place; analytical windows retain their state.
 pub fn navigation(app: &mut MzViewerApp, ui: &mut egui::Ui) {
-    let destinations = [
-        "Data explorer",
-        "Quantification and QC",
-        "Identification",
-        "Untargeted analysis",
-        "Statistics",
-        "Reports",
-        "AI activity",
-    ];
+    // Stable ids keep the selection logic independent of which tabs are visible.
+    const DATA: usize = 0;
+    const QUANT: usize = 1;
+    const IDENTIFICATION: usize = 2;
+    const UNTARGETED: usize = 3;
+    const STATISTICS: usize = 4;
+    const REPORTS: usize = 5;
+    const ACTIVITY: usize = 6;
+    let destinations: Vec<(usize, &str)> = [
+        (DATA, "Data explorer"),
+        (QUANT, "Quantification and QC"),
+        (IDENTIFICATION, "Identification"),
+        (UNTARGETED, "Untargeted analysis"),
+        (STATISTICS, "Statistics"),
+        (REPORTS, "Reports"),
+        (ACTIVITY, "AI activity"),
+    ]
+    .into_iter()
+    .filter(|(id, _)| crate::EXPERIMENTAL || !matches!(*id, IDENTIFICATION | UNTARGETED | STATISTICS))
+    .collect();
     let mut selected = if app.quant.active {
-        1
-    } else if app.spectral.open {
-        2
-    } else if app.untargeted.open {
-        3
-    } else if app.statistics.open {
-        4
+        QUANT
+    } else if crate::EXPERIMENTAL && app.spectral.open {
+        IDENTIFICATION
+    } else if crate::EXPERIMENTAL && app.untargeted.open {
+        UNTARGETED
+    } else if crate::EXPERIMENTAL && app.statistics.open {
+        STATISTICS
     } else if app.delivery.open {
-        5
+        REPORTS
     } else if ui
         .ctx()
         .data(|d| d.get_temp::<bool>(egui::Id::new("activity_open")))
         .unwrap_or(false)
     {
-        6
+        ACTIVITY
     } else {
-        0
+        DATA
     };
+    let ctx = ui.ctx().clone();
     ui.horizontal_wrapped(|ui| {
-        for (index, label) in destinations.iter().enumerate() {
-            if ui.selectable_label(selected == index, *label).clicked() {
-                selected = index;
+        for (id, label) in &destinations {
+            if ui.selectable_label(selected == *id, *label).clicked() {
+                selected = *id;
             }
         }
+        // Workflow progress sits at the far right of the navigation bar, next to the destinations it leads to.
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            super::workflow::status_chip(app, &ctx, ui);
+        });
     });
     ui.ctx().input(|input| {
-        for (index, key) in [
+        // Alt/Ctrl+N selects the Nth visible destination.
+        for ((id, _), key) in destinations.iter().zip([
             egui::Key::Num1,
             egui::Key::Num2,
             egui::Key::Num3,
@@ -55,22 +72,19 @@ pub fn navigation(app: &mut MzViewerApp, ui: &mut egui::Ui) {
             egui::Key::Num5,
             egui::Key::Num6,
             egui::Key::Num7,
-        ]
-        .iter()
-        .enumerate()
-        {
-            if input.events.iter().any(|event| matches!(event, egui::Event::Key { key: pressed_key, pressed: true, modifiers, .. } if pressed_key == key && (modifiers.alt || modifiers.ctrl))) {
-                selected = index;
+        ]) {
+            if input.events.iter().any(|event| matches!(event, egui::Event::Key { key: pressed_key, pressed: true, modifiers, .. } if *pressed_key == key && (modifiers.alt || modifiers.ctrl))) {
+                selected = *id;
             }
         }
     });
-    app.quant.active = selected == 1;
-    app.spectral.open = selected == 2;
-    app.untargeted.open = selected == 3;
-    app.statistics.open = selected == 4;
-    app.delivery.open = selected == 5;
+    app.quant.active = selected == QUANT;
+    app.spectral.open = selected == IDENTIFICATION;
+    app.untargeted.open = selected == UNTARGETED;
+    app.statistics.open = selected == STATISTICS;
+    app.delivery.open = selected == REPORTS;
     ui.ctx().data_mut(|d| {
-        d.insert_temp(egui::Id::new("activity_open"), selected == 6);
+        d.insert_temp(egui::Id::new("activity_open"), selected == ACTIVITY);
         d.insert_temp(egui::Id::new("central_workspaces"), true);
     });
 }
@@ -122,9 +136,7 @@ pub(super) fn scroll_new_focus(ui: &egui::Ui) {
 }
 
 pub(super) fn advanced_active(app: &MzViewerApp, ctx: &Context) -> bool {
-    app.spectral.open
-        || app.untargeted.open
-        || app.statistics.open
+    (crate::EXPERIMENTAL && (app.spectral.open || app.untargeted.open || app.statistics.open))
         || app.delivery.open
         || ctx
             .data(|d| d.get_temp::<bool>(egui::Id::new("activity_open")))
@@ -315,7 +327,7 @@ pub fn trace_buttons(app: &mut MzViewerApp, ui: &mut egui::Ui) {
     }
 }
 
-pub fn status(app: &MzViewerApp, ctx: &Context) {
+pub fn status(app: &mut MzViewerApp, ctx: &Context) {
     egui::TopBottomPanel::bottom("workbench_status").show(ctx, |ui| {
         ui.horizontal_wrapped(|ui| {
             let loading = app.files.values().filter(|file| file.is_loading).count();
@@ -346,7 +358,7 @@ pub fn status(app: &MzViewerApp, ctx: &Context) {
             if low_contrast { ui.colored_label(ui.visuals().warn_fg_color,"Low-contrast trace color · adjust Appearance or switch theme"); }
             ui.separator();
             if advanced_active(app,ctx) || app.quant.active {
-                ui.small("Alt/Ctrl+1–7: workspace · Tab: next control · Enter/Space: activate · Plot controls: zoom, pan, reset");
+                ui.small(format!("Alt/Ctrl+1–{}: workspace · Tab: next control · Enter/Space: activate · Plot controls: zoom, pan, reset", if crate::EXPERIMENTAL { 7 } else { 4 }));
             } else { ui.small("Double-click: spectrum · Right-drag: integrate · Middle-drag: zoom · Numeric alternatives in Selection"); }
         });
     });
@@ -955,7 +967,7 @@ mod tests {
                 input.time = Some(frame as f64 * 0.2);
                 let output = ctx.run(input.clone(), |ctx| {
                     panels::update_data_selection_panel(&mut app, ctx);
-                    status(&app, ctx);
+                    status(&mut app, ctx);
                     panels::update_file_information_panel(&mut app, ctx);
                     inspector(&mut app, ctx);
                     panels::update_central_panel(&mut app, ctx);
@@ -1097,7 +1109,12 @@ mod keyboard_contract_tests {
         let _ = ctx.run(
             egui::RawInput {
                 events: vec![egui::Event::Key {
-                    key: egui::Key::Num4,
+                    // Experimental tabs are hidden by default: Alt+3 is then Reports.
+                    key: if crate::EXPERIMENTAL {
+                        egui::Key::Num4
+                    } else {
+                        egui::Key::Num3
+                    },
                     physical_key: None,
                     pressed: true,
                     repeat: false,
@@ -1113,8 +1130,13 @@ mod keyboard_contract_tests {
                 egui::CentralPanel::default().show(ctx, |ui| navigation(&mut app, ui));
             },
         );
-        assert!(app.untargeted.open);
-        assert!(!app.quant.active && !app.spectral.open && !app.statistics.open);
+        if crate::EXPERIMENTAL {
+            assert!(app.untargeted.open);
+            assert!(!app.quant.active && !app.spectral.open && !app.statistics.open);
+        } else {
+            assert!(app.delivery.open);
+            assert!(!app.quant.active && !app.spectral.open && !app.untargeted.open && !app.statistics.open);
+        }
     }
     #[test]
     fn theme_text_and_secondary_text_meet_readability_contrast() {

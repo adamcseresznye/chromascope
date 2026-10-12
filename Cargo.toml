@@ -13,6 +13,9 @@ default = ["gui"]
 gui = ["dep:egui", "dep:eframe", "dep:rfd", "dep:egui_plot", "dep:image"]
 mcp-headless = ["dep:rmcp", "dep:tokio"]
 mcp = ["gui", "dep:rmcp", "dep:tokio", "dep:base64"]
+# Unverified workflows (Identification, Untargeted analysis, Statistics). The code is always
+# compiled; this flag only exposes it in the GUI, MCP and CLI.
+experimental = []
 
 [[bin]]
 name = "chromascope"

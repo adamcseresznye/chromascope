@@ -656,9 +656,11 @@ impl eframe::App for MzViewerApp {
             dialogs::render_range_window(self, ctx);
             dialogs::render_plot_properties_window(self, ctx);
         }
-        spectral::show(self, ctx);
-        untargeted::show(self, ctx);
-        statistics::show(self, ctx);
+        if crate::EXPERIMENTAL {
+            spectral::show(self, ctx);
+            untargeted::show(self, ctx);
+            statistics::show(self, ctx);
+        }
         delivery::show(self, ctx);
         workbench::activity(self, ctx);
         dialogs::render_error_dialog(self, ctx);

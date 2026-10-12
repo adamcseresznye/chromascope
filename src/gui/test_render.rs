@@ -16,6 +16,22 @@ pub(super) fn text_center(shapes: &[egui::epaint::ClippedShape], text: &str) -> 
     shapes.iter().find_map(|s| find(&s.shape, text))
 }
 
+/// Like [`text_center`], but only for text that is actually visible inside its clip rectangle.
+#[cfg(test)]
+fn visible_text_center(shapes: &[egui::epaint::ClippedShape], text: &str) -> Option<egui::Pos2> {
+    fn find(shape: &egui::Shape, clip: egui::Rect, text: &str) -> Option<egui::Pos2> {
+        match shape {
+            egui::Shape::Text(t) if t.galley.job.text == text => {
+                let center = t.pos + t.galley.rect.center().to_vec2();
+                clip.contains(center).then_some(center)
+            }
+            egui::Shape::Vec(shapes) => shapes.iter().find_map(|s| find(s, clip, text)),
+            _ => None,
+        }
+    }
+    shapes.iter().find_map(|s| find(&s.shape, s.clip_rect, text))
+}
+
 /// Locate a real rendered control, scrolling the viewport when forms grow.
 /// This retains click/selection assertions instead of bypassing UI interaction.
 #[cfg(test)]
@@ -25,7 +41,7 @@ pub(super) fn scroll_to_text(
     mut render: impl FnMut(Vec<egui::Event>) -> egui::FullOutput,
 ) -> egui::Pos2 {
     frames.push(render(vec![]));
-    if let Some(pos) = text_center(&frames.last().unwrap().shapes, text) {
+    if let Some(pos) = visible_text_center(&frames.last().unwrap().shapes, text) {
         return pos;
     }
     // A standalone analytical window can be shorter than the screen. Use
@@ -53,7 +69,7 @@ pub(super) fn scroll_to_text(
                 },
             ]));
             frames.push(render(vec![]));
-            if let Some(pos) = text_center(&frames.last().unwrap().shapes, text) {
+            if let Some(pos) = visible_text_center(&frames.last().unwrap().shapes, text) {
                 return pos;
             }
         }

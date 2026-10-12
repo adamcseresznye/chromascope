@@ -168,6 +168,66 @@ pub enum Operation {
         method: crate::quant::Method,
     },
 }
+impl Operation {
+    /// Operations of the hidden Identification, Untargeted and Statistics workflows.
+    /// They stay in the enum so stored projects keep deserializing.
+    pub fn is_experimental(&self) -> bool {
+        matches!(
+            self,
+            Self::AnalyzeStatistics { .. }
+                | Self::ExportStatistics { .. }
+                | Self::ProposeFeatureAnnotations { .. }
+                | Self::AddFeatureHypothesis { .. }
+                | Self::ReviewFeatureAnnotation { .. }
+                | Self::ExportFeatureAnnotations { .. }
+                | Self::UntargetedBatch { .. }
+                | Self::ExportFeatureMatrix { .. }
+                | Self::LinkedSpectralChromatogram { .. }
+                | Self::CompareSpectra { .. }
+                | Self::ExportSpectralCandidates { .. }
+                | Self::InspectSpectra { .. }
+                | Self::ProcessSpectra { .. }
+                | Self::ImportSpectralLibrary { .. }
+                | Self::SearchSpectralLibrary { .. }
+                | Self::AnnotateSpectrum { .. }
+                | Self::FormulaCandidates { .. }
+                | Self::AnalyzeIsotopes { .. }
+        )
+    }
+
+    /// Snake-case names (the serde tag) of the operations hidden from clients.
+    pub const EXPERIMENTAL_NAMES: &'static [&'static str] = &[
+        "analyze_statistics",
+        "export_statistics",
+        "propose_feature_annotations",
+        "add_feature_hypothesis",
+        "review_feature_annotation",
+        "export_feature_annotations",
+        "untargeted_batch",
+        "export_feature_matrix",
+        "linked_spectral_chromatogram",
+        "compare_spectra",
+        "export_spectral_candidates",
+        "inspect_spectra",
+        "process_spectra",
+        "import_spectral_library",
+        "search_spectral_library",
+        "annotate_spectrum",
+        "formula_candidates",
+        "analyze_isotopes",
+    ];
+
+    /// Reject hidden operations unless the `experimental` feature is enabled.
+    pub fn ensure_available(&self) -> Result<()> {
+        if !crate::EXPERIMENTAL && self.is_experimental() {
+            return Err(EngineError::new(
+                "experimental_unavailable",
+                "this operation belongs to an experimental workflow that is not enabled in this build",
+            ));
+        }
+        Ok(())
+    }
+}
 #[cfg_attr(feature = "mcp-headless", derive(rmcp::schemars::JsonSchema))]
 #[cfg_attr(feature = "mcp-headless", schemars(crate = "rmcp::schemars"))]
 #[derive(Clone, Serialize, Deserialize)]

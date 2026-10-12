@@ -576,6 +576,7 @@ pub(super) fn show(app: &mut super::MzViewerApp, ctx: &egui::Context) {
                                     cell.state
                                 ),
                                 number: cell.intensity,
+                                color: None,
                             }));
                             cells.push(Cell::text(format!(
                                 "{:?}: {}",

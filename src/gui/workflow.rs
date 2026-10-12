@@ -40,6 +40,7 @@ pub(super) enum StepState {
     Todo,
 }
 
+#[derive(Clone)]
 pub(super) struct StepStatus {
     pub number: usize,
     pub title: &'static str,
@@ -403,8 +404,8 @@ fn state_glyph(state: StepState) -> &'static str {
     }
 }
 
-/// Compact banner naming the single most important next action.
-pub(super) fn banner(app: &mut MzViewerApp, ctx: &egui::Context, ui: &mut egui::Ui) {
+/// Status-bar chip naming the next workflow step; its menu holds the details and actions.
+pub(super) fn status_chip(app: &mut MzViewerApp, ctx: &egui::Context, ui: &mut egui::Ui) {
     let list = steps(app);
     let next = list
         .iter()
@@ -413,43 +414,53 @@ pub(super) fn banner(app: &mut MzViewerApp, ctx: &egui::Context, ui: &mut egui::
         .or_else(|| {
             list.iter()
                 .find(|s| s.state == StepState::Todo || s.state == StepState::Ready)
-        });
-    let Some(next) = next else {
-        ui.horizontal_wrapped(|ui| {
-            ui.strong("Analysis complete — review the release checklist in Reports.");
-            if ui.button("Open Reports").clicked() {
-                go(app, ctx, Destination::Reports);
-            }
-        });
-        return;
-    };
+        })
+        .cloned();
     let warnings = export_warnings(app);
-    ui.horizontal_wrapped(|ui| {
-        let glyph = state_glyph(next.state);
-        ui.label(format!(
-            "{glyph} Step {} of 9 — {}",
-            next.number, next.title
-        ));
-        if !warnings.is_empty() && next.number >= 5 {
-            ui.small(format!(
-                "{} warning(s) will accompany export",
-                warnings.len()
-            ));
+    let label = match &next {
+        Some(n) => format!("Step {}/9 · {} \u{25be}", n.number, n.action),
+        None => "● Workflow complete".to_string(),
+    };
+    let mut chosen: Option<Destination> = None;
+    ui.menu_button(egui::RichText::new(label).small(), |ui| {
+        ui.set_max_width(340.0);
+        match &next {
+            Some(n) => {
+                ui.strong(format!("Step {} of 9 — {}", n.number, n.title));
+                ui.small(&n.detail);
+                if !warnings.is_empty() && n.number >= 5 {
+                    ui.small(format!("{} warning(s) will accompany export", warnings.len()));
+                }
+                if ui
+                    .add(
+                        egui::Button::new(egui::RichText::new(format!("Next: {}", n.action)).strong())
+                            .fill(ui.visuals().selection.bg_fill),
+                    )
+                    .clicked()
+                {
+                    chosen = Some(n.destination);
+                    ui.close();
+                }
+            }
+            None => {
+                ui.strong("Analysis complete — review the release checklist in Reports.");
+                if ui.button("Open Reports").clicked() {
+                    chosen = Some(Destination::Reports);
+                    ui.close();
+                }
+            }
         }
-    });
-    ui.horizontal_wrapped(|ui| {
-        ui.small(&next.detail);
-        if ui
-            .add(
-                egui::Button::new(egui::RichText::new(format!("Next: {}", next.action)).strong())
-                    .fill(ui.visuals().selection.bg_fill),
-            )
-            .on_hover_text(format!("Go to step {}: {}", next.number, next.title))
-            .clicked()
-        {
-            go(app, ctx, next.destination);
+        ui.separator();
+        if ui.button("All steps…").clicked() {
+            ctx.data_mut(|d| d.insert_temp(egui::Id::new("workflow_guide_open"), true));
+            ui.close();
         }
-    });
+    })
+    .response
+    .on_hover_text("Analysis workflow progress");
+    if let Some(destination) = chosen {
+        go(app, ctx, destination);
+    }
 }
 
 /// Full numbered guide with per-step status and contextual navigation.

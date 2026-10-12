@@ -4,6 +4,10 @@
 //! This library provides the core functionality for parsing MzML files,
 //! extracting chromatograms, and processing mass spectrometry data.
 
+/// Identification, Untargeted analysis and Statistics are compiled but only exposed
+/// to users when built with `--features experimental`.
+pub const EXPERIMENTAL: bool = cfg!(feature = "experimental");
+
 pub mod annotation;
 pub mod chromatography;
 pub mod delivery;

@@ -74,9 +74,11 @@ pub fn parse(
         let polarity = match t.polarity.as_str() {
             "positive" => ScanPolarity::Positive,
             "negative" => ScanPolarity::Negative,
+            // Files converted without polarity CV terms (e.g. via MSnbase/mzR) read as Unknown.
+            "unknown" => ScanPolarity::Unknown,
             _ => {
                 return Err(format!(
-                    "{}: polarity must be positive or negative.",
+                    "{}: polarity must be positive, negative, or unknown.",
                     t.name
                 ))
             }

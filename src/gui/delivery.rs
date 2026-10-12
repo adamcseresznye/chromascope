@@ -108,7 +108,7 @@ pub(super) fn show(app: &mut super::MzViewerApp, ctx: &egui::Context) {
         );
         ui.label("Include report sections");
         ui.horizontal_wrapped(|ui| {
-            for &section in crate::delivery::SECTIONS {
+            for section in crate::delivery::visible_sections() {
                 let mut enabled = s.config.sections.iter().any(|x| x == section);
                 if ui.checkbox(&mut enabled, section).changed() {
                     s.config.sections.retain(|x| x != section);

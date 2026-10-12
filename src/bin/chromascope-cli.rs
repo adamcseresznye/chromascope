@@ -6,7 +6,7 @@ use chromascope::{
     project::Project,
 };
 use std::{io::Read, path::Path};
-const HELP: &str = "Chromascope shared-engine JSON CLI
+const HELP_HEAD: &str = "Chromascope shared-engine JSON CLI
 Usage:
   run DATASET|- [PROJECT] < request.json
   project-create DIRECTORY
@@ -21,22 +21,51 @@ Usage:
   project-reprocess PROJECT RESULT_UUID
   project-compare-methods LEFT.json RIGHT.json
   project-migrate PROJECT
-  export-peaks|export-targeted|export-targeted-calibration|export-qc|
+";
+const HELP_EXPORTS: &str = "  export-peaks|export-targeted|export-targeted-calibration|export-qc NEW_FILE < response.json
+";
+const HELP_EXPERIMENTAL_EXPORTS: &str = "  export-peaks|export-targeted|export-targeted-calibration|export-qc|
   export-spectral|export-features|export-features-filtered|
   export-feature-observations|export-annotations|export-statistics NEW_FILE < response.json
-
+";
+const HELP_TAIL: &str = "
 Requests use version 1, operation_id UUID, actor, and tagged operation.
 Results/errors are JSON ok/result or ok/error envelopes; errors exit 1.
 Progress is stderr. RT is minutes unless a field explicitly states seconds.
 Exports refuse existing destinations. Project writes append revisions.
 See README.md, examples/README.md and docs/MCP_ANALYSIS.md for schemas/workflows.";
+/// Subcommands of the Identification, Untargeted and Statistics workflows; hidden unless
+/// the `experimental` feature is enabled.
+const EXPERIMENTAL_COMMANDS: &[&str] = &[
+    "export-spectral",
+    "export-features",
+    "export-features-filtered",
+    "export-feature-observations",
+    "export-annotations",
+    "export-statistics",
+];
+fn help() -> String {
+    let exports = if chromascope::EXPERIMENTAL {
+        HELP_EXPERIMENTAL_EXPORTS
+    } else {
+        HELP_EXPORTS
+    };
+    format!("{HELP_HEAD}{exports}{HELP_TAIL}")
+}
 fn run() -> Result<serde_json::Value, EngineError> {
     let control = JobControl::default();
     let interrupt = control.clone();
     ctrlc::set_handler(move || interrupt.cancel())
         .map_err(|e| EngineError::new("adapter_failure", e))?;
     let args: Vec<_> = std::env::args().skip(1).collect();
-    let invalid = || EngineError::new("invalid_parameters", HELP);
+    let invalid = || EngineError::new("invalid_parameters", help());
+    if !chromascope::EXPERIMENTAL
+        && args
+            .first()
+            .is_some_and(|name| EXPERIMENTAL_COMMANDS.contains(&name.as_str()))
+    {
+        return Err(invalid());
+    }
     match args.first().map(String::as_str) {
         Some(
             "export-peaks"
@@ -255,6 +284,7 @@ fn run() -> Result<serde_json::Value, EngineError> {
             }
             let request: Request = serde_json::from_str(&input)
                 .map_err(|e| EngineError::new("invalid_parameters", e))?;
+            request.operation.ensure_available()?;
             let preview = matches!(
                 request.operation,
                 chromascope::domain::Operation::ReviseChromatogram { preview: true, .. }
@@ -396,7 +426,7 @@ fn run() -> Result<serde_json::Value, EngineError> {
 }
 fn main() {
     if matches!(std::env::args().nth(1).as_deref(), Some("--help" | "-h")) {
-        println!("{HELP}");
+        println!("{}", help());
         return;
     }
     match run() {

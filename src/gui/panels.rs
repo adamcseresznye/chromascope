@@ -134,6 +134,10 @@ pub fn update_data_selection_panel(app: &mut MzViewerApp, ctx: &Context) {
                     if changed { app.workspace.view.focus_restore = None; }
                     ui.separator();
                 }
+                if ui.button("Analysis workflow guide…").clicked() {
+                    ctx.data_mut(|d| d.insert_temp(egui::Id::new("workflow_guide_open"), true));
+                    ui.close();
+                }
                 let dark = ui.visuals().dark_mode;
                 if ui.button(if dark { "Light theme" } else { "Dark theme" }).clicked() {
                     super::workbench::configure(ctx, !dark);
@@ -673,23 +677,20 @@ pub fn update_central_panel(app: &mut MzViewerApp, ctx: &Context) {
                 .inner_margin(16),
         )
         .show(ctx, |ui| {
-            egui::Frame::new()
-                .inner_margin(8)
-                .corner_radius(5)
-                .show(ui, |ui| {
-                    super::workflow::banner(app, ctx, ui);
+            let guide_id = egui::Id::new("workflow_guide_open");
+            let mut guide_open = ctx.data(|d| d.get_temp::<bool>(guide_id)).unwrap_or(false);
+            egui::Window::new("Analysis workflow guide")
+                .open(&mut guide_open)
+                .default_width(560.0)
+                .max_height(480.0)
+                .show(ctx, |ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt("analysis_workflow_guide_scroll")
+                        .show(ui, |ui| {
+                            super::workflow::guide(app, ctx, ui);
+                        });
                 });
-            ui.collapsing("Analysis workflow guide", |ui| {
-                // Bound the expanded guide so chromatograms and spectra keep
-                // their space in this non-scrolling panel.
-                egui::ScrollArea::vertical()
-                    .id_salt("analysis_workflow_guide_scroll")
-                    .max_height(320.0)
-                    .show(ui, |ui| {
-                        super::workflow::guide(app, ctx, ui);
-                    });
-            });
-            ui.separator();
+            ctx.data_mut(|d| d.insert_temp(guide_id, guide_open));
             if app.files.is_empty() {
                 ui.centered_and_justified(|ui| {
                     ui.vertical_centered(|ui| {
@@ -740,28 +741,118 @@ pub fn update_central_panel(app: &mut MzViewerApp, ctx: &Context) {
                 .clamp(0.3, 0.75);
                 ctx.data_mut(|data| data.insert_temp(divider_id, fraction));
             }
+            let spectrum_id = ui.make_persistent_id("mass_spectrum");
             ui.horizontal_wrapped(|ui| {
                 ui.strong("Mass spectrum");
-                if ui.small_button("Hide").clicked() {
-                    app.workspace.view.spectrum = false;
-                }
-                if ui
-                    .small_button("Clear spectrum")
-                    .on_hover_text("Clear the selected spectrum and expand chromatograms")
-                    .clicked()
-                {
-                    if let Some(file) = app.active_file_id.and_then(|id| app.files.get_mut(&id)) {
-                        file.cache.mass_spectrum = None;
-                    }
-                    app.user_input.retention_time_ms_spectrum = None;
-                    app.workspace.view.spectrum = false;
-                }
                 if let Some(rt) = app.user_input.retention_time_ms_spectrum {
                     ui.weak(format!("RT {rt:.3} min"));
                 }
+                super::workspace::scan_navigation(app, ui);
+                super::plot_controls::export_status(ui);
             });
-            super::workspace::scan_navigation(app, ui);
-            plotting::plot_mass_spectrum(app, ui);
+            let response = plotting::plot_mass_spectrum(app, ui);
+            spectrum_toolbar(app, ui, &response, spectrum_id);
+        });
+}
+
+/// Slim view toolbar floating over the spectrum's top-left corner; it appears on hover so the
+/// plot stays uncluttered, and secondary actions live in its overflow menu.
+fn spectrum_toolbar(app: &mut MzViewerApp, ui: &mut Ui, response: &egui::Response, plot_id: egui::Id) {
+    use super::plot_controls::{set_legend, trigger};
+    let has_spectrum = app
+        .active_file_id
+        .and_then(|id| app.files.get(&id))
+        .is_some_and(|f| f.cache.mass_spectrum.is_some());
+    if !has_spectrum {
+        return;
+    }
+    let ctx = ui.ctx().clone();
+    let menu_open = egui::Popup::is_any_open(&ctx);
+    let hovering = ctx
+        .pointer_hover_pos()
+        .is_some_and(|p| response.rect.expand(4.0).contains(p));
+    if !hovering && !menu_open {
+        return;
+    }
+    egui::Area::new(egui::Id::new("spectrum_toolbar"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(response.rect.left_top() + egui::vec2(8.0, 6.0))
+        .show(&ctx, |ui| {
+            egui::Frame::popup(ui.style())
+                .inner_margin(egui::Margin::symmetric(4, 2))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 2.0;
+                        for (label, tip, action) in [
+                            ("Reset", "Restore the automatic view", 1),
+                            ("+", "Zoom in", 2),
+                            ("\u{2212}", "Zoom out", 3),
+                        ] {
+                            if ui.small_button(label).on_hover_text(tip).clicked() {
+                                trigger(&ctx, plot_id, action);
+                            }
+                        }
+                        ui.menu_button("\u{2026}", |ui| {
+                            for (label, action) in [("Pan left", 4), ("Pan right", 5)] {
+                                if ui.button(label).clicked() {
+                                    trigger(&ctx, plot_id, action);
+                                    ui.close();
+                                }
+                            }
+                            let mut shown = ctx
+                                .data(|d| d.get_temp::<bool>(plot_id.with("legend")))
+                                .unwrap_or(true);
+                            if ui.checkbox(&mut shown, "Legend").changed() {
+                                set_legend(&ctx, plot_id, shown);
+                            }
+                            ui.separator();
+                            if let Some(id) = app.active_file_id {
+                                let count =
+                                    app.files.get(&id).map_or(0, |f| f.data.bounds.scan_count);
+                                if count > 0 {
+                                    super::workspace::scan_jump(app, ui, id, count);
+                                }
+                                let points = app
+                                    .files
+                                    .get(&id)
+                                    .and_then(|f| f.cache.mass_spectrum.as_ref())
+                                    .map(|s| {
+                                        s.mz.iter()
+                                            .zip(&s.intensity)
+                                            .map(|(&m, &i)| [m, i as f64])
+                                            .collect::<Vec<_>>()
+                                    });
+                                if let Some(points) = points {
+                                    super::workspace::acquisition_details(app, ui);
+                                    super::plot_controls::export_spectrum(
+                                        ui,
+                                        &points,
+                                        "Instrument intensity",
+                                    );
+                                }
+                            }
+                            ui.separator();
+                            if ui
+                                .button("Clear spectrum")
+                                .on_hover_text("Clear the selected spectrum and expand chromatograms")
+                                .clicked()
+                            {
+                                if let Some(file) =
+                                    app.active_file_id.and_then(|id| app.files.get_mut(&id))
+                                {
+                                    file.cache.mass_spectrum = None;
+                                }
+                                app.user_input.retention_time_ms_spectrum = None;
+                                app.workspace.view.spectrum = false;
+                                ui.close();
+                            }
+                            if ui.button("Hide spectrum panel").clicked() {
+                                app.workspace.view.spectrum = false;
+                                ui.close();
+                            }
+                        });
+                    });
+                });
         });
 }
 
@@ -1130,18 +1221,19 @@ mod compact_header_tests {
                     if frame == 0 {
                         continue;
                     }
+                    let experimental = ["Identification", "Untargeted analysis", "Statistics"];
                     for label in [
                         "File",
                         "Project",
                         "View",
                         "Data explorer",
                         "Quantification and QC",
-                        "Identification",
-                        "Untargeted analysis",
-                        "Statistics",
                         "Reports",
                         "AI activity",
-                    ] {
+                    ]
+                    .into_iter()
+                    .chain(experimental.into_iter().filter(|_| crate::EXPERIMENTAL))
+                    {
                         assert!(
                             super::super::test_render::text_center(&output.shapes, label).is_some(),
                             "missing compact header control {label}"

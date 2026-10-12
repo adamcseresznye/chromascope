@@ -119,9 +119,11 @@ fn complete_targeted_workflow_review_qc_report_and_project_history() {
         let (mut client,task)=connect(EngineMcp::new(vec![temp.path().to_owned()]).unwrap().with_project_writes(true)).await;
         let listed=client.rpc("tools/list",json!({})).await;
         let tools=listed["result"]["tools"].as_array().unwrap();
-        for name in ["analytical_operation","start_untargeted","untargeted_features","start_analysis","commit_analysis"] {assert!(tools.iter().any(|t|t["name"]==name));}
+        for name in ["analytical_operation","start_analysis","commit_analysis"] {assert!(tools.iter().any(|t|t["name"]==name));}
+        for name in ["start_untargeted","untargeted_features"] {assert_eq!(tools.iter().any(|t|t["name"]==name),chromascope::EXPERIMENTAL);}
         let schema=tools.iter().find(|t|t["name"]=="start_analysis").unwrap()["inputSchema"].to_string();
-        for operation in ["targeted_batch","analyze_statistics","search_spectral_library","revise_chromatogram","evaluate_targeted_qc"] {assert!(schema.contains(operation));}
+        for operation in ["targeted_batch","revise_chromatogram","evaluate_targeted_qc"] {assert!(schema.contains(operation));}
+        for operation in ["analyze_statistics","search_spectral_library"] {assert_eq!(schema.contains(operation),chromascope::EXPERIMENTAL);}
         let capabilities = client.call("analysis_capabilities", json!({})).await;
         assert_eq!(capabilities["result"]["structuredContent"]["workflows"].as_array().unwrap().len(),6);
         assert!(capabilities["result"]["structuredContent"]["response_schema"].is_object());
@@ -315,4 +317,54 @@ async fn configured_project_report_export_protocol() {
         .contains("not_available"));
     drop(client);
     task.abort();
+}
+
+/// Identification, Untargeted and Statistics are compiled but invisible to MCP clients by default.
+#[cfg(not(feature = "experimental"))]
+#[test]
+fn experimental_workflows_are_hidden_and_rejected() {
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("source");
+        std::fs::write(&path, b"source identity anchor").unwrap();
+        let (mut client, task) =
+            connect(EngineMcp::new(vec![temp.path().to_owned()]).unwrap()).await;
+        let listed = client.rpc("tools/list", json!({})).await;
+        let tools = listed["result"]["tools"].as_array().unwrap();
+        assert!(!tools.is_empty());
+        let hidden = [
+            "analyze_statistics",
+            "export_statistics",
+            "untargeted",
+            "feature_annotation",
+            "feature_matrix",
+            "spectral_library",
+            "formula_candidates",
+            "isotope",
+        ];
+        for tool in tools {
+            let text = tool.to_string();
+            for word in hidden {
+                assert!(!text.contains(word), "{} still mentions {word}", tool["name"]);
+            }
+        }
+        let capabilities = client.call("analysis_capabilities", json!({})).await;
+        let text = capabilities["result"]["structuredContent"].to_string();
+        for word in hidden {
+            assert!(!text.contains(word), "capabilities still mention {word}");
+        }
+        let request = json!({"version":1,"operation_id":uuid::Uuid::new_v4().to_string(),"actor":"AI","operation":{"operation":"import_spectral_library","text":"","format":"msp","source":{"name":"n","version":"1","url":"u","license":"l"}}});
+        let args = json!({"path":path,"request":request});
+        for tool in ["start_analysis", "analytical_operation"] {
+            let reply = client.call(tool, args.clone()).await;
+            assert_eq!(
+                reply["result"]["structuredContent"]["code"], "experimental_unavailable",
+                "{tool}: {reply}"
+            );
+        }
+        let reply = client.call("start_untargeted", args).await;
+        assert!(reply["error"].is_object(), "{reply}");
+        drop(client);
+        task.await.unwrap();
+    });
 }

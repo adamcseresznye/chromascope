@@ -282,6 +282,7 @@ fn engine_roundtrip_exports_and_request_integrity() {
     verify_response(&export).unwrap();
 }
 
+#[cfg(feature = "experimental")]
 #[test]
 fn cli_create_new_export_and_project_revision_restore() {
     use std::{
@@ -418,6 +419,7 @@ fn feature_matrix_conversion_keeps_original_filters_and_raw_evidence() {
     assert!(csv.contains("stable-triangle"));
     assert!(!csv.contains("known-triangle"));
 }
+#[cfg(feature = "experimental")]
 #[cfg(feature = "mcp-headless")]
 #[test]
 fn actual_mcp_statistics_and_export() {

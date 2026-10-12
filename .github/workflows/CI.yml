@@ -56,6 +56,12 @@ jobs:
       - name: Run tests
         run: cargo test --locked --all-features
 
+      - name: Lint default build (experimental workflows hidden)
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Test default build (experimental workflows hidden)
+        run: cargo test --locked
+
       - name: Verify GUI-free MCP and CLI tests
         run: cargo test --locked --no-default-features --features mcp-headless
 
