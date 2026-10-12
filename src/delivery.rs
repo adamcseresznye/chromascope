@@ -694,6 +694,11 @@ pub(crate) fn relocate(root: &Path, p: &mut Project) -> Result<BTreeMap<String, 
                 "Source mapping escapes bundle",
             ));
         }
+        // Registered sources are canonical (`\\?\C:\...` on Windows) while requests keep the
+        // path the user typed, so the plain spelling must relocate too.
+        if let Some(plain) = old.strip_prefix(r"\\?\") {
+            resolved.insert(plain.to_owned(), path.to_string_lossy().into_owned());
+        }
         resolved.insert(old, path.to_string_lossy().into_owned());
     }
     for s in &mut p.sources {
@@ -702,6 +707,34 @@ pub(crate) fn relocate(root: &Path, p: &mut Project) -> Result<BTreeMap<String, 
         }
     }
     Ok(resolved)
+}
+/// A measurement's `sample` label is the source file name, which changes with the relocated copy.
+fn relabel_measurements(value: &mut Value, map: &BTreeMap<String, String>) {
+    match value {
+        Value::Array(a) => {
+            for v in a {
+                relabel_measurements(v, map)
+            }
+        }
+        Value::Object(o) => {
+            let relocated = match (o.get("source"), o.contains_key("run")) {
+                (Some(Value::String(source)), true) => map.get(source).cloned(),
+                _ => None,
+            };
+            if let (Some(new), true) = (relocated, o.contains_key("sample")) {
+                if let Some(name) = Path::new(&new).file_name() {
+                    o.insert(
+                        "sample".into(),
+                        Value::String(name.to_string_lossy().into()),
+                    );
+                }
+            }
+            for v in o.values_mut() {
+                relabel_measurements(v, map)
+            }
+        }
+        _ => {}
+    }
 }
 fn replace_paths(value: &mut Value, map: &BTreeMap<String, String>) {
     match value {
@@ -754,6 +787,7 @@ pub fn reprocess(root: &Path, id: ResultId) -> Result<Value> {
         &JobControl::default(),
     )?;
     let mut expected = serde_json::to_value(&old.output).map_err(err)?;
+    relabel_measurements(&mut expected, &map);
     replace_paths(&mut expected, &map);
     if new.kernel_version != old.kernel_version {
         return Err(EngineError::new(

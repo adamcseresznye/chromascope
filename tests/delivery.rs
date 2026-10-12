@@ -192,33 +192,6 @@ fn raw_extraction_reproduces_after_portable_relocation() {
 }
 
 include!("fixtures/targeted_support.rs");
-/// JSON pointers where two values differ, with both sides, for readable failure output.
-fn json_differences(
-    left: &serde_json::Value,
-    right: &serde_json::Value,
-    pointer: String,
-    out: &mut Vec<String>,
-) {
-    use serde_json::Value;
-    match (left, right) {
-        (Value::Object(a), Value::Object(b)) => {
-            for key in a.keys().chain(b.keys().filter(|k| !a.contains_key(*k))) {
-                let path = format!("{pointer}/{key}");
-                match (a.get(key), b.get(key)) {
-                    (Some(x), Some(y)) => json_differences(x, y, path, out),
-                    (x, y) => out.push(format!("{path}: stored {x:?} vs replayed {y:?}")),
-                }
-            }
-        }
-        (Value::Array(a), Value::Array(b)) if a.len() == b.len() => {
-            for (index, (x, y)) in a.iter().zip(b).enumerate() {
-                json_differences(x, y, format!("{pointer}/{index}"), out);
-            }
-        }
-        _ if left != right => out.push(format!("{pointer}: stored {left} vs replayed {right}")),
-        _ => {}
-    }
-}
 #[test]
 fn calibration_quantification_tables_and_replay_reference() {
     let temp = tempfile::tempdir().unwrap();
@@ -263,32 +236,13 @@ fn calibration_quantification_tables_and_replay_reference() {
         .join(format!("{}-calibration-0-fitted.svg", id.0))
         .exists());
     let replay = delivery::reprocess(&out, id).unwrap();
-    if replay["reproduced"] != true {
-        // Name the differing fields instead of dumping the whole response.
-        let mut original = serde_json::to_value(&r.output).unwrap();
-        let mut replayed = replay["response"]["output"].clone();
-        for pointer in replay["excluded_run_metadata_pointers"].as_array().unwrap() {
-            let pointer = pointer.as_str().unwrap();
-            *original.pointer_mut(pointer).unwrap() = serde_json::Value::Null;
-            *replayed.pointer_mut(pointer).unwrap() = serde_json::Value::Null;
-        }
-        let mut differences = Vec::new();
-        json_differences(&original, &replayed, String::new(), &mut differences);
-        panic!(
-            "replay differs from the stored result at {} location(s):
-{}",
-            differences.len(),
-            differences
-                .iter()
-                .take(20)
-                .cloned()
-                .collect::<Vec<_>>()
-                .join(
-                    "
-"
-                )
-        );
-    }
+    assert_eq!(replay["reproduced"], true, "{replay}");
+    // The replay must read the bundled copy of the source (on every platform), and its
+    // file-name labels follow that copy.
+    let measurement = &replay["response"]["output"]["batch"]["observations"][0]["quantifier"];
+    assert!(measurement["source"].as_str().unwrap().contains("sources"));
+    assert!(measurement["sample"].as_str().unwrap().ends_with(".mzML"));
+    assert_ne!(measurement["sample"], "sample0.mzML");
     assert_eq!(
         replay["excluded_run_metadata_pointers"]
             .as_array()
