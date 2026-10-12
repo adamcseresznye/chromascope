@@ -29,7 +29,9 @@ pub fn navigation(app: &mut MzViewerApp, ui: &mut egui::Ui) {
         (ACTIVITY, "AI activity"),
     ]
     .into_iter()
-    .filter(|(id, _)| crate::EXPERIMENTAL || !matches!(*id, IDENTIFICATION | UNTARGETED | STATISTICS))
+    .filter(|(id, _)| {
+        crate::EXPERIMENTAL || !matches!(*id, IDENTIFICATION | UNTARGETED | STATISTICS)
+    })
     .collect();
     let mut selected = if app.quant.active {
         QUANT
@@ -1135,7 +1137,12 @@ mod keyboard_contract_tests {
             assert!(!app.quant.active && !app.spectral.open && !app.statistics.open);
         } else {
             assert!(app.delivery.open);
-            assert!(!app.quant.active && !app.spectral.open && !app.untargeted.open && !app.statistics.open);
+            assert!(
+                !app.quant.active
+                    && !app.spectral.open
+                    && !app.untargeted.open
+                    && !app.statistics.open
+            );
         }
     }
     #[test]

@@ -29,7 +29,9 @@ fn visible_text_center(shapes: &[egui::epaint::ClippedShape], text: &str) -> Opt
             _ => None,
         }
     }
-    shapes.iter().find_map(|s| find(&s.shape, s.clip_rect, text))
+    shapes
+        .iter()
+        .find_map(|s| find(&s.shape, s.clip_rect, text))
 }
 
 /// Locate a real rendered control, scrolling the viewport when forms grow.

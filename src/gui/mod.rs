@@ -531,9 +531,7 @@ impl MzViewerApp {
         {
             let n = active_file.data.available_chromatograms.len();
             match self.user_input.native_chromatogram {
-                Some(i) if i < n => Some(
-                    active_file.data.available_chromatograms[i].index,
-                ),
+                Some(i) if i < n => Some(active_file.data.available_chromatograms[i].index),
                 _ => active_file
                     .data
                     .available_chromatograms

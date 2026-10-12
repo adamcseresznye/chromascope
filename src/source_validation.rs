@@ -150,8 +150,7 @@ pub(crate) fn validate_mzml(path: &Path, control: Option<&crate::jobs::JobContro
                     for attr in tag.attributes() {
                         let attr = attr.map_err(invalid)?;
                         if attr.key.as_ref() == b"accession" {
-                            let text =
-                                attr.unescape_value().map_err(invalid)?.into_owned();
+                            let text = attr.unescape_value().map_err(invalid)?.into_owned();
                             chromatogram_has_time |= text == "MS:1000595";
                             chromatogram_has_intensity |= text == "MS:1000515";
                         }
@@ -238,11 +237,9 @@ pub(crate) fn validate_mzml(path: &Path, control: Option<&crate::jobs::JobContro
                 match chromatogram_length.take() {
                     Some(0) => {}
                     Some(_) if chromatogram_has_time && chromatogram_has_intensity => {}
-                    _ => {
-                        return Err(invalid(
-                            "nonempty chromatogram requires declared length and time/intensity arrays",
-                        ))
-                    }
+                    _ => return Err(invalid(
+                        "nonempty chromatogram requires declared length and time/intensity arrays",
+                    )),
                 }
             }
             Event::Eof => break,
@@ -250,8 +247,7 @@ pub(crate) fn validate_mzml(path: &Path, control: Option<&crate::jobs::JobContro
         }
         buffer.clear();
     }
-    if !root_seen || !open_tags.is_empty() || spectrum_has_scan.is_some() || scan_time.is_some()
-    {
+    if !root_seen || !open_tags.is_empty() || spectrum_has_scan.is_some() || scan_time.is_some() {
         return Err(invalid(
             "incomplete mzML root, spectrum count or scan metadata",
         ));

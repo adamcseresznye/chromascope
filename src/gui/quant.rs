@@ -1167,9 +1167,23 @@ fn review_stage(q: &mut QuantState, ui: &mut egui::Ui) {
         .filter(|r| r.method != current || is_unresolved(&r.status))
         .count();
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(format!("{} {}", q.results.len(), if q.results.len() == 1 { "result" } else { "results" })).strong());
+        ui.label(
+            egui::RichText::new(format!(
+                "{} {}",
+                q.results.len(),
+                if q.results.len() == 1 {
+                    "result"
+                } else {
+                    "results"
+                }
+            ))
+            .strong(),
+        );
         if unresolved > 0 {
-            ui.colored_label(ui.visuals().warn_fg_color, format!("● {unresolved} need review"));
+            ui.colored_label(
+                ui.visuals().warn_fg_color,
+                format!("● {unresolved} need review"),
+            );
         } else {
             ui.colored_label(Color32::from_rgb(80, 175, 120), "● all resolved");
         }

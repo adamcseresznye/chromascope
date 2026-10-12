@@ -116,7 +116,9 @@ pub(super) fn show_with(
                     .hint_text("Filter rows…")
                     .desired_width(220.),
             );
-            if !state.filter.is_empty() && ui.small_button("✕").on_hover_text("Clear filter").clicked() {
+            if !state.filter.is_empty()
+                && ui.small_button("✕").on_hover_text("Clear filter").clicked()
+            {
                 state.filter.clear();
             }
         });
@@ -151,7 +153,8 @@ pub(super) fn show_with(
         .id_salt((id, "horizontal"))
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 0.;
-            let (header, _) = ui.allocate_exact_size(egui::vec2(total, ROW_HEIGHT), egui::Sense::hover());
+            let (header, _) =
+                ui.allocate_exact_size(egui::vec2(total, ROW_HEIGHT), egui::Sense::hover());
             ui.painter()
                 .rect_filled(header, 3., ui.visuals().widgets.noninteractive.weak_bg_fill);
             let mut x = header.left();
@@ -171,7 +174,11 @@ pub(super) fn show_with(
                     }
                 }
                 let arrow = if state.column == i {
-                    if state.descending { " ↓" } else { " ↑" }
+                    if state.descending {
+                        " ↓"
+                    } else {
+                        " ↑"
+                    }
                 } else {
                     ""
                 };
@@ -196,7 +203,8 @@ pub(super) fn show_with(
                     .interact(grip, ui.id().with((id, "grip", i)), egui::Sense::drag())
                     .on_hover_cursor(egui::CursorIcon::ResizeColumn);
                 if drag.dragged() {
-                    state.widths[i] = (state.widths[i] + drag.drag_delta().x / scale).clamp(50., 600.);
+                    state.widths[i] =
+                        (state.widths[i] + drag.drag_delta().x / scale).clamp(50., 600.);
                 }
                 if i + 1 < headers.len() {
                     ui.painter().vline(
@@ -302,7 +310,11 @@ pub(super) fn show_with(
         });
     ui.add_space(2.);
     ui.small(if indices.len() == rows.len() {
-        format!("{} {}", rows.len(), if rows.len() == 1 { "row" } else { "rows" })
+        format!(
+            "{} {}",
+            rows.len(),
+            if rows.len() == 1 { "row" } else { "rows" }
+        )
     } else {
         format!("{} of {} rows", indices.len(), rows.len())
     });

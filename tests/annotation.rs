@@ -7,12 +7,12 @@ use chromascope::{
     spectral::*,
     untargeted::*,
 };
+use std::{collections::BTreeMap, path::Path};
 #[cfg(feature = "experimental")]
 use std::{
     io::Write,
     process::{Command, Stdio},
 };
-use std::{collections::BTreeMap, path::Path};
 fn fixture() -> Report {
     let roles = [Role::Sample, Role::Blank, Role::Qc, Role::Qc, Role::Qc];
     let samples = roles

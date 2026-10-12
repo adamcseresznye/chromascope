@@ -653,7 +653,10 @@ pub(super) fn scan_navigation(app: &mut MzViewerApp, ui: &mut egui::Ui) {
     let count = file.data.bounds.scan_count;
     let scan = file.cache.mass_spectrum.as_ref().map(|s| s.index);
     if ui
-        .add_enabled(scan.is_some_and(|s| s > 0), egui::Button::new("Previous").small())
+        .add_enabled(
+            scan.is_some_and(|s| s > 0),
+            egui::Button::new("Previous").small(),
+        )
         .clicked()
     {
         navigate(app, -1);

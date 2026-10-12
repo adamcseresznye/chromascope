@@ -80,7 +80,8 @@ fn schema_tag(schema: &serde_json::Value, key: &str) -> Option<String> {
 fn is_hidden_variant(schema: &serde_json::Value) -> bool {
     schema_tag(schema, "operation")
         .is_some_and(|name| crate::domain::Operation::EXPERIMENTAL_NAMES.contains(&name.as_str()))
-        || schema_tag(schema, "kind").is_some_and(|name| EXPERIMENTAL_KINDS.contains(&name.as_str()))
+        || schema_tag(schema, "kind")
+            .is_some_and(|name| EXPERIMENTAL_KINDS.contains(&name.as_str()))
 }
 fn strip_hidden_variants(schema: &mut serde_json::Value) {
     match schema {

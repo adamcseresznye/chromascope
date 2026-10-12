@@ -429,12 +429,17 @@ pub(super) fn status_chip(app: &mut MzViewerApp, ctx: &egui::Context, ui: &mut e
                 ui.strong(format!("Step {} of 9 — {}", n.number, n.title));
                 ui.small(&n.detail);
                 if !warnings.is_empty() && n.number >= 5 {
-                    ui.small(format!("{} warning(s) will accompany export", warnings.len()));
+                    ui.small(format!(
+                        "{} warning(s) will accompany export",
+                        warnings.len()
+                    ));
                 }
                 if ui
                     .add(
-                        egui::Button::new(egui::RichText::new(format!("Next: {}", n.action)).strong())
-                            .fill(ui.visuals().selection.bg_fill),
+                        egui::Button::new(
+                            egui::RichText::new(format!("Next: {}", n.action)).strong(),
+                        )
+                        .fill(ui.visuals().selection.bg_fill),
                     )
                     .clicked()
                 {

@@ -203,7 +203,10 @@ pub fn add_display_options(app: &mut MzViewerApp, ui: &mut Ui) {
                 let bounds = &file.data.bounds;
                 let max_reasonable = (bounds.scan_count / 10).max(3) as u8;
 
-                if !native_mode && app.user_input.smoothing > max_reasonable && bounds.scan_count > 0 {
+                if !native_mode
+                    && app.user_input.smoothing > max_reasonable
+                    && bounds.scan_count > 0
+                {
                     ui.add_space(5.0);
                     ui.colored_label(
                         egui::Color32::from_rgb(255, 100, 100),
@@ -637,7 +640,10 @@ pub fn update_file_information_panel(app: &mut MzViewerApp, ctx: &egui::Context)
                             && !file.data.available_chromatograms.is_empty()
                         {
                             let valid = app.user_input.native_chromatogram.is_some_and(|i| {
-                                file.data.available_chromatograms.iter().any(|c| c.index == i)
+                                file.data
+                                    .available_chromatograms
+                                    .iter()
+                                    .any(|c| c.index == i)
                             });
                             if !valid {
                                 app.user_input.native_chromatogram = file
@@ -757,7 +763,12 @@ pub fn update_central_panel(app: &mut MzViewerApp, ctx: &Context) {
 
 /// Slim view toolbar floating over the spectrum's top-left corner; it appears on hover so the
 /// plot stays uncluttered, and secondary actions live in its overflow menu.
-fn spectrum_toolbar(app: &mut MzViewerApp, ui: &mut Ui, response: &egui::Response, plot_id: egui::Id) {
+fn spectrum_toolbar(
+    app: &mut MzViewerApp,
+    ui: &mut Ui,
+    response: &egui::Response,
+    plot_id: egui::Id,
+) {
     use super::plot_controls::{set_legend, trigger};
     let has_spectrum = app
         .active_file_id
@@ -834,7 +845,9 @@ fn spectrum_toolbar(app: &mut MzViewerApp, ui: &mut Ui, response: &egui::Respons
                             ui.separator();
                             if ui
                                 .button("Clear spectrum")
-                                .on_hover_text("Clear the selected spectrum and expand chromatograms")
+                                .on_hover_text(
+                                    "Clear the selected spectrum and expand chromatograms",
+                                )
                                 .clicked()
                             {
                                 if let Some(file) =
@@ -936,8 +949,7 @@ pub fn add_native_chromatogram_dropdown(app: &mut MzViewerApp, ui: &mut Ui) {
         .show_ui(ui, |ui| {
             for chrom in &available {
                 let label = format!("{} ({} pts)", chrom.label, chrom.point_count);
-                let is_selected =
-                    app.user_input.native_chromatogram == Some(chrom.index);
+                let is_selected = app.user_input.native_chromatogram == Some(chrom.index);
                 if ui.selectable_label(is_selected, &label).clicked() {
                     app.user_input.native_chromatogram = Some(chrom.index);
                     app.state_changed = StateChange::Changed;

@@ -255,16 +255,29 @@ fn parse_transition_mzs(id: &str) -> (Option<f64>, Option<f64>) {
             if num.is_empty() {
                 return None;
             }
-            num.parse::<f64>().ok().filter(|v| v.is_finite() && *v > 0.0)
+            num.parse::<f64>()
+                .ok()
+                .filter(|v| v.is_finite() && *v > 0.0)
         })
     }
     (token_value(id, "Q1="), token_value(id, "Q3="))
 }
 
 /// Infos plus global RT extrema and optional m/z extrema from Q1/Q3 labels.
-type NativeChromatogramBounds = (Vec<NativeChromatogramInfo>, f32, f32, Option<f64>, Option<f64>);
+type NativeChromatogramBounds = (
+    Vec<NativeChromatogramInfo>,
+    f32,
+    f32,
+    Option<f64>,
+    Option<f64>,
+);
 
-fn native_chromatogram_label(id: &str, chrom_type: &str, precursor: Option<f64>, product: Option<f64>) -> String {
+fn native_chromatogram_label(
+    id: &str,
+    chrom_type: &str,
+    precursor: Option<f64>,
+    product: Option<f64>,
+) -> String {
     match (precursor, product) {
         (Some(q1), Some(q3)) => format!("SRM {q1} → {q3}"),
         (Some(q1), None) => format!("Q1 {q1} ({id})"),
@@ -358,10 +371,7 @@ impl MzData {
             } else {
                 modes.join("/")
             };
-            format!(
-                "{} spectra ({})",
-                self.bounds.scan_count, modes
-            )
+            format!("{} spectra ({})", self.bounds.scan_count, modes)
         } else if self.has_native_chromatograms() {
             format!(
                 "{} stored chromatograms and no spectra",
@@ -727,7 +737,10 @@ impl MzData {
         match self.read_native_chromatogram_infos() {
             Ok((infos, _, _, _, _)) => self.available_chromatograms = infos,
             Err(e) => {
-                warn!("Ignoring unreadable chromatogram list in {:?}: {}", self.file_name, e);
+                warn!(
+                    "Ignoring unreadable chromatogram list in {:?}: {}",
+                    self.file_name, e
+                );
                 self.available_chromatograms = Vec::new();
             }
         }
@@ -807,12 +820,16 @@ impl MzData {
                 ))
             })?;
             let desc = chrom.description().clone();
-            let times = chrom
-                .time()
-                .map_err(|e| ChromascopeError::MzDataError(format!("Cannot read chromatogram {index} time array: {e:?}")))?;
-            let intensities = chrom
-                .intensity()
-                .map_err(|e| ChromascopeError::MzDataError(format!("Cannot read chromatogram {index} intensity array: {e:?}")))?;
+            let times = chrom.time().map_err(|e| {
+                ChromascopeError::MzDataError(format!(
+                    "Cannot read chromatogram {index} time array: {e:?}"
+                ))
+            })?;
+            let intensities = chrom.intensity().map_err(|e| {
+                ChromascopeError::MzDataError(format!(
+                    "Cannot read chromatogram {index} intensity array: {e:?}"
+                ))
+            })?;
             if times.len() != intensities.len() {
                 return Err(ChromascopeError::MzDataError(format!(
                     "Chromatogram {index} time/intensity length mismatch ({} vs {})",
@@ -880,7 +897,9 @@ impl MzData {
     /// lookup on such traces fails gracefully with "no spectrum found".
     pub fn get_native_chromatogram(&mut self, index: usize) -> Result<ChromatogramData> {
         let reader = self.msfile.as_mut().ok_or_else(|| {
-            ChromascopeError::FileNotOpened("File must be opened before extracting chromatogram".into())
+            ChromascopeError::FileNotOpened(
+                "File must be opened before extracting chromatogram".into(),
+            )
         })?;
         let count = reader.count_chromatograms();
         if index >= count {
@@ -891,12 +910,16 @@ impl MzData {
         let chrom = reader.get_chromatogram_by_index(index).ok_or_else(|| {
             ChromascopeError::MzDataError(format!("No native chromatogram at index {index}"))
         })?;
-        let times = chrom
-            .time()
-            .map_err(|e| ChromascopeError::MzDataError(format!("Cannot read native chromatogram time array: {e:?}")))?;
-        let intensities = chrom
-            .intensity()
-            .map_err(|e| ChromascopeError::MzDataError(format!("Cannot read native chromatogram intensity array: {e:?}")))?;
+        let times = chrom.time().map_err(|e| {
+            ChromascopeError::MzDataError(format!(
+                "Cannot read native chromatogram time array: {e:?}"
+            ))
+        })?;
+        let intensities = chrom.intensity().map_err(|e| {
+            ChromascopeError::MzDataError(format!(
+                "Cannot read native chromatogram intensity array: {e:?}"
+            ))
+        })?;
         if times.len() != intensities.len() {
             return Err(ChromascopeError::MzDataError(
                 "Native chromatogram time/intensity length mismatch".into(),
@@ -2716,8 +2739,7 @@ mod tests {
         // Regression test: some converters write value="nan" for scan window
         // limits (e.g. SIM data with no scan range). These must be treated as
         // missing metadata with peak-array fallback, not a fatal open error.
-        let original =
-            std::fs::read_to_string(get_test_file_path()).expect("read test mzML");
+        let original = std::fs::read_to_string(get_test_file_path()).expect("read test mzML");
         let text = original
             .replace(
                 "accession=\"MS:1000501\" name=\"scan window lower limit\" value=\"150.0\"",
@@ -2727,7 +2749,10 @@ mod tests {
                 "accession=\"MS:1000500\" name=\"scan window upper limit\" value=\"1000.0\"",
                 "accession=\"MS:1000500\" name=\"scan window upper limit\" value=\"nan\"",
             );
-        assert!(text.contains("value=\"nan\""), "test file must contain scan windows to corrupt");
+        assert!(
+            text.contains("value=\"nan\""),
+            "test file must contain scan windows to corrupt"
+        );
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("nan-windows.mzML");
         std::fs::write(&path, &text).unwrap();
@@ -2921,8 +2946,7 @@ mod tests {
             precursor_mz: None,
             native_chromatogram: Some(1),
         };
-        let (plot, raw) =
-            crate::processing::process_chromatogram(&mut data, &params).unwrap();
+        let (plot, raw) = crate::processing::process_chromatogram(&mut data, &params).unwrap();
         assert_eq!(plot, vec![[1.0, 0.0], [2.0, 100.0], [3.0, 10.0]]);
         assert_eq!(raw.retention_time.len(), 3);
     }
@@ -3010,8 +3034,7 @@ mod tests {
             precursor_mz: None,
             native_chromatogram: None,
         };
-        let (plot, _) =
-            crate::processing::process_chromatogram(&mut data, &sim_params).unwrap();
+        let (plot, _) = crate::processing::process_chromatogram(&mut data, &sim_params).unwrap();
         assert_eq!(plot.len(), 1);
         // An FS filter matches nothing in a SIM-only file: the error must say
         // what the file actually holds.

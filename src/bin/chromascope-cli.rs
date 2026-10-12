@@ -22,9 +22,11 @@ Usage:
   project-compare-methods LEFT.json RIGHT.json
   project-migrate PROJECT
 ";
-const HELP_EXPORTS: &str = "  export-peaks|export-targeted|export-targeted-calibration|export-qc NEW_FILE < response.json
+const HELP_EXPORTS: &str =
+    "  export-peaks|export-targeted|export-targeted-calibration|export-qc NEW_FILE < response.json
 ";
-const HELP_EXPERIMENTAL_EXPORTS: &str = "  export-peaks|export-targeted|export-targeted-calibration|export-qc|
+const HELP_EXPERIMENTAL_EXPORTS: &str =
+    "  export-peaks|export-targeted|export-targeted-calibration|export-qc|
   export-spectral|export-features|export-features-filtered|
   export-feature-observations|export-annotations|export-statistics NEW_FILE < response.json
 ";

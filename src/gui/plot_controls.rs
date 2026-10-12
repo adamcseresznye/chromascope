@@ -35,7 +35,10 @@ fn plot_inner(ui: &mut egui::Ui, source: impl std::hash::Hash, toolbar: bool) ->
         .unwrap_or(0);
     let mut memory = PlotMemory::load(ui.ctx(), id);
     let (mut zoom_in, mut zoom_out, mut left, mut right) = (false, false, false, false);
-    match ui.ctx().data_mut(|d| d.remove_temp::<u8>(id.with("action"))) {
+    match ui
+        .ctx()
+        .data_mut(|d| d.remove_temp::<u8>(id.with("action")))
+    {
         Some(1) => reset = true,
         Some(2) => zoom_in = true,
         Some(3) => zoom_out = true,
