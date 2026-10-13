@@ -1131,24 +1131,36 @@ fn plot_options(app: &mut MzViewerApp, ui: &mut Ui) {
         app.workspace.view.intensity_scale,
         app.workspace.view.intensity_maximum,
     );
-    // Inline options: a dropdown inside this menu would close the menu as soon as it opens.
-    ui.label("Intensity scale")
-        .on_hover_text("Shared scales use the same intensity axis for every visible trace; data is not normalized. The automatic maximum includes all visible traces across grid pages.");
-    for (value, label) in [
-        (IntensityScale::Individual, "Individual"),
-        (IntensityScale::SharedHighest, "Shared highest peak"),
-        (IntensityScale::SharedCustom, "Shared custom maximum"),
-    ] {
-        ui.radio_value(&mut app.workspace.view.intensity_scale, value, label);
-    }
-    if app.workspace.view.intensity_scale == IntensityScale::SharedCustom {
-        ui.label("Maximum (a.u.)");
-        ui.add(
-            egui::DragValue::new(&mut app.workspace.view.intensity_maximum)
-                .range(1.0..=f64::MAX)
-                .speed(1000.0),
+    // A submenu, like Grid layout: a ComboBox here would close this menu when it opens.
+    let current = match app.workspace.view.intensity_scale {
+        IntensityScale::Individual => "Individual",
+        IntensityScale::SharedHighest => "Shared highest peak",
+        IntensityScale::SharedCustom => "Shared custom maximum",
+    };
+    ui.menu_button(format!("Intensity scale: {current}…"), |ui| {
+        for (value, label) in [
+            (IntensityScale::Individual, "Individual"),
+            (IntensityScale::SharedHighest, "Shared highest peak"),
+            (IntensityScale::SharedCustom, "Shared custom maximum"),
+        ] {
+            ui.radio_value(&mut app.workspace.view.intensity_scale, value, label);
+        }
+        if app.workspace.view.intensity_scale == IntensityScale::SharedCustom {
+            ui.horizontal(|ui| {
+                ui.label("Maximum (a.u.)");
+                ui.add(
+                    egui::DragValue::new(&mut app.workspace.view.intensity_maximum)
+                        .range(1.0..=f64::MAX)
+                        .speed(1000.0),
+                );
+            });
+        }
+        ui.small(
+            "Shared scales use one intensity axis for every visible trace; data is not normalized.",
         );
-    }
+    })
+    .response
+    .on_hover_text("The automatic maximum includes all visible traces across grid pages.");
     if previous
         != (
             app.workspace.view.intensity_scale,
