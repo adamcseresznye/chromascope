@@ -10,6 +10,7 @@ pub const EXPERIMENTAL: bool = cfg!(feature = "experimental");
 
 pub mod annotation;
 pub mod chromatography;
+pub mod confidence;
 pub mod delivery;
 pub mod domain;
 pub mod engine;
@@ -18,6 +19,7 @@ pub mod export;
 #[cfg(feature = "gui")]
 pub mod gui;
 pub mod import;
+pub mod integration;
 pub mod jobs;
 #[cfg(feature = "mcp")]
 pub mod mcp;

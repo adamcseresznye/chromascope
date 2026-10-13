@@ -701,10 +701,13 @@ pub fn run(request: BatchRequest, control: &crate::jobs::JobControl) -> Result<B
     }
     evaluate(request, observations, hashes)
 }
+/// Peaks are used whatever their confidence; low confidence only adds a flag (see
+/// `low_confidence_unreviewed`), so results saved with the old `Ambiguous` state stay usable.
 fn usable(m: &crate::quant::Measurement) -> bool {
     matches!(
         m.status,
         crate::quant::Status::Automatic
+            | crate::quant::Status::Ambiguous
             | crate::quant::Status::Manual
             | crate::quant::Status::Reviewed
     ) && m.peak.as_ref().is_some_and(|p| p.area.is_finite())
@@ -767,7 +770,14 @@ pub fn evaluate(
                 if p.start < bounds[0] || p.end > bounds[1] {
                     return Err(invalid("Observed peak outside target RT window"));
                 }
-                let actual = crate::quant::measure(&m.trace, p.start, p.end).map_err(invalid)?;
+                let actual = crate::quant::measure_for(
+                    &m.trace,
+                    p.start,
+                    p.end,
+                    &expected_method.analytes[index],
+                    &expected_method,
+                )
+                .map_err(invalid)?;
                 if actual != *p {
                     return Err(EngineError::new(
                         "corrupt_result",
@@ -792,6 +802,9 @@ pub fn evaluate(
             if o.quantifier.peak.as_ref().is_some_and(|p| p.area <= 0.0) {
                 f.push("nonpositive_analyte_area".into());
             }
+            if o.quantifier.low_confidence_unreviewed() {
+                f.push("low_confidence_peak".into());
+            }
             let mut value = if usable(&o.quantifier) {
                 o.quantifier.peak.as_ref().map(|p| p.area)
             } else {
@@ -811,6 +824,9 @@ pub fn evaluate(
                     }
                     value = None;
                 } else {
+                    if is.quantifier.low_confidence_unreviewed() {
+                        f.push("internal_standard_low_confidence".into());
+                    }
                     let area = is.quantifier.peak.as_ref().unwrap().area;
                     let bounds = request
                         .targets
@@ -829,6 +845,9 @@ pub fn evaluate(
                 return Err(invalid("Response overflow"));
             }
             for (q, m) in t.qualifiers.iter().zip(&o.qualifiers) {
+                if usable(m) && m.low_confidence_unreviewed() {
+                    f.push("qualifier_low_confidence".into());
+                }
                 if !usable(m) {
                     f.push("qualifier_missing_or_invalid".into());
                 } else if let Some(p) = o.quantifier.peak.as_ref().filter(|p| p.area != 0.0) {

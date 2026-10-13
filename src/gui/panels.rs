@@ -754,21 +754,16 @@ pub fn update_central_panel(app: &mut MzViewerApp, ctx: &Context) {
                     ui.weak(format!("RT {rt:.3} min"));
                 }
                 super::workspace::scan_navigation(app, ui);
+                spectrum_more_menu(app, ui, spectrum_id);
                 super::plot_controls::export_status(ui);
             });
-            let response = plotting::plot_mass_spectrum(app, ui);
-            spectrum_toolbar(app, ui, &response, spectrum_id);
+            plotting::plot_mass_spectrum(app, ui);
         });
 }
 
-/// Slim view toolbar floating over the spectrum's top-left corner; it appears on hover so the
-/// plot stays uncluttered, and secondary actions live in its overflow menu.
-fn spectrum_toolbar(
-    app: &mut MzViewerApp,
-    ui: &mut Ui,
-    response: &egui::Response,
-    plot_id: egui::Id,
-) {
+/// "More" menu in the spectrum header row (next to Previous/Next), mirroring the chromatogram
+/// toolbar: view actions and secondary actions live here instead of floating over the plot.
+fn spectrum_more_menu(app: &mut MzViewerApp, ui: &mut Ui, plot_id: egui::Id) {
     use super::plot_controls::{set_legend, trigger};
     let has_spectrum = app
         .active_file_id
@@ -778,95 +773,65 @@ fn spectrum_toolbar(
         return;
     }
     let ctx = ui.ctx().clone();
-    let menu_open = egui::Popup::is_any_open(&ctx);
-    let hovering = ctx
-        .pointer_hover_pos()
-        .is_some_and(|p| response.rect.expand(4.0).contains(p));
-    if !hovering && !menu_open {
-        return;
-    }
-    egui::Area::new(egui::Id::new("spectrum_toolbar"))
-        .order(egui::Order::Foreground)
-        .fixed_pos(response.rect.left_top() + egui::vec2(8.0, 6.0))
-        .show(&ctx, |ui| {
-            egui::Frame::popup(ui.style())
-                .inner_margin(egui::Margin::symmetric(4, 2))
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 2.0;
-                        for (label, tip, action) in [
-                            ("Reset", "Restore the automatic view", 1),
-                            ("+", "Zoom in", 2),
-                            ("\u{2212}", "Zoom out", 3),
-                        ] {
-                            if ui.small_button(label).on_hover_text(tip).clicked() {
-                                trigger(&ctx, plot_id, action);
-                            }
-                        }
-                        ui.menu_button("\u{2026}", |ui| {
-                            for (label, action) in [("Pan left", 4), ("Pan right", 5)] {
-                                if ui.button(label).clicked() {
-                                    trigger(&ctx, plot_id, action);
-                                    ui.close();
-                                }
-                            }
-                            let mut shown = ctx
-                                .data(|d| d.get_temp::<bool>(plot_id.with("legend")))
-                                .unwrap_or(true);
-                            if ui.checkbox(&mut shown, "Legend").changed() {
-                                set_legend(&ctx, plot_id, shown);
-                            }
-                            ui.separator();
-                            if let Some(id) = app.active_file_id {
-                                let count =
-                                    app.files.get(&id).map_or(0, |f| f.data.bounds.scan_count);
-                                if count > 0 {
-                                    super::workspace::scan_jump(app, ui, id, count);
-                                }
-                                let points = app
-                                    .files
-                                    .get(&id)
-                                    .and_then(|f| f.cache.mass_spectrum.as_ref())
-                                    .map(|s| {
-                                        s.mz.iter()
-                                            .zip(&s.intensity)
-                                            .map(|(&m, &i)| [m, i as f64])
-                                            .collect::<Vec<_>>()
-                                    });
-                                if let Some(points) = points {
-                                    super::workspace::acquisition_details(app, ui);
-                                    super::plot_controls::export_spectrum(
-                                        ui,
-                                        &points,
-                                        "Instrument intensity",
-                                    );
-                                }
-                            }
-                            ui.separator();
-                            if ui
-                                .button("Clear spectrum")
-                                .on_hover_text(
-                                    "Clear the selected spectrum and expand chromatograms",
-                                )
-                                .clicked()
-                            {
-                                if let Some(file) =
-                                    app.active_file_id.and_then(|id| app.files.get_mut(&id))
-                                {
-                                    file.cache.mass_spectrum = None;
-                                }
-                                app.user_input.retention_time_ms_spectrum = None;
-                                app.workspace.view.spectrum = false;
-                                ui.close();
-                            }
-                            if ui.button("Hide spectrum panel").clicked() {
-                                app.workspace.view.spectrum = false;
-                                ui.close();
-                            }
-                        });
-                    });
+    ui.menu_button("More", |ui| {
+        for (label, tip, action) in [
+            ("Reset view", "Restore the automatic view", 1),
+            ("Zoom in", "Zoom in", 2),
+            ("Zoom out", "Zoom out", 3),
+            ("Pan left", "Pan to lower m/z", 4),
+            ("Pan right", "Pan to higher m/z", 5),
+        ] {
+            if ui.button(label).on_hover_text(tip).clicked() {
+                trigger(&ctx, plot_id, action);
+                ui.close();
+            }
+        }
+        // The legend only names the single "Mass Spectrum" series, so it is off by default.
+        let mut shown = ctx
+            .data(|d| d.get_temp::<bool>(plot_id.with("legend")))
+            .unwrap_or(false);
+        if ui.checkbox(&mut shown, "Legend").changed() {
+            set_legend(&ctx, plot_id, shown);
+        }
+        ui.separator();
+        if let Some(id) = app.active_file_id {
+            let count = app.files.get(&id).map_or(0, |f| f.data.bounds.scan_count);
+            if count > 0 {
+                super::workspace::scan_jump(app, ui, id, count);
+            }
+            let points = app
+                .files
+                .get(&id)
+                .and_then(|f| f.cache.mass_spectrum.as_ref())
+                .map(|s| {
+                    s.mz.iter()
+                        .zip(&s.intensity)
+                        .map(|(&m, &i)| [m, i as f64])
+                        .collect::<Vec<_>>()
                 });
-        });
+            if let Some(points) = points {
+                super::workspace::acquisition_details(app, ui);
+                super::plot_controls::export_spectrum(ui, &points, "Instrument intensity");
+            }
+        }
+        ui.separator();
+        if ui
+            .button("Clear spectrum")
+            .on_hover_text("Clear the selected spectrum and expand chromatograms")
+            .clicked()
+        {
+            if let Some(file) = app.active_file_id.and_then(|id| app.files.get_mut(&id)) {
+                file.cache.mass_spectrum = None;
+            }
+            app.user_input.retention_time_ms_spectrum = None;
+            app.workspace.view.spectrum = false;
+            ui.close();
+        }
+        if ui.button("Hide spectrum panel").clicked() {
+            app.workspace.view.spectrum = false;
+            ui.close();
+        }
+    });
 }
 
 /// Adds the plot properties UI elements to the provided `Ui`.

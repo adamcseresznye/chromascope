@@ -33,3 +33,14 @@ precursor_mz = 483.0
 ppm = 10.0
 polarity = "positive"
 smoothing = 0
+
+# Optional per-analyte integration settings. Analytes without this table use the
+# method-level classic settings above. Any omitted key takes its default.
+[analytes.integration]
+algorithm = "savgol_snr"      # classic | valley | savgol_snr | manual
+baseline = "als"              # straight_line | zero | valley_drop | als
+peak_selection = "nearest_expected_rt"
+sg_window = 7
+sg_degree = 2
+minimum_snr = 5.0
+boundary_fraction = 0.02

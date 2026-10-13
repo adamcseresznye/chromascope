@@ -124,6 +124,7 @@ fn measurement(area: Option<f64>, ion: &Ion) -> quant::Measurement {
     };
     quant::Measurement {
         chromatography: None,
+        quality: None,
         sample: "reference".into(),
         source: "synthetic".into(),
         run: "synthetic".into(),
@@ -821,4 +822,52 @@ fn cancelled_missing_source_and_range_extension_fail_structurally() {
     );
     let b = evaluated();
     assert!(b.calibrations["a"].inverse(20.0, [0.5, 100.0]).is_err());
+}
+
+#[test]
+fn low_confidence_peaks_stay_in_the_result_but_are_flagged_until_reviewed() {
+    let r = batch();
+    let mut o = evidence(&r);
+    let i = o
+        .iter()
+        .position(|o| o.sample == "sample0" && o.target == "a")
+        .unwrap();
+    let low = chromascope::confidence::Quality {
+        score: 30,
+        tier: chromascope::confidence::Tier::Low,
+        cap: 100,
+        fwhm: None,
+        checks: vec![],
+    };
+    o[i].quantifier.status = quant::Status::Automatic;
+    o[i].quantifier.quality = Some(low);
+    let flagged = evaluate(r.clone(), o.clone(), Default::default()).unwrap();
+    let row = flagged
+        .results
+        .iter()
+        .find(|r| r.sample == "sample0")
+        .unwrap();
+    assert!(
+        row.response.is_some(),
+        "low confidence must not exclude the peak"
+    );
+    assert!(row.flags.contains(&"low_confidence_peak".into()));
+    // A reviewer's acceptance clears the flag; the confidence itself is kept.
+    o[i].quantifier.status = quant::Status::Reviewed;
+    let reviewed = evaluate(r, o, Default::default()).unwrap();
+    let row = reviewed
+        .results
+        .iter()
+        .find(|r| r.sample == "sample0")
+        .unwrap();
+    assert!(!row.flags.contains(&"low_confidence_peak".into()));
+    assert_eq!(
+        row.response,
+        flagged
+            .results
+            .iter()
+            .find(|r| r.sample == "sample0")
+            .unwrap()
+            .response
+    );
 }

@@ -13,7 +13,13 @@ use std::{
     },
 };
 
-use crate::quant::{detect, measure, new_analyte, validate, Measurement, Method, Status};
+use super::integration_editor;
+use crate::confidence::Tier;
+use crate::integration::{self, Integration};
+use crate::quant::{
+    detect_assessed, measure, measure_for, new_analyte, refresh_consistency, validate, Measurement,
+    Method, Status,
+};
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Batch {
@@ -35,11 +41,9 @@ enum MethodAction {
 #[derive(serde::Serialize, serde::Deserialize)]
 pub(super) struct QuantState {
     targeted: super::targeted::UiState,
-    advanced_config: crate::chromatography::Config,
-    advanced_preview: Option<(usize, crate::chromatography::Analysis)>,
-    advanced_reason: String,
-    reference_shift: f64,
-    reference_bounds: Option<Vec<[f64; 2]>>,
+    /// Integration settings being tuned in the review card: (analyte, applied snapshot, draft).
+    #[serde(skip)]
+    draft: Option<(String, Integration, Integration)>,
     #[cfg(feature = "mcp")]
     remote_job_id: u64,
     pub active: bool,
@@ -62,6 +66,12 @@ pub(super) struct QuantState {
     drag_boundary: Option<bool>,
     confirm_replace: bool,
     method_open: bool,
+    /// Method being edited in the editor window; only OK moves it into `method`.
+    #[serde(skip)]
+    method_draft: Option<(u32, Method)>,
+    /// Bumped whenever `method` is replaced wholesale (New/Open), invalidating the draft.
+    #[serde(skip)]
+    method_epoch: u32,
     batch_samples: Vec<(String, String)>,
     restore_samples: Option<Vec<(String, String)>>,
     pending_sources: Vec<PathBuf>,
@@ -72,11 +82,7 @@ impl Default for QuantState {
     fn default() -> Self {
         Self {
             targeted: super::targeted::UiState::default(),
-            advanced_config: crate::chromatography::Config::default(),
-            advanced_preview: None,
-            advanced_reason: String::new(),
-            reference_shift: 0.0,
-            reference_bounds: None,
+            draft: None,
             #[cfg(feature = "mcp")]
             remote_job_id: 0,
             active: false,
@@ -97,6 +103,8 @@ impl Default for QuantState {
             drag_boundary: None,
             confirm_replace: false,
             method_open: false,
+            method_draft: None,
+            method_epoch: 0,
             batch_samples: vec![],
             restore_samples: None,
             pending_sources: vec![],
@@ -114,20 +122,10 @@ impl QuantState {
     /// Peak integrations that still need scientist review: missing, ambiguous,
     /// failed, cancelled, pending, or measured under a changed method.
     pub(super) fn unresolved_count(&self) -> usize {
-        let current = signature(&self.method);
+        let fresh = fresh(&self.method);
         self.results
             .iter()
-            .filter(|r| {
-                r.method != current
-                    || matches!(
-                        r.status,
-                        Status::Missing
-                            | Status::Ambiguous
-                            | Status::Failed
-                            | Status::Cancelled
-                            | Status::Pending
-                    )
-            })
+            .filter(|r| fresh.stale(r) || r.needs_review())
             .count()
     }
     pub(super) fn has_results(&self) -> bool {
@@ -214,7 +212,6 @@ impl QuantState {
             })
             .ok_or("Review trace is absent from batch results")?;
         result.chromatography = Some(analysis);
-        self.advanced_preview = None;
         Ok(())
     }
 }
@@ -226,8 +223,47 @@ impl Drop for QuantState {
 fn signature(method: &Method) -> String {
     toml::to_string(method).unwrap_or_default()
 }
+/// The method as it applies to one analyte: global settings plus that analyte only. Stored in
+/// each result, so editing one analyte's settings leaves the other analytes' results current.
+fn analyte_signature(method: &Method, analyte: &str) -> String {
+    let mut m = method.clone();
+    m.analytes.retain(|a| a.extraction.name == analyte);
+    signature(&m)
+}
+/// Per-analyte snapshots of the current method, for cheap staleness checks.
+struct Fresh(std::collections::HashMap<String, String>);
+fn fresh(method: &Method) -> Fresh {
+    Fresh(
+        method
+            .analytes
+            .iter()
+            .map(|a| {
+                (
+                    a.extraction.name.clone(),
+                    analyte_signature(method, &a.extraction.name),
+                )
+            })
+            .collect(),
+    )
+}
+impl Fresh {
+    /// True when the result was measured under different settings than the current method.
+    /// Batches saved before per-analyte snapshots stored the whole method; those are compared
+    /// through their analyte entry.
+    fn stale(&self, r: &Measurement) -> bool {
+        let Some(current) = self.0.get(&r.analyte) else {
+            return true;
+        };
+        if &r.method == current {
+            return false;
+        }
+        toml::from_str::<Method>(&r.method)
+            .map(|m| analyte_signature(&m, &r.analyte) != *current)
+            .unwrap_or(true)
+    }
+}
 fn select(q: &mut QuantState, i: usize) {
-    q.advanced_preview = None;
+    q.draft = None;
     q.selected = Some(i);
     if let Some(p) = &q.results[i].peak {
         q.start = p.start;
@@ -261,7 +297,7 @@ fn run(app: &mut MzViewerApp) -> Result<(), String> {
     let params = validate(&app.quant.method)?;
     let q = &mut app.quant;
     let method = q.method.clone();
-    let snapshot = signature(&method);
+    let fresh = fresh(&method);
     let mut samples: Vec<_> = app
         .files
         .iter()
@@ -290,7 +326,7 @@ fn run(app: &mut MzViewerApp) -> Result<(), String> {
                     && r.sample == sample
                     && r.analyte == a.extraction.name
                     && r.chromatography.is_some()
-                    && r.method != snapshot
+                    && fresh.stale(r)
             }) {
                 return Err("Saved advanced results use a different method. Save this batch and create a new batch to retain its history.".into());
             }
@@ -299,7 +335,7 @@ fn run(app: &mut MzViewerApp) -> Result<(), String> {
                 r.source == source
                     && r.sample == sample
                     && r.analyte == a.extraction.name
-                    && r.method == snapshot
+                    && !fresh.stale(r)
                     && (matches!(r.status, Status::Manual | Status::Reviewed)
                         || r.chromatography.is_some())
             }) {
@@ -320,12 +356,13 @@ fn run(app: &mut MzViewerApp) -> Result<(), String> {
     for (sample, source, path, _, a, params) in &jobs {
         let pending = Measurement {
             chromatography: None,
+            quality: None,
             sample: sample.clone(),
             source: source.clone(),
             run: path.clone(),
             analyte: a.extraction.name.clone(),
             params: params.clone(),
-            method: snapshot.clone(),
+            method: analyte_signature(&method, &a.extraction.name),
             trace: vec![],
             automatic: None,
             peak: None,
@@ -353,12 +390,13 @@ fn run(app: &mut MzViewerApp) -> Result<(), String> {
             }
             let mut result = Measurement {
                 chromatography: None,
+                quality: None,
                 sample,
                 source,
                 run: path.clone(),
                 analyte: a.extraction.name.clone(),
                 params: params.clone(),
-                method: snapshot.clone(),
+                method: analyte_signature(&method, &a.extraction.name),
                 trace: vec![],
                 automatic: None,
                 peak: None,
@@ -368,8 +406,9 @@ fn run(app: &mut MzViewerApp) -> Result<(), String> {
             };
             match processing::run_in_background(path.into(), params, 0) {
                 ProcessingResult::Success { plot_data, .. } => {
-                    let (peak, status) = detect(&plot_data, &a, &method);
+                    let (peak, status, quality) = detect_assessed(&plot_data, &a, &method);
                     result.trace = plot_data;
+                    result.quality = quality;
                     result.automatic = peak.clone();
                     result.peak = peak;
                     result.automatic_status = status.clone();
@@ -424,6 +463,7 @@ pub(super) fn poll(app: &mut MzViewerApp, ctx: &egui::Context) {
             }
             Event::Done(cancelled) => {
                 q.rx = None;
+                refresh_consistency(&mut q.results);
                 if cancelled {
                     for r in &mut q.results {
                         if r.status == Status::Pending {
@@ -469,16 +509,31 @@ pub(super) fn shortcuts(app: &mut MzViewerApp, ctx: &egui::Context) {
         }
     }
 }
+/// Snake-case name of a unit enum variant, as written in method files.
+fn serde_name<T: Serialize>(value: &T) -> String {
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_owned))
+        .unwrap_or_default()
+}
 fn csv(results: &[Measurement], method: &Method) -> String {
     fn cell(s: &str) -> String {
         format!("\"{}\"", s.replace('"', "\"\""))
     }
-    let mut out = "sample,source,run,analyte,method_name,status,needs_recalculation,area_intensity_min,apex_rt_min,start_rt_min,end_rt_min,height,acquisition,ms_level,polarity,target_mz,ppm,precursor_mz,mz_range,baseline,area_source,diagnostic,method_toml\n".to_owned();
-    let current = signature(method);
+    let mut out = "sample,source,run,analyte,method_name,status,needs_recalculation,review_state,confidence_score,confidence_tier,confidence_flags,area_intensity_min,apex_rt_min,start_rt_min,end_rt_min,height,acquisition,ms_level,polarity,target_mz,ppm,precursor_mz,mz_range,baseline,area_source,algorithm,diagnostic,method_toml\n".to_owned();
+    let fresh = fresh(method);
     for r in results {
         let p = r.peak.as_ref();
-        let method_name = toml::from_str::<Method>(&r.method)
-            .map(|m| m.name)
+        let parsed = toml::from_str::<Method>(&r.method).ok();
+        let method_name = parsed.as_ref().map(|m| m.name.clone()).unwrap_or_default();
+        let cfg = parsed
+            .as_ref()
+            .and_then(|m| {
+                m.analytes
+                    .iter()
+                    .find(|a| a.extraction.name == r.analyte)
+                    .map(|a| a.integration_for(m))
+            })
             .unwrap_or_default();
         let fields = vec![
             r.sample.clone(),
@@ -487,7 +542,17 @@ fn csv(results: &[Measurement], method: &Method) -> String {
             r.analyte.clone(),
             method_name,
             format!("{:?}", r.status),
-            (r.method != current).to_string(),
+            fresh.stale(r).to_string(),
+            r.review().label().to_owned(),
+            r.quality
+                .as_ref()
+                .map(|q| q.score.to_string())
+                .unwrap_or_default(),
+            r.tier().map(|t| t.label().to_owned()).unwrap_or_default(),
+            r.quality
+                .as_ref()
+                .map(|q| q.flags().join("; "))
+                .unwrap_or_default(),
             p.map(|p| p.area.to_string()).unwrap_or_default(),
             p.map(|p| p.apex_rt.to_string()).unwrap_or_default(),
             p.map(|p| p.start.to_string()).unwrap_or_default(),
@@ -511,8 +576,9 @@ fn csv(results: &[Measurement], method: &Method) -> String {
                 .map(|m| m.to_string())
                 .unwrap_or_default(),
             format!("{:?}", r.params.mz_range),
-            "linear".into(),
+            serde_name(&cfg.baseline),
             "unsmoothed".into(),
+            serde_name(&cfg.algorithm),
             r.diagnostic.clone(),
             r.method.clone(),
         ];
@@ -557,7 +623,25 @@ fn open_method(q: &mut QuantState) -> Result<(), String> {
     }
     Ok(())
 }
+/// Moves an edited method into the batch (in memory only; the file is untouched) and says how
+/// many existing results now come from an earlier method.
+fn commit_method(q: &mut QuantState, draft: &Method) {
+    if signature(draft) == signature(&q.method) {
+        return;
+    }
+    q.method = draft.clone();
+    let fresh = fresh(&q.method);
+    let stale = q.results.iter().filter(|r| fresh.stale(r)).count();
+    q.message = if stale > 0 {
+        format!(
+            "Method updated. {stale} result(s) were measured with the previous method: choose Reprocess to update them. The method file is unchanged until you save it."
+        )
+    } else {
+        "Method updated for this batch. The method file is unchanged until you save it.".into()
+    };
+}
 fn change_method(q: &mut QuantState, action: MethodAction) {
+    q.method_epoch = q.method_epoch.wrapping_add(1);
     match action {
         MethodAction::Open => {
             if let Err(e) = open_method(q) {
@@ -667,7 +751,7 @@ fn validate_batch(batch: &Batch) -> Result<(), String> {
             return Err("Invalid or duplicate result data in batch.".into());
         }
         for p in [&r.peak, &r.automatic].into_iter().flatten() {
-            let actual = measure(&r.trace, p.start, p.end)?;
+            let actual = measure_for(&r.trace, p.start, p.end, &method.analytes[i], &method)?;
             if !p.area.is_finite()
                 || (actual.area - p.area).abs() > 1e-6 * actual.area.abs().max(1.0)
                 || actual.apex_rt != p.apex_rt
@@ -807,6 +891,30 @@ pub(super) fn show(app: &mut MzViewerApp, ctx: &egui::Context) {
             q = std::mem::take(&mut app.quant);
         }
         ui.add_space(4.0);
+        let current = fresh(&q.method);
+        let unresolved = q
+            .results
+            .iter()
+            .filter(|r| current.stale(r) || r.needs_review())
+            .count();
+        let stage_id = egui::Id::new("quantification_stage");
+        let mut stage = ui.ctx().data(|d| d.get_temp::<usize>(stage_id)).unwrap_or(0);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().button_padding = egui::vec2(12.0, 5.0);
+            ui.selectable_value(
+                &mut stage,
+                0,
+                if unresolved > 0 {
+                    format!("1 · Areas and peak review ({unresolved} need review)")
+                } else {
+                    "1 · Areas and peak review".to_string()
+                },
+            );
+            ui.selectable_value(&mut stage, 1, "2 · Calibration and concentrations");
+            ui.selectable_value(&mut stage, 2, "3 · Batch QC and validation");
+        });
+        ui.ctx().data_mut(|d| d.insert_temp(stage_id, stage));
+        ui.add_space(6.0);
         egui::Frame::group(ui.style())
             .inner_margin(egui::Margin::symmetric(10, 8))
             .show(ui, |ui| {
@@ -827,6 +935,7 @@ pub(super) fn show(app: &mut MzViewerApp, ctx: &egui::Context) {
                     None
                 };
                 let ready = batch_ready.is_none();
+                let mut start_run = false;
                 ui.horizontal_wrapped(|ui| {
                     ui.add_enabled_ui(q.rx.is_none(), |ui| {
                         if ui
@@ -841,12 +950,7 @@ pub(super) fn show(app: &mut MzViewerApp, ctx: &egui::Context) {
                             )
                             .clicked()
                         {
-                            app.quant = std::mem::take(&mut q);
-                            let result = run(app);
-                            q = std::mem::take(&mut app.quant);
-                            if let Err(e) = result {
-                                q.message = e;
-                            }
+                            start_run = true;
                         }
                     });
                     if q.rx.is_some() {
@@ -866,6 +970,24 @@ pub(super) fn show(app: &mut MzViewerApp, ctx: &egui::Context) {
                     }
                     if ui.button("Edit method…").clicked() {
                         q.method_open = true;
+                    }
+                    let outdated = {
+                        let fresh = fresh(&q.method);
+                        q.results.iter().filter(|r| fresh.stale(r)).count()
+                    };
+                    if outdated > 0 && q.rx.is_none() {
+                        ui.colored_label(
+                            ui.visuals().warn_fg_color,
+                            format!("● {outdated} result(s) use an earlier method"),
+                        )
+                        .on_hover_text("These peaks were integrated with a method that has since changed.");
+                        if ui
+                            .add_enabled(ready, egui::Button::new("Reprocess"))
+                            .on_hover_text("Re-extract and re-integrate outdated results with the current method; manual corrections made under the old method are replaced")
+                            .clicked()
+                        {
+                            start_run = true;
+                        }
                     }
                     ui.separator();
                     ui.add_enabled_ui(q.rx.is_none(), |ui| {
@@ -905,6 +1027,14 @@ pub(super) fn show(app: &mut MzViewerApp, ctx: &egui::Context) {
                         }
                     }
                 });
+                if start_run {
+                    app.quant = std::mem::take(&mut q);
+                    let result = run(app);
+                    q = std::mem::take(&mut app.quant);
+                    if let Err(e) = result {
+                        q.message = e;
+                    }
+                }
                 if let Some(reason) = batch_ready {
                     if q.rx.is_none() {
                         ui.weak(reason);
@@ -915,29 +1045,6 @@ pub(super) fn show(app: &mut MzViewerApp, ctx: &egui::Context) {
                 }
             });
         ui.add_space(6.0);
-        let current = signature(&q.method);
-        let unresolved = q
-            .results
-            .iter()
-            .filter(|r| r.method != current || is_unresolved(&r.status))
-            .count();
-        let stage_id = egui::Id::new("quantification_stage");
-        let mut stage = ui.ctx().data(|d| d.get_temp::<usize>(stage_id)).unwrap_or(0);
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().button_padding = egui::vec2(12.0, 5.0);
-            ui.selectable_value(
-                &mut stage,
-                0,
-                if unresolved > 0 {
-                    format!("1 · Areas and peak review ({unresolved} unresolved)")
-                } else {
-                    "1 · Areas and peak review".to_string()
-                },
-            );
-            ui.selectable_value(&mut stage, 1, "2 · Calibration and concentrations");
-            ui.selectable_value(&mut stage, 2, "3 · Batch QC and validation");
-        });
-        ui.ctx().data_mut(|d| d.insert_temp(stage_id, stage));
         ui.separator();
         if stage == 0 {
             // Master/detail layout manages its own scrolling so the plot can use the full height.
@@ -970,6 +1077,11 @@ pub(super) fn show(app: &mut MzViewerApp, ctx: &egui::Context) {
     });
     if q.method_open {
         let mut open = true;
+        let (epoch, mut draft) = match q.method_draft.take() {
+            Some((e, d)) if e == q.method_epoch => (e, d),
+            _ => (q.method_epoch, q.method.clone()),
+        };
+        let mut decision = None;
         egui::Window::new("Batch quantification method")
             .max_height((ctx.content_rect().height() - 60.0).max(120.0))
             .vscroll(true)
@@ -978,11 +1090,21 @@ pub(super) fn show(app: &mut MzViewerApp, ctx: &egui::Context) {
             .resizable(true)
             .show(ctx, |ui| {
                 ui.add_enabled_ui(q.rx.is_none() && q.pending_method.is_none(), |ui| {
-                    method_editor(&mut q, ui);
+                    method_editor(&mut q, &mut draft, &mut decision, ui);
                     super::workbench::scroll_new_focus(ui);
                 });
             });
-        q.method_open = open;
+        if !open {
+            decision = Some(false);
+        }
+        match decision {
+            Some(true) => {
+                commit_method(&mut q, &draft);
+                q.method_open = false;
+            }
+            Some(false) => q.method_open = false,
+            None => q.method_draft = Some((epoch, draft)),
+        }
     }
     if q.confirm_replace {
         egui::Window::new("Open another batch?").max_height((ctx.content_rect().height()-60.0).max(120.0)).vscroll(true).collapsible(false).show(ctx, |ui| {
@@ -1048,32 +1170,68 @@ pub(super) fn show(app: &mut MzViewerApp, ctx: &egui::Context) {
     }
 }
 
-fn method_editor(q: &mut QuantState, ui: &mut egui::Ui) {
+fn method_editor(
+    q: &mut QuantState,
+    draft: &mut Method,
+    decision: &mut Option<bool>,
+    ui: &mut egui::Ui,
+) {
     ui.vertical(|ui| {
-        ui.horizontal_wrapped(|ui| {
-            if ui.button("New").clicked() {request_method(q,MethodAction::New);}
-            if ui.button("Open…").clicked() {request_method(q,MethodAction::Open);}
-            if ui.button("Save").clicked() { if let Err(e)=save_method(q,false) { q.message=e; } }
-            if ui.button("Save As…").clicked() { if let Err(e)=save_method(q,true) { q.message=e; } }
+        ui.horizontal(|ui| {
+            if ui.button("New").clicked() {commit_method(q,draft);request_method(q,MethodAction::New);}
+            if ui.button("Open…").clicked() {commit_method(q,draft);request_method(q,MethodAction::Open);}
+            if ui.button("Save").clicked() { save_draft(q,draft,false); }
+            if ui.button("Save As…").clicked() { save_draft(q,draft,true); }
             if let Some(result)=super::examples::menu(ui) { q.message=match result {
                 Ok(path)=>format!("Example saved to {}. Choose Open method for the quantification example; open extraction examples in the viewer preset editor.",path.display()),
                 Err(e)=>e,
             }; }
-            if signature(&q.method)!=q.saved_method { ui.small("Unsaved changes"); }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let size = egui::vec2(88.0, 28.0);
+                if ui
+                    .add_enabled(
+                        validate(draft).is_ok(),
+                        egui::Button::new(egui::RichText::new("OK").strong())
+                            .fill(ui.visuals().selection.bg_fill)
+                            .min_size(size),
+                    )
+                    .on_hover_text("Use these settings for this batch (does not write the method file)")
+                    .clicked()
+                {
+                    *decision = Some(true);
+                }
+                if ui
+                    .add(egui::Button::new("Cancel").min_size(size))
+                    .on_hover_text("Discard all edits made in this window")
+                    .clicked()
+                {
+                    *decision = Some(false);
+                }
+            });
         });
-        ui.horizontal_wrapped(|ui| {ui.label("Method name");ui.add(egui::TextEdit::singleline(&mut q.method.name).desired_width(280.0));});
+        if signature(draft) != signature(&q.method) {
+            ui.colored_label(
+                ui.visuals().warn_fg_color,
+                "● Edited. OK uses these settings for this batch; results from the previous method will then need reprocessing.",
+            );
+        }
+        if signature(draft) != q.saved_method {
+            ui.weak("Not saved to the method file. Use Save to keep these settings.");
+        }
+        ui.horizontal_wrapped(|ui| {ui.label("Method name");ui.add(egui::TextEdit::singleline(&mut draft.name).desired_width(280.0));});
         if let Some(path)=&q.method_path { ui.small(path.display().to_string()); }
         ui.horizontal_wrapped(|ui| {
-            ui.label("Detection smoothing"); ui.add(egui::DragValue::new(&mut q.method.detection_smoothing).range(0..=10));
-            ui.label("Minimum peak prominence"); ui.add(egui::DragValue::new(&mut q.method.minimum_height).range(0.0..=f64::MAX));
-            ui.label("Boundary fraction"); ui.add(egui::DragValue::new(&mut q.method.boundary_fraction).speed(0.01).range(0.0..=0.5));
+            ui.label("Detection smoothing"); ui.add(egui::DragValue::new(&mut draft.detection_smoothing).range(0..=10));
+            ui.label("Minimum peak prominence"); ui.add(egui::DragValue::new(&mut draft.minimum_height).range(0.0..=f64::MAX));
+            ui.label("Boundary fraction"); ui.add(egui::DragValue::new(&mut draft.boundary_fraction).speed(0.01).range(0.0..=0.5));
         });
-        ui.small("Detection uses a smoothed trace. Areas use unsmoothed data and a straight-line baseline. RT is in minutes.");
+        ui.small("Defaults for every analyte: detection uses a smoothed trace; areas use unsmoothed data above the chosen baseline (straight line unless set). Use the Integration column to choose an algorithm and baseline per analyte. RT is in minutes.");
         let mut remove=None;
+        let defaults = method_default(&*draft);
         egui::ScrollArea::both().max_height(230.0).show(ui,|ui| {
             egui::Grid::new("quant_method_table").striped(true).show(ui,|ui| {
-                for h in ["Analyte","Mode","Target m/z","Precursor m/z","ppm","Polarity","MS level","Expected RT","Window start","Window end",""] { ui.strong(h); } ui.end_row();
-                for (i,a) in q.method.analytes.iter_mut().enumerate() {
+                for h in ["Analyte","Mode","Target m/z","Precursor m/z","ppm","Polarity","MS level","Expected RT","Window start","Window end","Integration",""] { ui.strong(h); } ui.end_row();
+                for (i,a) in draft.analytes.iter_mut().enumerate() {
                         ui.add(egui::TextEdit::singleline(&mut a.extraction.name).desired_width(130.0).min_size(egui::vec2(130.0,28.0)));
                         egui::ComboBox::from_id_salt((i,"mode")).width(60.0).selected_text(format!("{:?}",a.extraction.acquisition)).show_ui(ui,|ui| {
                             for mode in [processing::AcquisitionMode::FS,processing::AcquisitionMode::SIM,processing::AcquisitionMode::MRM] { ui.selectable_value(&mut a.extraction.acquisition,mode,format!("{mode:?}")); }
@@ -1091,45 +1249,86 @@ fn method_editor(q: &mut QuantState, ui: &mut egui::Ui) {
                         ui.add(egui::DragValue::new(&mut a.expected_rt).speed(0.01).range(0.0..=1e6));
                         ui.add(egui::DragValue::new(&mut a.rt_window[0]).speed(0.01).range(0.0..=1e6));
                         ui.add(egui::DragValue::new(&mut a.rt_window[1]).speed(0.01).range(0.0..=1e6));
+                        ui.menu_button(format!("{} ▾", integration_editor::short_name(a.integration.as_ref())), |ui| {
+                            ui.set_max_width(380.0);
+                            ui.strong(format!("Integration: {}", a.extraction.name));
+                            let mut custom = a.integration.is_some();
+                            if ui.checkbox(&mut custom, "Customise for this analyte").on_hover_text("Off: classic detection with the method-level smoothing, prominence and boundary fraction").changed() {
+                                a.integration = custom.then(|| defaults.clone());
+                            }
+                            if let Some(cfg) = &mut a.integration {
+                                integration_editor::editor(ui, cfg, a.rt_window);
+                                if let Err(e) = cfg.validate() { ui.colored_label(ui.visuals().warn_fg_color, e); }
+                            } else {
+                                ui.small("Using the method defaults above.");
+                            }
+                        });
                         if ui.small_button("Remove").clicked() { remove=Some(i); }
                         ui.end_row();
                 }
             });
         });
-        if let Some(i)=remove { q.method.analytes.remove(i); }
-        if ui.add_enabled(q.method.analytes.len()<64,egui::Button::new("Add analyte")).clicked() { q.method.analytes.push(new_analyte(q.method.analytes.len()+1)); }
-        if let Err(e)=validate(&q.method) { ui.colored_label(Color32::from_rgb(210,110,50),e); }
+        if let Some(i)=remove { draft.analytes.remove(i); }
+        if ui.add_enabled(draft.analytes.len()<64,egui::Button::new("Add analyte")).clicked() { draft.analytes.push(new_analyte(draft.analytes.len()+1)); }
+        if let Err(e)=validate(&*draft) { ui.colored_label(Color32::from_rgb(210,110,50),e); }
         if !q.message.is_empty() { ui.small(&q.message); }
     });
 }
-fn is_unresolved(status: &Status) -> bool {
-    matches!(
-        status,
-        Status::Missing | Status::Ambiguous | Status::Failed | Status::Cancelled | Status::Pending
-    )
+/// Saves the edited method to its file. The batch keeps using its current method unless the
+/// save succeeds, in which case the saved method becomes the batch's method too.
+fn save_draft(q: &mut QuantState, draft: &Method, save_as: bool) {
+    let previous = std::mem::replace(&mut q.method, draft.clone());
+    match save_method(q, save_as) {
+        Ok(()) if q.saved_method == signature(draft) => {
+            q.method = previous;
+            commit_method(q, draft);
+            q.message = format!("Method saved. {}", q.message);
+        }
+        Ok(()) => q.method = previous,
+        Err(e) => {
+            q.method = previous;
+            q.message = e;
+        }
+    }
 }
-/// Review state as `(label, colour)`: green is settled, amber needs a decision, red failed.
-fn state_tone(visuals: &egui::Visuals, status: &Status, stale: bool) -> (String, Color32) {
+/// Confidence as `(label, colour)`: green High, amber Medium, orange Low; outcomes that have
+/// no peak (missing, failed, running) show their own state.
+fn confidence_tone(visuals: &egui::Visuals, r: &Measurement, stale: bool) -> (String, Color32) {
     if stale {
         return ("Recalculate".into(), visuals.warn_fg_color);
     }
-    let color = match status {
-        Status::Automatic | Status::Reviewed | Status::Manual => Color32::from_rgb(80, 175, 120),
-        Status::Ambiguous => visuals.warn_fg_color,
-        Status::Missing | Status::Failed => visuals.error_fg_color,
-        Status::Pending | Status::Cancelled => visuals.weak_text_color(),
-    };
-    (format!("{status:?}"), color)
+    match (&r.status, &r.quality, r.tier()) {
+        (Status::Missing | Status::Failed, ..) => {
+            (format!("{:?}", r.status), visuals.error_fg_color)
+        }
+        (Status::Pending | Status::Cancelled, ..) => {
+            (format!("{:?}", r.status), visuals.weak_text_color())
+        }
+        (_, quality, tier) => {
+            let color = match tier {
+                Some(Tier::High) => Color32::from_rgb(80, 175, 120),
+                Some(Tier::Medium) => visuals.warn_fg_color,
+                Some(Tier::Low) => Color32::from_rgb(225, 110, 70),
+                None => visuals.weak_text_color(),
+            };
+            let label = match (quality, tier) {
+                (Some(q), Some(t)) => format!("{} {}", q.score, t.label()),
+                (None, Some(t)) => t.label().to_owned(),
+                _ => "No score".into(),
+            };
+            (label, color)
+        }
+    }
 }
-fn next_unresolved(q: &mut QuantState) {
+fn next_needing_review(q: &mut QuantState) {
     if q.results.is_empty() {
         return;
     }
-    let current = signature(&q.method);
+    let fresh = fresh(&q.method);
     let start = q.selected.map_or(0, |i| i + 1);
     if let Some(i) = (0..q.results.len())
         .map(|offset| (start + offset) % q.results.len())
-        .find(|&i| is_unresolved(&q.results[i].status) || q.results[i].method != current)
+        .find(|&i| q.results[i].needs_review() || fresh.stale(&q.results[i]))
     {
         select(q, i);
     }
@@ -1160,11 +1359,11 @@ fn review_stage(q: &mut QuantState, ui: &mut egui::Ui) {
         empty_state(q, ui);
         return;
     }
-    let current = signature(&q.method);
+    let fresh = fresh(&q.method);
     let unresolved = q
         .results
         .iter()
-        .filter(|r| r.method != current || is_unresolved(&r.status))
+        .filter(|r| fresh.stale(r) || r.needs_review())
         .count();
     ui.horizontal(|ui| {
         ui.label(
@@ -1185,14 +1384,14 @@ fn review_stage(q: &mut QuantState, ui: &mut egui::Ui) {
                 format!("● {unresolved} need review"),
             );
         } else {
-            ui.colored_label(Color32::from_rgb(80, 175, 120), "● all resolved");
+            ui.colored_label(Color32::from_rgb(80, 175, 120), "● nothing needs review");
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui
-                .add_enabled(unresolved > 0, egui::Button::new("Next unresolved ›"))
+                .add_enabled(unresolved > 0, egui::Button::new("Next needing review ›"))
                 .clicked()
             {
-                next_unresolved(q);
+                next_needing_review(q);
             }
         });
     });
@@ -1230,21 +1429,32 @@ fn review_stage(q: &mut QuantState, ui: &mut egui::Ui) {
 }
 fn results_table(q: &mut QuantState, ui: &mut egui::Ui, body_height: f32) {
     use super::table::{Cell, Row};
-    let current = signature(&q.method);
+    let fresh = fresh(&q.method);
     let visuals = ui.visuals().clone();
     let rows: Vec<_> = q
         .results
         .iter()
         .enumerate()
         .map(|(i, r)| {
-            let (label, color) = state_tone(&visuals, &r.status, r.method != current);
+            let stale = fresh.stale(r);
+            let (label, color) = confidence_tone(&visuals, r, stale);
+            let score = r.quality.as_ref().map(|q| q.score as f64);
             Row {
                 key: format!("{i}/{}", r.source),
                 cells: vec![
                     Cell::text(&r.sample),
                     Cell::text(&r.analyte),
                     Cell::number(r.peak.as_ref().map(|p| p.area)),
-                    Cell::text(format!("● {label}")).colored(color),
+                    {
+                        let mut cell = Cell::text(format!("● {label}")).colored(color);
+                        cell.number = score;
+                        cell
+                    },
+                    Cell::text(if stale || r.peak.is_none() {
+                        String::new()
+                    } else {
+                        r.review().label().to_owned()
+                    }),
                 ],
             }
         })
@@ -1253,14 +1463,99 @@ fn results_table(q: &mut QuantState, ui: &mut egui::Ui, body_height: f32) {
     if let Some(i) = super::table::show_with(
         ui,
         "quant_result_matrix",
-        &["Sample", "Analyte", "Area (a.u.·min)", "State"],
+        &[
+            "Sample",
+            "Analyte",
+            "Area (a.u.·min)",
+            "Confidence",
+            "Review",
+        ],
         &rows,
         selected,
         body_height,
-        &[120.0, 70.0, 120.0, 110.0],
+        &[110.0, 70.0, 110.0, 105.0, 90.0],
     ) {
         select(q, i);
     }
+}
+/// What a confidence flag means for a reviewer and what usually helps.
+fn flag_text(flag: &str) -> (&'static str, &'static str) {
+    match flag {
+        "competing_peak" => ("Competing peak", "Another peak in the RT window: confirm which one is the analyte; try the Valley algorithm or a narrower RT window."),
+        "shoulder_or_split" => ("Shoulder / merged peaks", "The peak may hide a second compound: try the Valley / drop-line algorithm or adjust the boundaries."),
+        "rt_offset" => ("RT off expected", "The apex is far from the expected retention time: confirm the identity or update the expected RT."),
+        "tailing" => ("Tailing", "Long tail: lower the boundary fraction so the tail is included, or use the Valley algorithm."),
+        "fronting" => ("Fronting", "The front of the peak is broad: check the boundaries and the injection."),
+        "flank_truncated" => ("Peak flank cut short", "A flank does not return to baseline inside the integrated region: widen the boundaries."),
+        "poor_peak_shape" => ("Poor peak shape", "The peak is far from Gaussian: check for coelution, tailing or noise."),
+        "noisy_peak" => ("Noisy peak", "Many direction changes inside the peak: increase smoothing for detection."),
+        "low_snr" => ("Low signal-to-noise", "Signal is close to the noise: the area is uncertain."),
+        "few_points" => ("Few scans across the peak", "Too few points define the peak: the area is imprecise; consider a faster scan rate."),
+        "boundary_not_at_baseline" => ("Boundaries above baseline", "The peak is cut off before it returns to baseline: lower the boundary fraction or widen the RT window."),
+        "saturated_plateau" => ("Detector saturation", "Flat top of identical values: the area is underestimated; dilute and re-inject."),
+        "unstable_area" => ("Area depends on settings", "Small changes to boundary or smoothing change the area a lot: review the boundaries."),
+        "rt_differs_from_batch" => ("RT differs from other samples", "This sample's peak elutes away from the other samples: possible wrong peak or retention shift."),
+        "width_differs_from_batch" => ("Width differs from other samples", "This peak is much wider or narrower than in other samples."),
+        "no_signal" => ("No signal", "No signal above the baseline in the integrated region."),
+        _ => ("Check", ""),
+    }
+}
+/// Confidence details: reason chips plus the full list of checks.
+fn quality_panel(ui: &mut egui::Ui, r: &Measurement) {
+    let Some(quality) = &r.quality else {
+        if r.status == Status::Ambiguous {
+            ui.weak("Saved before confidence scores existed: the old Ambiguous state is shown as Low. Re-run to score it.");
+        }
+        return;
+    };
+    let warn = ui.visuals().warn_fg_color;
+    ui.horizontal_wrapped(|ui| {
+        let flags = quality.flags();
+        if flags.is_empty() {
+            ui.weak("No problems detected.");
+        }
+        for flag in flags {
+            let (text, hint) = flag_text(flag);
+            egui::Frame::new()
+                .fill(warn.gamma_multiply(0.18))
+                .stroke(egui::Stroke::new(1.0_f32, warn.gamma_multiply(0.6)))
+                .corner_radius(8.0)
+                .inner_margin(egui::Margin::symmetric(8, 2))
+                .show(ui, |ui| {
+                    ui.label(egui::RichText::new(text).small().color(warn));
+                })
+                .response
+                .on_hover_text(hint);
+        }
+    });
+    egui::CollapsingHeader::new("Why this score")
+        .id_salt(("quality_checks", &r.sample, &r.analyte))
+        .show(ui, |ui| {
+            egui::Grid::new(("quality_grid", &r.sample, &r.analyte))
+                .num_columns(3)
+                .spacing([12.0, 2.0])
+                .show(ui, |ui| {
+                    for c in &quality.checks {
+                        let color = if c.flag.is_some() {
+                            warn
+                        } else {
+                            ui.visuals().text_color()
+                        };
+                        ui.label(egui::RichText::new(&c.name).color(color));
+                        ui.add(
+                            egui::ProgressBar::new(c.score as f32)
+                                .desired_width(70.0)
+                                .desired_height(8.0),
+                        );
+                        ui.small(&c.value);
+                        ui.end_row();
+                    }
+                });
+            if quality.cap < 100 {
+                ui.small(format!("Score limited to {} by a serious problem above.", quality.cap));
+            }
+            ui.small("High means nothing was flagged. Rule-based: weighted checks, with serious problems capping the score.");
+        });
 }
 fn metric(ui: &mut egui::Ui, label: &str, value: String) {
     egui::Frame::group(ui.style())
@@ -1284,8 +1579,8 @@ fn review(q: &mut QuantState, ui: &mut egui::Ui) {
         return;
     };
     let pane_height = ui.available_height();
-    let stale = q.results[i].method != signature(&q.method);
-    let (state_label, state_color) = state_tone(ui.visuals(), &q.results[i].status, stale);
+    let stale = fresh(&q.method).stale(&q.results[i]);
+    let (state_label, state_color) = confidence_tone(ui.visuals(), &q.results[i], stale);
     let mut apply = false;
     let mut reset = false;
     let mut accept = false;
@@ -1295,19 +1590,27 @@ fn review(q: &mut QuantState, ui: &mut egui::Ui) {
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.heading(format!("{} / {}", q.results[i].sample, q.results[i].analyte));
-                ui.colored_label(state_color, format!("● {state_label}"));
+                let r = &q.results[i];
+                let text = if stale || r.peak.is_none() {
+                    format!("● {state_label}")
+                } else {
+                    format!("● {state_label} · {}", r.review().label())
+                };
+                ui.colored_label(state_color, text);
             });
             if !q.results[i].diagnostic.is_empty() {
                 ui.weak(&q.results[i].diagnostic);
             }
+            if !stale {
+                quality_panel(ui, &q.results[i]);
+            }
             if q.results[i].trace.is_empty() {
-                advanced_review(q, i, ui);
                 return;
             }
             if stale {
                 ui.colored_label(
                     Color32::from_rgb(210, 110, 50),
-                    "Method changed: rerun this sample before adjusting the result.",
+                    "Method changed: use Reprocess above before adjusting this result.",
                 );
             }
             let draft_changed = q.results[i]
@@ -1329,6 +1632,8 @@ fn review(q: &mut QuantState, ui: &mut egui::Ui) {
             };
             let mut mouse = None;
             let mut boundaries = None;
+            let applied = applied_integration(q, i);
+            let overlay = draft_overlay(q, i);
             let r = &q.results[i];
             let plot = super::plot_controls::plot(ui, ("quant_review", i))
                 .height(plot_height)
@@ -1345,27 +1650,41 @@ fn review(q: &mut QuantState, ui: &mut egui::Ui) {
                 plot_ui.vline(VLine::new("Start", q.start).color(Color32::from_rgb(50, 160, 115)));
                 plot_ui.vline(VLine::new("End", q.end).color(Color32::from_rgb(220, 140, 60)));
                 if q.start < q.end {
-                    let y0 = processing::interpolate_at(&r.trace, q.start);
-                    let y1 = processing::interpolate_at(&r.trace, q.end);
+                    if let Ok(profile) = integration::profile(&r.trace, q.start, q.end, &applied) {
+                        plot_ui.line(
+                            Line::new("Baseline", profile.baseline.clone()).color(Color32::GRAY),
+                        );
+                        plot_ui.polygon(
+                            Polygon::new("Integrated peak", profile_outline(&profile))
+                                .stroke(egui::Stroke::new(
+                                    1.0_f32,
+                                    Color32::from_rgba_unmultiplied(75, 150, 215, 100),
+                                ))
+                                .fill_color(Color32::from_rgba_unmultiplied(75, 150, 215, 45)),
+                        );
+                    }
+                }
+                if let Some((peak, profile)) = &overlay {
+                    let orange = Color32::from_rgb(235, 140, 40);
                     plot_ui.line(
-                        Line::new("Baseline", vec![[q.start, y0], [q.end, y1]]).color(Color32::GRAY),
+                        Line::new("Preview baseline", profile.baseline.clone())
+                            .color(orange)
+                            .style(egui_plot::LineStyle::dashed_loose()),
                     );
-                    let mut points = vec![[q.start, y0]];
-                    let region: Vec<_> = r
-                        .trace
-                        .iter()
-                        .copied()
-                        .filter(|p| p[0] > q.start && p[0] < q.end)
-                        .collect();
-                    points.extend(processing::decimate_for_display(&region));
-                    points.push([q.end, y1]);
                     plot_ui.polygon(
-                        Polygon::new("Integrated peak", points)
-                            .stroke(egui::Stroke::new(
-                                1.0_f32,
-                                Color32::from_rgba_unmultiplied(75, 150, 215, 100),
-                            ))
-                            .fill_color(Color32::from_rgba_unmultiplied(75, 150, 215, 45)),
+                        Polygon::new("Preview peak", profile_outline(profile))
+                            .stroke(egui::Stroke::new(1.5_f32, orange))
+                            .fill_color(Color32::from_rgba_unmultiplied(235, 140, 40, 40)),
+                    );
+                    plot_ui.vline(
+                        VLine::new("Preview start", peak.start)
+                            .color(orange)
+                            .style(egui_plot::LineStyle::dashed_dense()),
+                    );
+                    plot_ui.vline(
+                        VLine::new("Preview end", peak.end)
+                            .color(orange)
+                            .style(egui_plot::LineStyle::dashed_dense()),
                     );
                 }
                 // This plot does not pan; pointer_coordinate compensates for drag movement
@@ -1476,7 +1795,7 @@ fn review(q: &mut QuantState, ui: &mut egui::Ui) {
                 "Instrument intensity (unsmoothed)",
             );
             ui.add_space(4.0);
-            advanced_review(q, i, ui);
+            integration_card(q, i, ui);
         });
     if accept && q.results[i].status != Status::Manual {
         q.results[i].status = Status::Reviewed;
@@ -1487,7 +1806,17 @@ fn review(q: &mut QuantState, ui: &mut egui::Ui) {
         select(q, i);
     }
     if apply {
-        match measure(&q.results[i].trace, q.start, q.end) {
+        let analyte = q
+            .method
+            .analytes
+            .iter()
+            .find(|a| a.extraction.name == q.results[i].analyte)
+            .cloned();
+        let measured = match &analyte {
+            Some(a) => measure_for(&q.results[i].trace, q.start, q.end, a, &q.method),
+            None => measure(&q.results[i].trace, q.start, q.end),
+        };
+        match measured {
             Ok(peak) => {
                 q.results[i].peak = Some(peak);
                 q.results[i].status = Status::Manual;
@@ -1523,7 +1852,7 @@ pub(super) fn remote_start(
 #[cfg(feature = "mcp")]
 pub(super) fn remote_status(app: &MzViewerApp) -> serde_json::Value {
     let q = &app.quant;
-    serde_json::json!({"job_id":format!("quantification:{}",q.remote_job_id),"running":q.rx.is_some(),"completed":q.completed,"total":q.total,"message":q.message,"method":signature(&q.method),"results":q.results.iter().enumerate().map(|(i,r)|serde_json::json!({"result_index":i,"sample":r.sample,"source":r.source,"run":r.run,"analyte":r.analyte,"parameters":r.params,"method":r.method,"automatic":r.automatic,"peak":r.peak,"automatic_status":r.automatic_status,"status":r.status,"diagnostic":r.diagnostic,"point_count":r.trace.len()})).collect::<Vec<_>>()})
+    serde_json::json!({"job_id":format!("quantification:{}",q.remote_job_id),"running":q.rx.is_some(),"completed":q.completed,"total":q.total,"message":q.message,"method":signature(&q.method),"results":q.results.iter().enumerate().map(|(i,r)|serde_json::json!({"result_index":i,"sample":r.sample,"source":r.source,"run":r.run,"analyte":r.analyte,"parameters":r.params,"method":r.method,"automatic":r.automatic,"peak":r.peak,"automatic_status":r.automatic_status,"status":r.status,"diagnostic":r.diagnostic,"review":r.review().label(),"needs_review":r.needs_review(),"confidence":r.quality,"point_count":r.trace.len()})).collect::<Vec<_>>()})
 }
 #[cfg(feature = "mcp")]
 pub(super) fn remote_cancel(app: &MzViewerApp) {
@@ -1543,13 +1872,18 @@ pub(super) fn remote_review(
     if app.quant.rx.is_some() {
         return Err("Wait for batch completion".into());
     }
-    let signature = signature(&app.quant.method);
+    let method = app.quant.method.clone();
+    let stale = app
+        .quant
+        .results
+        .get(index)
+        .map(|r| fresh(&method).stale(r));
     let r = app
         .quant
         .results
         .get_mut(index)
         .ok_or("Unknown result index")?;
-    if r.method != signature {
+    if stale != Some(false) {
         return Err("Method changed; rerun before reviewing".into());
     }
     match (start, end) {
@@ -1557,7 +1891,12 @@ pub(super) fn remote_review(
             if !a.is_finite() || !z.is_finite() {
                 return Err("Finite boundaries required".into());
             }
-            r.peak = Some(measure(&r.trace, a, z)?);
+            let analyte = method
+                .analytes
+                .iter()
+                .find(|x| x.extraction.name == r.analyte)
+                .ok_or("Result analyte is absent from the method.")?;
+            r.peak = Some(measure_for(&r.trace, a, z, analyte, &method)?);
             r.status = Status::Manual;
         }
         (None, None) => {}
@@ -1605,93 +1944,183 @@ pub(super) fn remote_reset(app: &mut MzViewerApp, index: usize) -> Result<(), St
     Ok(())
 }
 
-fn advanced_review(q: &mut QuantState, i: usize, ui: &mut egui::Ui) {
-    use crate::chromatography::{self as c, Baseline, Correction, SavitzkyGolay};
-    ui.collapsing("Advanced chromatographic processing", |ui| {
-        ui.small("RT and widths: minutes. Areas: instrument intensity × minute. Legacy results remain separately available below.");
-        let busy=q.rx.is_some();
-        let locked=q.results[i].chromatography.is_some();
-        if locked { ui.small("Saved processing configuration is immutable. Bounds and review revisions remain editable."); }
-        let mut shown_config=q.results[i].chromatography.as_ref().map(|a|a.config.clone()).unwrap_or_else(||q.advanced_config.clone());
-        ui.add_enabled_ui(!busy && !locked, |ui| {
-            let cfg=&mut shown_config;
-            let mut sg=cfg.smoothing.is_some();
-            if ui.checkbox(&mut sg,"Savitzky–Golay smoothing").changed() { cfg.smoothing=sg.then_some(SavitzkyGolay {window:7,degree:2}); }
-            if let Some(s)=&mut cfg.smoothing {ui.horizontal(|ui| {ui.label("Window (odd samples)");ui.add(egui::DragValue::new(&mut s.window).range(3..=501)); ui.label("Degree");ui.add(egui::DragValue::new(&mut s.degree).range(0..=5));});}
-            let mut model=match cfg.baseline {Baseline::None=>0,Baseline::EndpointChord=>1,Baseline::AsymmetricLeastSquares{..}=>2,Baseline::RollingQuantile{..}=>3};
-            egui::ComboBox::from_id_salt("advanced_baseline").selected_text(["None","Endpoint chord","Asymmetric least squares","Rolling quantile"][model]).show_ui(ui,|ui| {for (j,label) in ["None","Endpoint chord","Asymmetric least squares","Rolling quantile"].iter().enumerate() {ui.selectable_value(&mut model,j,*label);}});
-            let old=match cfg.baseline {Baseline::None=>0,Baseline::EndpointChord=>1,Baseline::AsymmetricLeastSquares{..}=>2,Baseline::RollingQuantile{..}=>3};
-            if old!=model {cfg.baseline=match model {0=>Baseline::None,1=>Baseline::EndpointChord,2=>Baseline::AsymmetricLeastSquares {lambda:1e5,asymmetry:0.01,iterations:10},_=>Baseline::RollingQuantile{window:101,quantile:0.1}};}
-            match &mut cfg.baseline {
-                Baseline::AsymmetricLeastSquares{lambda,asymmetry,iterations}=> {ui.horizontal(|ui| {ui.label("λ");ui.add(egui::DragValue::new(lambda).speed(100.0));ui.label("Asymmetry");ui.add(egui::DragValue::new(asymmetry).speed(0.001));ui.label("Iterations");ui.add(egui::DragValue::new(iterations).range(1..=100));});}
-                Baseline::RollingQuantile{window,quantile}=> {ui.horizontal(|ui| {ui.label("Window (odd samples)");ui.add(egui::DragValue::new(window));ui.label("Quantile");ui.add(egui::DragValue::new(quantile).speed(0.01));});}
-                _=>()
-            }
-            for (label,value) in [("Minimum height",&mut cfg.minimum_height),("Minimum prominence",&mut cfg.minimum_prominence),("Minimum SNR",&mut cfg.minimum_snr),("Minimum FWHM (min)",&mut cfg.minimum_width_minutes),("Maximum FWHM (min)",&mut cfg.maximum_width_minutes),("Boundary fraction",&mut cfg.boundary_fraction)] {ui.horizontal(|ui| {ui.label(label);ui.add(egui::DragValue::new(value).speed(0.01));});}
-            let mut gap=cfg.maximum_gap_minutes.is_some();if ui.checkbox(&mut gap,"Split acquisition gaps").changed() {cfg.maximum_gap_minutes=gap.then_some(0.1);}
-            if let Some(g)=&mut cfg.maximum_gap_minutes {ui.horizontal(|ui| {ui.label("Maximum gap (min)");ui.add(egui::DragValue::new(g).speed(0.01));});}
-            ui.checkbox(&mut cfg.integrate_smoothed,"Integrate smoothed signal (default uses raw corrected signal)");
-        });
-        let batch_config=shown_config.clone();
-        if !locked {q.advanced_config=shown_config;}
-        ui.add_enabled_ui(!busy, |ui| {
-            if !locked && ui.button("Preview processing").clicked() {
-                match c::process(c::Trace::from_points(format!("{} / {}",q.results[i].sample,q.results[i].analyte),&q.results[i].trace),q.advanced_config.clone()) {Ok(a)=>q.advanced_preview=Some((i,a)),Err(e)=>q.message=e.to_string()}
-            }
-            if ui.button("Process unprocessed batch traces").clicked() {
-                // Compute all proposals before applying any: an invalid trace
-                // cannot leave a partly overwritten batch.
-                let proposals: Result<Vec<_>,_>=q.results.iter().enumerate().filter(|(_,r)| r.chromatography.is_none() && !r.trace.is_empty()).map(|(j,r)| c::process(c::Trace::from_points(format!("{} / {}",r.sample,r.analyte),&r.trace),batch_config.clone()).map(|a|(j,a))).collect();
-                match proposals {Ok(values)=>{for (j,a) in values {q.results[j].chromatography=Some(a);}q.advanced_preview=None;q.message="Advanced batch processing saved in memory. Save batch to retain signal stages and history.".into();},Err(e)=>q.message=e.to_string()}
-            }
-            ui.horizontal(|ui| {ui.label("Correction / review reason");ui.text_edit_singleline(&mut q.advanced_reason);});
-            if let Some(a)=&q.results[i].chromatography {
-                let mut correction=None;
-                ui.horizontal_wrapped(|ui| {
-                    if ui.button("Preview manual bounds").clicked() {correction=Some(Correction::Manual{intervals:vec![[q.start,q.end]],reason:q.advanced_reason.clone()});}
-                    if ui.button("Copy reference bounds").clicked() {q.reference_bounds=Some(a.peaks().iter().map(|p|[p.start_minutes,p.end_minutes]).collect());}
-                    ui.label("Reference RT shift (min)");ui.add(egui::DragValue::new(&mut q.reference_shift).speed(0.01));
-                    if ui.add_enabled(q.reference_bounds.is_some(),egui::Button::new("Preview reference bounds")).clicked() {correction=Some(Correction::Reference{intervals:q.reference_bounds.clone().unwrap_or_default(),shift_minutes:q.reference_shift,reason:q.advanced_reason.clone()});}
-                    if ui.button("Preview restore automatic").clicked() {correction=Some(Correction::Restore{revision:0,reason:q.advanced_reason.clone()});}
-                    if ui.add_enabled(!a.revisions.is_empty(),egui::Button::new("Preview undo")).clicked() {correction=Some(Correction::Restore{revision:a.revisions.len().saturating_sub(1),reason:q.advanced_reason.clone()});}
-                    if ui.button("Preview accept").clicked() {correction=Some(Correction::Accept{reason:q.advanced_reason.clone()});}
-                });
-                if let Some(correction)=correction {match c::revise(a,a.revisions.len(),correction,"gui",true) {Ok(p)=>q.advanced_preview=Some((i,p)),Err(e)=>q.message=e.to_string()}}
-            }
-            if q.advanced_preview.as_ref().is_some_and(|(j,_)| *j==i) && ui.button("Apply advanced preview").clicked() {
-                let proposed=q.advanced_preview.as_ref().unwrap().1.clone();
-                let result=if let Some(original)=&q.results[i].chromatography {
-                    let correction=proposed.revisions.last().unwrap().correction.clone();
-                    c::revise(original,proposed.revisions.len()-1,correction,"gui",false)
-                } else {Ok(proposed)};
-                match result {Ok(a)=>{q.results[i].chromatography=Some(a);q.advanced_preview=None;q.message="Advanced result applied; save batch to preserve history.".into();},Err(e)=>q.message=e.to_string()}
-            }
-            if ui.button("Export advanced peaks CSV…").clicked() {
-                if let Some(path)=rfd::FileDialog::new().add_filter("CSV",&["csv"]).save_file() {
-                    use std::io::Write;
-                    let analyses:Vec<_>=q.results.iter().filter_map(|r|r.chromatography.clone()).collect();
-                    match std::fs::OpenOptions::new().write(true).create_new(true).open(path).and_then(|mut f| f.write_all(c::peaks_csv(&analyses).as_bytes())) {Ok(())=>q.message="Advanced peaks exported.".into(),Err(e)=>q.message=e.to_string()}
+fn analyte_index(q: &QuantState, i: usize) -> Option<usize> {
+    let name = &q.results.get(i)?.analyte;
+    q.method
+        .analytes
+        .iter()
+        .position(|a| &a.extraction.name == name)
+}
+/// Classic settings built from the method-level smoothing, prominence and boundary fraction.
+fn method_default(method: &Method) -> Integration {
+    Integration {
+        smoothing: method.detection_smoothing,
+        minimum_prominence: method.minimum_height,
+        boundary_fraction: method.boundary_fraction,
+        ..Integration::default()
+    }
+}
+/// The settings currently applied to a result's analyte.
+fn applied_integration(q: &QuantState, i: usize) -> Integration {
+    analyte_index(q, i)
+        .map(|k| q.method.analytes[k].integration_for(&q.method))
+        .unwrap_or_default()
+}
+/// Closed outline of the integrated area: the signal, then the baseline back.
+fn profile_outline(profile: &integration::Profile) -> Vec<[f64; 2]> {
+    let mut points = processing::decimate_for_display(&profile.signal);
+    points.extend(profile.baseline.iter().rev().copied());
+    points
+}
+/// Peak and baseline the draft settings would give, when they differ from the applied ones.
+fn draft_overlay(q: &QuantState, i: usize) -> Option<(crate::quant::Peak, integration::Profile)> {
+    let k = analyte_index(q, i)?;
+    let (name, _, draft) = q.draft.as_ref()?;
+    let r = &q.results[i];
+    if *name != r.analyte || *draft == applied_integration(q, i) || draft.validate().is_err() {
+        return None;
+    }
+    let a = &q.method.analytes[k];
+    let (peak, _) = integration::detect(&r.trace, a.rt_window, a.expected_rt, draft);
+    let peak = peak?;
+    let profile = integration::profile(&r.trace, peak.start, peak.end, draft).ok()?;
+    Some((peak, profile))
+}
+/// Writes `cfg` into the analyte's method entry and re-integrates its stored traces.
+fn apply_integration(q: &mut QuantState, k: usize, cfg: Integration) {
+    let default = method_default(&q.method);
+    q.method.analytes[k].integration = (cfg != default).then_some(cfg);
+    let method = q.method.clone();
+    let analyte = method.analytes[k].clone();
+    let name = analyte.extraction.name.clone();
+    let snapshot = analyte_signature(&method, &name);
+    let mut count = 0;
+    for r in q
+        .results
+        .iter_mut()
+        .filter(|r| r.analyte == name && !r.trace.is_empty())
+    {
+        r.method = snapshot.clone();
+        let kept = matches!(r.status, Status::Manual | Status::Reviewed);
+        if kept {
+            // Boundaries were chosen by a scientist; only the baseline-dependent area changes.
+            if let Some(p) = &r.peak {
+                if let Ok(updated) = measure_for(&r.trace, p.start, p.end, &analyte, &method) {
+                    r.peak = Some(updated);
                 }
             }
-        });
-        let visible=q.advanced_preview.as_ref().filter(|(j,_)|*j==i).map(|(_,a)|a).or(q.results[i].chromatography.as_ref());
-        if let Some(a)=visible {
-            if q.advanced_preview.as_ref().is_some_and(|(j,_)|*j==i) { ui.colored_label(ui.visuals().warn_fg_color,"Non-destructive preview - apply explicitly to record this result"); }
-            for warning in &a.warnings {ui.small(warning);}
-            ui.small(format!("Revision {}; {} peaks; reviewed: {}",a.revisions.len(),a.peaks().len(),a.revisions.last().is_some_and(|r|r.reviewed)));
-            let series:Vec<_>=a.segments.iter().enumerate().flat_map(|(index,segment)|[("Raw",&segment.raw),("Smoothed",&segment.smoothed),("Baseline",&segment.baseline),("Corrected / integrated",&segment.integration_signal)].into_iter().map(move|(name,values)|(format!("{name} · segment {}",index+1),segment.rt_minutes.iter().zip(values).map(|(x,y)|[*x,*y]).collect()))).collect();
-            super::plot_controls::export_series(ui,&series,"RT (min)","Instrument intensity");
-            super::plot_controls::plot(ui,("advanced_signal_stages",i)).height(180.0).x_axis_label("RT (min)").y_axis_label("Instrument intensity").show(ui,|p| {
-                for s in &a.segments {
-                    for (name,y,color) in [("Raw",&s.raw,super::plot_controls::scientific_color(p.ctx().style().visuals.dark_mode,0)),("Smoothed",&s.smoothed,super::plot_controls::scientific_color(p.ctx().style().visuals.dark_mode,1)),("Baseline",&s.baseline,super::plot_controls::scientific_color(p.ctx().style().visuals.dark_mode,2)),("Corrected / integrated",&s.integration_signal,super::plot_controls::scientific_color(p.ctx().style().visuals.dark_mode,3))] {
-                        let points:Vec<_>=s.rt_minutes.iter().zip(y).map(|(x,y)|[*x,*y]).collect();p.line(Line::new(name,processing::decimate_for_display(&points)).color(color));
-                    }
-                }
-                for peak in a.peaks() {p.vline(VLine::new("Advanced start",peak.start_minutes));p.vline(VLine::new("Advanced end",peak.end_minutes));}
-            });
-            for peak in a.peaks() {ui.label(format!("{:.4}–{:.4} min | apex {:.4} | FWHM {} min | area {:.6e} | {}",peak.start_minutes,peak.end_minutes,peak.apex_minutes,peak.fwhm_minutes.map(|v|format!("{v:.4}")).unwrap_or_else(||"missing".into()),peak.area_intensity_minutes,peak.flags.join(", ")));}
         }
+        let (peak, status, quality) = detect_assessed(&r.trace, &analyte, &method);
+        r.quality = quality;
+        r.automatic = peak.clone();
+        r.automatic_status = status.clone();
+        if !kept {
+            r.peak = peak;
+            r.status = status;
+        }
+        count += 1;
+    }
+    refresh_consistency(&mut q.results);
+    q.message = format!(
+        "Integration settings applied to {count} sample(s) of {name}. Save the method to keep them in the file."
+    );
+}
+/// Per-analyte integration settings with live preview on the selected result.
+fn integration_card(q: &mut QuantState, i: usize, ui: &mut egui::Ui) {
+    let Some(k) = analyte_index(q, i) else {
+        return;
+    };
+    let name = q.results[i].analyte.clone();
+    let applied = applied_integration(q, i);
+    let (window, expected) = (
+        q.method.analytes[k].rt_window,
+        q.method.analytes[k].expected_rt,
+    );
+    let mut cfg = match q.draft.take() {
+        Some((n, base, draft)) if n == name && base == applied => draft,
+        _ => applied.clone(),
+    };
+    let default = method_default(&q.method);
+    let mut action = None;
+    egui::CollapsingHeader::new(
+        egui::RichText::new(format!("Integration settings: {name}")).strong(),
+    )
+    .default_open(true)
+    .show(ui, |ui| {
+        ui.small("Saved per analyte in the method. Changes preview on this peak (orange); Apply stores them and re-integrates every sample of this analyte.");
+        integration_editor::editor(ui, &mut cfg, window);
+        let valid = cfg.validate();
+        if let Err(e) = &valid {
+            ui.colored_label(ui.visuals().warn_fg_color, e);
+        }
+        let differs = cfg != applied;
+        if differs && valid.is_ok() {
+            let r = &q.results[i];
+            let (peak, _) = integration::detect(&r.trace, window, expected, &cfg);
+            ui.horizontal_wrapped(|ui| match (&peak, &r.peak) {
+                (Some(p), current) => {
+                    metric(ui, "Preview area", format!("{:.4e}", p.area));
+                    if let Some(c) = current.as_ref().filter(|c| c.area != 0.0) {
+                        metric(
+                            ui,
+                            "Change",
+                            format!("{:+.1} %", (p.area / c.area - 1.0) * 100.0),
+                        );
+                    }
+                    metric(ui, "Apex", format!("{:.3} min", p.apex_rt));
+                    metric(ui, "Window", format!("{:.3} – {:.3} min", p.start, p.end));
+                }
+                (None, _) => {
+                    ui.colored_label(
+                        ui.visuals().warn_fg_color,
+                        "No peak is found with these settings.",
+                    );
+                }
+            });
+        }
+        ui.horizontal_wrapped(|ui| {
+            let can_apply = differs && valid.is_ok() && q.rx.is_none();
+            if ui
+                .add_enabled(
+                    can_apply,
+                    egui::Button::new(
+                        egui::RichText::new(format!("Apply to all {name} samples")).strong(),
+                    )
+                    .fill(ui.visuals().selection.bg_fill),
+                )
+                .on_hover_text(
+                    "Re-integrates every sample of this analyte and stores the settings in the method",
+                )
+                .clicked()
+            {
+                action = Some(true);
+            }
+            if ui
+                .add_enabled(differs, egui::Button::new("Revert"))
+                .on_hover_text("Discard the changes and show the applied settings")
+                .clicked()
+            {
+                action = Some(false);
+            }
+            if ui
+                .button("Reset to classic defaults")
+                .on_hover_text(
+                    "Classic algorithm with the method-level smoothing, prominence and boundary fraction",
+                )
+                .clicked()
+            {
+                cfg = default.clone();
+            }
+        });
     });
+    match action {
+        Some(true) => {
+            apply_integration(q, k, cfg);
+            select(q, i);
+        }
+        Some(false) => q.draft = None,
+        None => q.draft = Some((name, applied, cfg)),
+    }
 }
 
 impl QuantState {
@@ -1721,6 +2150,7 @@ impl QuantState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::quant::detect;
     fn method() -> Method {
         let mut m = Method {
             detection_smoothing: 0,
@@ -1744,9 +2174,10 @@ mod tests {
     fn result() -> Measurement {
         let m = method();
         let t = trace();
-        let (peak, status) = detect(&t, &m.analytes[0], &m);
+        let (peak, status, quality) = detect_assessed(&t, &m.analytes[0], &m);
         Measurement {
             chromatography: None,
+            quality,
             sample: "sample, \"A\"".into(),
             source: "source.mzML".into(),
             run: "source.mzML".into(),
@@ -1795,11 +2226,71 @@ mod tests {
             [2.0, 0.0],
             [3.0, 0.0],
         ];
-        let (p, status) = detect(&t, &m.analytes[0], &m);
-        assert_eq!(status, Status::Ambiguous);
+        // A second candidate no longer changes the status: it lowers the confidence instead.
+        let (p, status, quality) = detect_assessed(&t, &m.analytes[0], &m);
+        assert_eq!(status, Status::Automatic);
         assert_eq!(p.unwrap().apex_rt, 1.5);
+        let quality = quality.unwrap();
+        assert!(!quality.flags().is_empty());
+        assert_ne!(quality.tier, Tier::High);
+        // A peak clipped by the window edge cannot be High either.
         let t = vec![[0.0, 5.0], [1.0, 10.0], [2.0, 1.0], [3.0, 1.0]];
-        assert_eq!(detect(&t, &m.analytes[0], &m).1, Status::Ambiguous);
+        let (_, status, quality) = detect_assessed(&t, &m.analytes[0], &m);
+        assert_eq!(status, Status::Automatic);
+        assert!(quality.is_none_or(|q| q.tier != Tier::High));
+    }
+    #[test]
+    fn review_state_and_confidence_are_separate_axes() {
+        let mut r = result();
+        r.quality = Some(crate::confidence::Quality {
+            score: 40,
+            tier: Tier::Low,
+            cap: 100,
+            fwhm: None,
+            checks: vec![],
+        });
+        assert!(r.needs_review() && r.low_confidence_unreviewed());
+        assert_eq!(r.review().label(), "Not reviewed");
+        r.status = Status::Reviewed;
+        assert!(!r.needs_review() && !r.low_confidence_unreviewed());
+        assert_eq!(r.review().label(), "Reviewed");
+        assert_eq!(r.tier(), Some(Tier::Low), "confidence is kept after review");
+        r.status = Status::Manual;
+        assert_eq!(r.review().label(), "Edited");
+        // Results saved before scores existed: Ambiguous reads as Low and unreviewed.
+        let mut legacy = result();
+        legacy.quality = None;
+        legacy.status = Status::Ambiguous;
+        assert_eq!(legacy.tier(), Some(Tier::Low));
+        assert!(legacy.needs_review());
+        let json = serde_json::to_string(&legacy).unwrap();
+        assert!(!json.contains("quality"));
+        assert!(serde_json::from_str::<Measurement>(&json)
+            .unwrap()
+            .quality
+            .is_none());
+    }
+    #[test]
+    fn ripples_in_a_long_tail_do_not_end_the_peak_early() {
+        let mut m = method();
+        m.boundary_fraction = 0.05;
+        m.analytes[0].rt_window = [0.0, 8.0];
+        let t = vec![
+            [0.0, 0.0],
+            [1.0, 100.0],
+            [1.5, 1000.0],
+            [2.0, 300.0],
+            [2.5, 120.0],
+            [3.0, 130.0],
+            [3.5, 60.0],
+            [4.0, 70.0],
+            [4.5, 20.0],
+            [5.0, 0.0],
+            [8.0, 0.0],
+        ];
+        let (p, _) = detect(&t, &m.analytes[0], &m);
+        // Ends where the tail falls below 5% of the apex (20 < 50), not at the ripple at 2.5.
+        assert_eq!(p.unwrap().end, 4.5);
     }
     #[test]
     fn local_prominence_rejects_ripples_on_an_elevated_baseline() {
@@ -1999,131 +2490,239 @@ mod tests {
             .area_intensity_minutes += 1.0;
         assert!(validate_batch(&restored).is_err());
     }
+    fn two_analyte_method() -> Method {
+        let mut m = method();
+        let mut second = new_analyte(2);
+        second.expected_rt = 1.5;
+        second.rt_window = [0.0, 4.0];
+        m.analytes.push(second);
+        m
+    }
     #[test]
-    fn advanced_controls_preview_apply_and_review_through_egui() {
-        fn frame(
-            q: &mut QuantState,
-            ctx: &egui::Context,
-            events: Vec<egui::Event>,
-        ) -> egui::FullOutput {
-            ctx.run(
+    fn editing_one_analyte_leaves_other_analytes_results_current() {
+        let m = two_analyte_method();
+        let mut first = result();
+        first.method = analyte_signature(&m, &m.analytes[0].extraction.name);
+        let mut second = result();
+        second.analyte = m.analytes[1].extraction.name.clone();
+        second.method = analyte_signature(&m, &second.analyte);
+        let mut legacy = result();
+        legacy.analyte = m.analytes[1].extraction.name.clone();
+        legacy.method = signature(&m);
+        assert!(!fresh(&m).stale(&first) && !fresh(&m).stale(&second));
+        assert!(
+            !fresh(&m).stale(&legacy),
+            "whole-method snapshots stay current"
+        );
+        let mut edited = m.clone();
+        edited.analytes[0].integration = Some(Integration {
+            baseline: integration::BaselineKind::Zero,
+            ..Integration::default()
+        });
+        let f = fresh(&edited);
+        assert!(f.stale(&first));
+        assert!(!f.stale(&second) && !f.stale(&legacy));
+        edited.analytes[1].integration = Some(Integration::default());
+        assert!(fresh(&edited).stale(&legacy));
+    }
+    #[test]
+    fn applying_settings_reintegrates_one_analyte_and_survives_batch_validation() {
+        let mut q = QuantState::default();
+        q.method = two_analyte_method();
+        let mut first = result();
+        first.analyte = q.method.analytes[0].extraction.name.clone();
+        first.method = analyte_signature(&q.method, &first.analyte);
+        let mut other = result();
+        other.analyte = q.method.analytes[1].extraction.name.clone();
+        other.method = analyte_signature(&q.method, &other.analyte);
+        let untouched = other.clone();
+        let before = first.peak.clone().unwrap().area;
+        q.results = vec![first, other];
+        let cfg = Integration {
+            baseline: integration::BaselineKind::Zero,
+            smoothing: 0,
+            ..Integration::default()
+        };
+        apply_integration(&mut q, 0, cfg.clone());
+        assert_eq!(q.method.analytes[0].integration, Some(cfg));
+        assert!(q.method.analytes[1].integration.is_none());
+        assert_eq!(q.results[1].peak, untouched.peak);
+        assert!(q.results[0].peak.as_ref().unwrap().area >= before);
+        assert!(!fresh(&q.method).stale(&q.results[0]));
+        assert!(!fresh(&q.method).stale(&q.results[1]));
+        // Stored settings reproduce: the batch validates and survives a method round trip.
+        validate_batch(&Batch {
+            version: 1,
+            method: q.method.clone(),
+            results: q.results.clone(),
+            samples: vec![],
+        })
+        .unwrap();
+        let text = signature(&q.method);
+        assert!(text.contains("[analytes.integration]") && text.contains("baseline = \"zero\""));
+        let restored: Method = toml::from_str(&text).unwrap();
+        assert_eq!(signature(&restored), text);
+        // Applying the method defaults again removes the custom table.
+        let default = method_default(&q.method);
+        apply_integration(&mut q, 0, default);
+        assert!(q.method.analytes[0].integration.is_none());
+    }
+    #[test]
+    fn integration_card_renders_with_a_live_preview_at_small_and_large_sizes() {
+        for width in [520.0, 1200.0] {
+            let mut q = QuantState::default();
+            q.method = method();
+            q.results = vec![result()];
+            select(&mut q, 0);
+            q.draft = Some((
+                q.results[0].analyte.clone(),
+                applied_integration(&q, 0),
+                Integration {
+                    baseline: integration::BaselineKind::Zero,
+                    ..applied_integration(&q, 0)
+                },
+            ));
+            let ctx = egui::Context::default();
+            super::super::workbench::configure(&ctx, true);
+            let output = ctx.run(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
-                        egui::vec2(1440.0, 1400.0),
+                        egui::vec2(width, 900.0),
                     )),
-                    events,
                     ..Default::default()
                 },
                 |ctx| {
                     egui::CentralPanel::default().show(ctx, |ui| {
-                        egui::ScrollArea::vertical().show(ui, |ui| advanced_review(q, 0, ui));
+                        egui::ScrollArea::vertical().show(ui, |ui| integration_card(&mut q, 0, ui));
                     });
                 },
-            )
-        }
-        fn click(q: &mut QuantState, ctx: &egui::Context, label: &str) -> egui::FullOutput {
-            let output = frame(q, ctx, vec![]);
-            let pos = super::super::test_render::text_center(&output.shapes, label)
-                .unwrap_or_else(|| panic!("Missing control {label}"));
-            frame(
-                q,
-                ctx,
-                vec![
-                    egui::Event::PointerMoved(pos),
-                    egui::Event::PointerButton {
-                        pos,
-                        button: egui::PointerButton::Primary,
-                        pressed: true,
-                        modifiers: Default::default(),
-                    },
-                ],
             );
-            frame(
-                q,
-                ctx,
-                vec![egui::Event::PointerButton {
-                    pos,
-                    button: egui::PointerButton::Primary,
-                    pressed: false,
-                    modifiers: Default::default(),
-                }],
-            )
+            for label in ["Baseline", "Revert", "Preview area"] {
+                assert!(
+                    super::super::test_render::text_center(&output.shapes, label).is_some(),
+                    "missing {label} at width {width}"
+                );
+            }
+            assert!(q.draft.is_some());
         }
+    }
+    #[test]
+    fn committing_an_edited_method_flags_old_results_without_touching_the_file() {
         let mut q = QuantState::default();
-        q.results = vec![result()];
-        q.advanced_config = crate::chromatography::Config {
-            smoothing: None,
-            baseline: crate::chromatography::Baseline::None,
-            minimum_snr: 0.0,
-            ..Default::default()
+        q.method = method();
+        q.saved_method = signature(&q.method);
+        let mut r = result();
+        r.method = analyte_signature(&q.method, &r.analyte);
+        q.results = vec![r];
+        let mut draft = q.method.clone();
+        // An unchanged draft is a no-op.
+        commit_method(&mut q, &draft);
+        assert!(q.message.is_empty());
+        draft.analytes[0].integration = Some(Integration {
+            baseline: integration::BaselineKind::Zero,
+            ..Integration::default()
+        });
+        commit_method(&mut q, &draft);
+        assert!(q.message.contains("1 result(s)") && q.message.contains("Reprocess"));
+        assert!(fresh(&q.method).stale(&q.results[0]));
+        assert_ne!(
+            signature(&q.method),
+            q.saved_method,
+            "the file text is unchanged until Save"
+        );
+    }
+    #[test]
+    fn method_window_edits_a_draft_until_ok() {
+        let mut app = MzViewerApp::default();
+        app.quant.active = true;
+        app.quant.method = method();
+        app.quant.method_open = true;
+        let ctx = egui::Context::default();
+        super::super::workbench::configure(&ctx, true);
+        let run_frame = |app: &mut MzViewerApp| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1300.0, 800.0),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| show(app, ctx),
+            )
         };
+        // A new window is laid out invisibly on its first frame.
+        run_frame(&mut app);
+        let output = run_frame(&mut app);
+        for label in ["OK", "Cancel"] {
+            assert!(
+                super::super::test_render::text_center(&output.shapes, label).is_some(),
+                "missing {label}"
+            );
+        }
+        // Edits live in the draft; the batch method is untouched until OK.
+        let before = signature(&app.quant.method);
+        app.quant.method_draft.as_mut().unwrap().1.name = "Edited".into();
+        run_frame(&mut app);
+        assert_eq!(signature(&app.quant.method), before);
+        assert_eq!(app.quant.method_draft.as_ref().unwrap().1.name, "Edited");
+    }
+    #[test]
+    fn confidence_and_review_are_shown_in_the_table_and_the_review_pane() {
+        let mut q = QuantState::default();
+        q.method = method();
+        let mut r = result();
+        r.method = analyte_signature(&q.method, &r.analyte);
+        r.quality = Some(crate::confidence::Quality {
+            score: 62,
+            tier: Tier::Medium,
+            cap: 100,
+            fwhm: Some(0.2),
+            checks: vec![crate::confidence::Check {
+                name: "Asymmetry".into(),
+                value: "2.60 at 10 % height".into(),
+                score: 0.2,
+                weight: 0.1,
+                flag: Some("tailing".into()),
+            }],
+        });
+        q.results = vec![r];
         select(&mut q, 0);
         let ctx = egui::Context::default();
-        super::super::workbench::configure(&ctx, false);
-        let mut frames = vec![frame(&mut q, &ctx, vec![])];
-        frames.push(click(&mut q, &ctx, "Advanced chromatographic processing"));
-        // Settle the collapsing animation before locating controls.
-        ctx.style_mut(|s| s.animation_time = 0.0);
-        frames.push(frame(&mut q, &ctx, vec![]));
-        frames.push(click(&mut q, &ctx, "Preview processing"));
-        assert!(q.results[0].chromatography.is_none());
-        assert!(q.advanced_preview.is_some());
-        frames.push(click(&mut q, &ctx, "Apply advanced preview"));
-        assert!(q.results[0].chromatography.is_some());
-        q.start = 0.75;
-        q.end = 2.6;
-        q.advanced_reason = "Software UI verification".into();
-        frames.push(click(&mut q, &ctx, "Preview manual bounds"));
-        assert!(q.results[0]
-            .chromatography
-            .as_ref()
-            .unwrap()
-            .revisions
-            .is_empty());
-        frames.push(click(&mut q, &ctx, "Apply advanced preview"));
-        assert_eq!(
-            q.results[0]
-                .chromatography
-                .as_ref()
-                .unwrap()
-                .revisions
-                .len(),
-            1
-        );
-        frames.push(click(&mut q, &ctx, "Preview accept"));
-        frames.push(click(&mut q, &ctx, "Apply advanced preview"));
-        assert!(q.results[0].chromatography.as_ref().unwrap().revisions[1].reviewed);
-        let mut second = result();
-        second.sample = "Second sample".into();
-        q.results.push(second);
-        // A draft from another row must not override the saved configuration
-        // currently displayed to the user when processing unprocessed rows.
-        q.advanced_config.baseline = crate::chromatography::Baseline::EndpointChord;
-        frames.push(click(&mut q, &ctx, "Process unprocessed batch traces"));
-        assert_eq!(
-            q.results[1]
-                .chromatography
-                .as_ref()
-                .unwrap()
-                .config
-                .baseline,
-            crate::chromatography::Baseline::None
-        );
-        frames.push(frame(&mut q, &ctx, vec![]));
-        if std::env::var_os("CHROMASCOPE_QUANT_PREVIEW").is_some() {
-            super::super::test_render::save(
-                &ctx,
-                frames,
-                &PathBuf::from("target/chromatography-review.png"),
-                egui::vec2(1440.0, 1400.0),
+        super::super::workbench::configure(&ctx, true);
+        let mut output = None;
+        for _ in 0..2 {
+            output = Some(ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1400.0, 900.0),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| review_stage(&mut q, ui));
+                },
+            ));
+        }
+        let output = output.unwrap();
+        for label in ["Confidence", "Review", "Tailing", "Why this score"] {
+            assert!(
+                super::super::test_render::text_center(&output.shapes, label).is_some(),
+                "missing {label}"
             );
         }
+        assert!(
+            super::super::test_render::text_center(&output.shapes, "● 62 Medium").is_some(),
+            "table shows the score and tier"
+        );
     }
     #[test]
     fn csv_quotes_names_keeps_missing_areas_blank_and_marks_stale_methods() {
         let mut missing = result();
         missing.peak = None;
+        missing.quality = None;
         missing.automatic = None;
         missing.status = Status::Missing;
         missing.automatic_status = Status::Missing;
@@ -2131,8 +2730,10 @@ mod tests {
         m.analytes[0].extraction.ppm = 20.0;
         let output = csv(&[missing], &m);
         assert!(output.contains("\"sample, \"\"A\"\"\""));
-        assert!(output.contains("\"Missing\",\"true\",\"\",\"\",\"\",\"\",\"\""));
-        assert!(output.contains("\"linear\",\"unsmoothed\""));
+        assert!(output.contains(
+            "\"Missing\",\"true\",\"Not reviewed\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\""
+        ));
+        assert!(output.contains("\"straight_line\",\"unsmoothed\",\"classic\""));
     }
     fn sample(app: &mut MzViewerApp, id: usize) {
         let path = PathBuf::from("test_file/data_dependent_02.mzML");

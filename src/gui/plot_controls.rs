@@ -14,19 +14,30 @@ pub(super) fn set_legend(ctx: &egui::Context, plot_id: egui::Id, shown: bool) {
     ctx.data_mut(|d| d.insert_temp(plot_id.with("legend"), shown));
 }
 pub(super) fn plot(ui: &mut egui::Ui, source: impl std::hash::Hash) -> Plot<'static> {
-    plot_inner(ui, source, true)
+    plot_inner(ui, source, true, true, false)
 }
-/// Like [`plot`] but without the toolbar row; drive it with [`trigger`] / [`set_legend`].
+/// Like [`plot`] but the view only moves along x: the toolbar zoom/pan leave the y-range
+/// untouched, so intensity stays auto-fitted (chromatograms).
+pub(super) fn plot_x_only(ui: &mut egui::Ui, source: impl std::hash::Hash) -> Plot<'static> {
+    plot_inner(ui, source, true, true, true)
+}
+/// Like [`plot_x_only`] but without the toolbar row; drive it with [`trigger`] / [`set_legend`].
 pub(super) fn plot_bare(ui: &mut egui::Ui, source: impl std::hash::Hash) -> Plot<'static> {
-    plot_inner(ui, source, false)
+    plot_inner(ui, source, false, false, true)
 }
-fn plot_inner(ui: &mut egui::Ui, source: impl std::hash::Hash, toolbar: bool) -> Plot<'static> {
+fn plot_inner(
+    ui: &mut egui::Ui,
+    source: impl std::hash::Hash,
+    toolbar: bool,
+    legend_default: bool,
+    x_only: bool,
+) -> Plot<'static> {
     let id = ui.make_persistent_id(source);
     let mut reset = false;
     let mut legend = ui
         .ctx()
         .data(|d| d.get_temp::<bool>(id.with("legend")))
-        .unwrap_or(true);
+        .unwrap_or(legend_default);
     // Scientists can move the legend when it covers peaks or annotations.
     // 0 = top right (default), 1 = top left, 2 = bottom left, 3 = bottom right.
     let mut corner = ui
@@ -138,13 +149,17 @@ fn plot_inner(ui: &mut egui::Ui, source: impl std::hash::Hash, toolbar: bool) ->
                 ];
                 let half = [
                     (max[0] - min[0]) * factor / 2.,
-                    (max[1] - min[1]) * factor / 2.,
+                    if x_only {
+                        (max[1] - min[1]) / 2.
+                    } else {
+                        (max[1] - min[1]) * factor / 2.
+                    },
                 ];
                 memory.set_bounds(PlotBounds::from_min_max(
                     [center[0] - half[0], center[1] - half[1]],
                     [center[0] + half[0], center[1] + half[1]],
                 ));
-                memory.auto_bounds = egui::Vec2b::FALSE;
+                memory.auto_bounds = egui::Vec2b::new(false, x_only);
             }
         }
     });

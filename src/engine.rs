@@ -599,9 +599,10 @@ pub fn execute(path: &Path, request: Request, control: &JobControl) -> Result<Re
                     control.check()?;
                     let (trace, _) = extraction.map_err(|e| fail(e.to_string()))?;
                     validate_points(&trace)?;
-                    let (peak, status) = quant::detect(&trace, a, method);
+                    let (peak, status, quality) = quant::detect_assessed(&trace, a, method);
                     measurements.push(quant::Measurement {
                         chromatography: None,
+                        quality,
                         sample: path
                             .file_name()
                             .unwrap_or_default()

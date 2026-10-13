@@ -288,7 +288,7 @@ pub fn noise_sigma(x: &[f64], y: &[f64]) -> f64 {
 }
 /// Reorthogonalized QR local least squares; centered/scaled RT limits conditioning.
 #[allow(clippy::needless_range_loop)] // Triangular QR indexing expresses dependencies explicitly.
-fn smooth(x: &[f64], y: &[f64], s: &SavitzkyGolay) -> Result<Vec<f64>> {
+pub(crate) fn smooth(x: &[f64], y: &[f64], s: &SavitzkyGolay) -> Result<Vec<f64>> {
     let n = y.len();
     let w = s.window;
     (0..n)
@@ -367,7 +367,7 @@ fn band_solve(diag: &[f64], sub1: &[f64], sub2: &[f64], rhs: &[f64]) -> Result<V
     }
     Ok(z)
 }
-fn baseline(x: &[f64], y: &[f64], model: &Baseline) -> Result<Vec<f64>> {
+pub(crate) fn baseline(x: &[f64], y: &[f64], model: &Baseline) -> Result<Vec<f64>> {
     let n = y.len();
     match *model {
         Baseline::None => Ok(vec![0.0; n]),

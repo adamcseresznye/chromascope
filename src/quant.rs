@@ -1,4 +1,6 @@
 //! Shared targeted quantification; version 1 preserves legacy peak selection and chord areas.
+use crate::confidence::{self, Quality, Tier};
+use crate::integration::{self, Integration};
 use crate::presets::{Preset, TraceSpec};
 use crate::processing::{self, ProcessingParams};
 use serde::{Deserialize, Serialize};
@@ -11,6 +13,20 @@ pub struct Analyte {
     pub expected_rt: f64,
     pub rt_window: [f64; 2],
     pub extraction: TraceSpec,
+    /// Per-analyte integration settings; absent means the method-level classic defaults.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub integration: Option<Integration>,
+}
+impl Analyte {
+    /// The settings actually used for this analyte: its own, or the method-level classic ones.
+    pub fn integration_for(&self, method: &Method) -> Integration {
+        self.integration.clone().unwrap_or_else(|| Integration {
+            smoothing: method.detection_smoothing,
+            minimum_prominence: method.minimum_height,
+            boundary_fraction: method.boundary_fraction,
+            ..Integration::default()
+        })
+    }
 }
 
 #[cfg_attr(feature = "mcp-headless", derive(rmcp::schemars::JsonSchema))]
@@ -55,6 +71,7 @@ pub fn new_analyte(n: usize) -> Analyte {
             precursor_mz: None,
             mz_range: None,
         },
+        integration: None,
     }
 }
 pub fn validate(method: &Method) -> Result<Vec<ProcessingParams>, String> {
@@ -93,6 +110,10 @@ pub fn validate(method: &Method) -> Result<Vec<ProcessingParams>, String> {
         }
         if a.extraction.kind != "XIC" || a.extraction.mz_range.is_some() {
             return Err("Batch quantification methods use XIC extraction; set kind = 'XIC' and omit mz_range.".into());
+        }
+        if let Some(cfg) = &a.integration {
+            cfg.validate()
+                .map_err(|e| format!("{}: integration: {e}", a.extraction.name))?;
         }
         if a.extraction.smoothing != 0 {
             return Err("Extraction smoothing must be 0: batch areas use unsmoothed data.".into());
@@ -143,6 +164,9 @@ pub enum Status {
 pub struct Measurement {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chromatography: Option<crate::chromatography::Analysis>,
+    /// How far the automatic integration can be trusted, and why (see [`crate::confidence`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality: Option<Quality>,
     pub sample: String,
     pub source: String,
     pub run: String,
@@ -156,101 +180,106 @@ pub struct Measurement {
     pub status: Status,
     pub diagnostic: String,
 }
+/// Peak between explicit bounds with the legacy straight-line baseline.
 pub fn measure(trace: &[[f64; 2]], start: f64, end: f64) -> Result<Peak, String> {
-    if trace.len() < 3
-        || !start.is_finite()
-        || !end.is_finite()
-        || start >= end
-        || start < trace[0][0]
-        || end > trace[trace.len() - 1][0]
-    {
-        return Err("Integration bounds must be increasing and inside the measured trace.".into());
+    integration::measure(trace, start, end, &Integration::default())
+}
+/// Peak between explicit bounds, integrated with the analyte's own baseline setting.
+pub fn measure_for(
+    trace: &[[f64; 2]],
+    start: f64,
+    end: f64,
+    analyte: &Analyte,
+    method: &Method,
+) -> Result<Peak, String> {
+    integration::measure(trace, start, end, &analyte.integration_for(method))
+}
+/// Whether a person has looked at the result; independent of the confidence score.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Review {
+    NotReviewed,
+    /// Accepted by a reviewer as integrated.
+    Reviewed,
+    /// Boundaries were set by hand.
+    Edited,
+}
+impl Review {
+    pub fn label(self) -> &'static str {
+        match self {
+            Review::NotReviewed => "Not reviewed",
+            Review::Reviewed => "Reviewed",
+            Review::Edited => "Edited",
+        }
     }
-    let apex = trace
+}
+impl Measurement {
+    pub fn review(&self) -> Review {
+        match self.status {
+            Status::Reviewed => Review::Reviewed,
+            Status::Manual => Review::Edited,
+            _ => Review::NotReviewed,
+        }
+    }
+    /// Confidence tier of the automatic result; `Ambiguous` results saved before confidence
+    /// scores existed count as low.
+    pub fn tier(&self) -> Option<Tier> {
+        match (&self.quality, &self.status) {
+            (Some(q), _) => Some(q.tier),
+            (None, Status::Ambiguous) => Some(Tier::Low),
+            _ => None,
+        }
+    }
+    /// True when a person or AI reviewer should look at the result before it is relied on.
+    pub fn needs_review(&self) -> bool {
+        match self.status {
+            Status::Missing
+            | Status::Failed
+            | Status::Cancelled
+            | Status::Pending
+            | Status::Ambiguous => true,
+            Status::Reviewed | Status::Manual => false,
+            Status::Automatic => self.tier() == Some(Tier::Low),
+        }
+    }
+    /// A low-confidence automatic peak that no one has reviewed yet.
+    pub fn low_confidence_unreviewed(&self) -> bool {
+        self.review() == Review::NotReviewed
+            && self.peak.is_some()
+            && self.tier() == Some(Tier::Low)
+    }
+}
+/// Like [`detect`], also judging how far the automatic result can be trusted.
+pub fn detect_assessed(
+    trace: &[[f64; 2]],
+    analyte: &Analyte,
+    method: &Method,
+) -> (Option<Peak>, Status, Option<Quality>) {
+    let cfg = analyte.integration_for(method);
+    let found = integration::candidates(trace, analyte.rt_window, analyte.expected_rt, &cfg);
+    let quality = confidence::assess(trace, analyte.rt_window, analyte.expected_rt, &cfg, &found);
+    match found.into_iter().next() {
+        Some(c) => (Some(c.peak), Status::Automatic, quality),
+        None => (None, Status::Missing, None),
+    }
+}
+/// Adds the across-samples checks (retention time and width against the batch) to every
+/// result's confidence. Safe to call repeatedly.
+pub fn refresh_consistency(results: &mut [Measurement]) {
+    let mut qualities: Vec<Option<Quality>> = results.iter().map(|r| r.quality.clone()).collect();
+    let peaks: Vec<Option<(String, f64)>> = results
         .iter()
-        .filter(|p| p[0] >= start && p[0] <= end)
-        .max_by(|a, b| a[1].total_cmp(&b[1]))
-        .ok_or("The interval contains no scans.")?;
-    let area = processing::integrate_peak(trace, start, end).map_err(|e| e.to_string())?;
-    Ok(Peak {
-        start,
-        end,
-        apex_rt: apex[0],
-        height: apex[1],
-        area,
-    })
+        .map(|r| r.automatic.as_ref().map(|p| (r.analyte.clone(), p.apex_rt)))
+        .collect();
+    confidence::batch_consistency(&mut qualities, &peaks);
+    for (r, q) in results.iter_mut().zip(qualities) {
+        r.quality = q;
+    }
 }
 pub fn detect(trace: &[[f64; 2]], analyte: &Analyte, method: &Method) -> (Option<Peak>, Status) {
-    let window: Vec<_> = trace
-        .iter()
-        .copied()
-        .filter(|p| p[0] >= analyte.rt_window[0] && p[0] <= analyte.rt_window[1])
-        .collect();
-    if window.len() < 3 {
-        return (None, Status::Missing);
-    }
-    let smooth = processing::smooth_chromatogram(window.clone(), method.detection_smoothing)
-        .unwrap_or_else(|_| window.clone());
-    let floor = smooth.iter().map(|p| p[1]).fold(f64::INFINITY, f64::min);
-    let mut candidates = Vec::new();
-    for i in 1..smooth.len() - 1 {
-        if smooth[i][1] <= smooth[i - 1][1] || smooth[i][1] < smooth[i + 1][1] {
-            continue;
-        }
-        // Reject small ripples on an elevated baseline using local prominence.
-        let mut valley_left = i;
-        let mut valley_right = i;
-        while valley_left > 0 && smooth[valley_left - 1][1] <= smooth[valley_left][1] {
-            valley_left -= 1;
-        }
-        while valley_right + 1 < smooth.len()
-            && smooth[valley_right + 1][1] <= smooth[valley_right][1]
-        {
-            valley_right += 1;
-        }
-        let prominence = smooth[i][1] - smooth[valley_left][1].max(smooth[valley_right][1]);
-        if prominence <= method.minimum_height {
-            continue;
-        }
-        let left_threshold = smooth[valley_left][1]
-            + (smooth[i][1] - smooth[valley_left][1]) * method.boundary_fraction;
-        let right_threshold = smooth[valley_right][1]
-            + (smooth[i][1] - smooth[valley_right][1]) * method.boundary_fraction;
-        let clip_threshold = floor + (smooth[i][1] - floor) * method.boundary_fraction;
-        let mut left = i;
-        let mut right = i;
-        while left > valley_left && smooth[left][1] > left_threshold {
-            left -= 1;
-        }
-        while right < valley_right && smooth[right][1] > right_threshold {
-            right += 1;
-        }
-        if let Ok(peak) = measure(trace, smooth[left][0], smooth[right][0]) {
-            if peak.area > 0.0 {
-                candidates.push((
-                    i,
-                    peak,
-                    (left == 0 && smooth[left][1] > clip_threshold)
-                        || (right == smooth.len() - 1 && smooth[right][1] > clip_threshold),
-                ));
-            }
-        }
-    }
-    candidates.sort_by(|a, b| {
-        (smooth[a.0][0] - analyte.expected_rt)
-            .abs()
-            .total_cmp(&(smooth[b.0][0] - analyte.expected_rt).abs())
-    });
-    if let Some((_, peak, clipped)) = candidates.first() {
-        (
-            Some(peak.clone()),
-            if candidates.len() > 1 || *clipped {
-                Status::Ambiguous
-            } else {
-                Status::Automatic
-            },
-        )
-    } else {
-        (None, Status::Missing)
-    }
+    integration::detect(
+        trace,
+        analyte.rt_window,
+        analyte.expected_rt,
+        &analyte.integration_for(method),
+    )
 }

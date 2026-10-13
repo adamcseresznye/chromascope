@@ -26,7 +26,7 @@ fn render_chromatogram(
         .map(|(id, p)| format!("chromatogram_{id}_{p:?}"))
         .unwrap_or_else(|| "chromatogram_overlay".into());
     let controls_top = ui.cursor().top();
-    let plot = super::plot_controls::plot(ui, id);
+    let plot = super::plot_controls::plot_x_only(ui, id);
     let remaining_height = (height - (ui.cursor().top() - controls_top)).max(150.0);
     let mut plot = plot
         .width(ui.available_width())
@@ -47,9 +47,12 @@ fn render_chromatogram(
     if key.is_some() {
         plot = plot.link_axis("stacked_retention_time", [true, false]);
     }
-    if shared_maximum.is_some() {
-        plot = plot.allow_zoom([true, false]).allow_drag([true, false]);
-    }
+    // Chromatograms only move along retention time (the baseline must not leave zero);
+    // intensity stays auto-fitted, for drag, wheel and zoom alike.
+    plot = plot
+        .allow_drag([true, false])
+        .allow_zoom([true, false])
+        .allow_scroll([true, false]);
     if app.workspace.reset_plots {
         plot = plot.reset();
     }
@@ -725,7 +728,10 @@ pub fn plot_mass_spectrum(app: &mut MzViewerApp, ui: &mut egui::Ui) -> egui::Res
                     .flatten();
                 app.workspace.apply_spectrum_bounds = false;
                 let mut spectrum_bounds = None;
+                // Headroom above the base peak keeps its hover tooltip clear of the divider.
+                let headroom = intensity.iter().fold(0.0_f64, |m, &i| m.max(i.into())) * 1.35;
                 let response = super::plot_controls::plot_bare(ui, "mass_spectrum")
+                    .include_y(headroom)
                     .width(ui.available_width() * 0.99)
                     .height(ui.available_height())
                     .x_axis_label("m/z (Th)")
@@ -735,6 +741,9 @@ pub fn plot_mass_spectrum(app: &mut MzViewerApp, ui: &mut egui::Ui) -> egui::Res
                     )
                     .show_background(false)
                     .show_grid([false, true])
+                    .allow_drag([true, false])
+                    .allow_zoom([true, false])
+                    .allow_scroll([true, false])
                     .grid_spacing(egui::Rangef::new(12.0, 1800.0))
                     .label_formatter(|name, value| {
                         if name.is_empty() {

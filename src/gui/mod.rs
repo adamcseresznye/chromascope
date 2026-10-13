@@ -110,6 +110,7 @@ mod dialogs;
 mod examples;
 mod forms;
 mod information;
+mod integration_editor;
 mod interactivity;
 mod panels;
 mod plot_controls;
