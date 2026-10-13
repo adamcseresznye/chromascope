@@ -1105,6 +1105,9 @@ fn plot_options(app: &mut MzViewerApp, ui: &mut Ui) {
     }
     if !app.workspace.overlay {
         ui.menu_button("Grid layout…", |ui| {
+            ui.checkbox(&mut app.workspace.view.auto_grid, "Automatic")
+                .on_hover_text("Fit the grid to the window and show every sample. Turn off to fix rows and columns; extra traces then go to further pages.");
+            ui.add_enabled_ui(!app.workspace.view.auto_grid, |ui| {
             egui::Grid::new("grid_layout_controls").show(ui, |ui| {
                 ui.label("Rows");
                 ui.add(egui::DragValue::new(&mut app.workspace.view.rows).range(1..=8));
@@ -1118,6 +1121,7 @@ fn plot_options(app: &mut MzViewerApp, ui: &mut Ui) {
                     app.workspace.view.columns = (app.workspace.view.columns + 1).min(8);
                 }
                 ui.end_row();
+            });
             });
         });
     }

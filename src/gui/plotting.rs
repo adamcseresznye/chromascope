@@ -336,8 +336,11 @@ pub fn plot_chromatogram(
                 interactions(app, &response, bounds, point, None);
             } else {
                 let keys = super::workspace::trace_keys(app, true);
-                let capacity =
-                    app.workspace.view.rows.clamp(1, 8) * app.workspace.view.columns.clamp(1, 8);
+                let capacity = if app.workspace.view.auto_grid {
+                    keys.len().max(1)
+                } else {
+                    app.workspace.view.rows.clamp(1, 8) * app.workspace.view.columns.clamp(1, 8)
+                };
                 let pages = keys.len().div_ceil(capacity).max(1);
                 app.workspace.page = app.workspace.page.min(pages - 1);
                 if pages > 1 {
@@ -376,12 +379,12 @@ pub fn plot_chromatogram(
                             .take(capacity)
                             .collect::<Vec<_>>();
                         let width = ui.available_width();
-                        let columns = app
-                            .workspace
-                            .view
-                            .columns
-                            .clamp(1, 8)
-                            .min(selected.len().max(1));
+                        let columns = grid_columns(
+                            app.workspace.view.auto_grid,
+                            app.workspace.view.columns,
+                            width,
+                            selected.len(),
+                        );
                         let card_width = ((width - 8.0 * (columns - 1) as f32) / columns as f32)
                             .clamp(220.0, 760.0);
                         let height = ((available_height - 56.0)
@@ -451,6 +454,16 @@ pub fn plot_chromatogram(
     app.workspace.apply_bounds = false;
     app.workspace.reset_plots = false;
     response
+}
+/// Columns of the chromatogram grid: fitted to the width when automatic (cards of at least about
+/// 340 px), otherwise the user's setting.
+pub(super) fn grid_columns(auto: bool, setting: usize, width: f32, traces: usize) -> usize {
+    let wanted = if auto {
+        ((width / 340.0).floor() as usize).clamp(1, 6)
+    } else {
+        setting.clamp(1, 8)
+    };
+    wanted.min(traces.max(1))
 }
 fn comparison_grid(
     app: &mut MzViewerApp,

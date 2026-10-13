@@ -216,18 +216,16 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         assert_eq!(app.active_file_id, Some(11));
+        // Every sample with the preset applied is listed, whichever one is highlighted.
         let keys = super::super::workspace::trace_keys(&app, true);
-        assert_eq!(keys.len(), 2);
-        assert!(keys.iter().all(|(id, _)| *id == 11));
+        assert_eq!(keys.len(), 4);
+        assert_eq!(keys.iter().filter(|(id, _)| *id == 11).count(), 2);
+        assert_eq!(keys.iter().filter(|(id, _)| *id == 10).count(), 2);
         app.active_file_id = Some(10);
         super::super::workspace::activate_file(&mut app, 10);
         poll(&mut app, &egui::Context::default());
         assert!(app.presets.rx.is_none());
         assert!(!app.async_state.is_processing);
-        assert!(super::super::workspace::trace_keys(&app, true)
-            .iter()
-            .all(|(id, _)| *id == 10));
-        app.workspace.view.compare_samples = true;
         assert_eq!(super::super::workspace::trace_keys(&app, true).len(), 4);
     }
     #[test]

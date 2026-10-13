@@ -49,6 +49,9 @@ pub(super) struct ViewSettings {
     pub rows: usize,
     pub columns: usize,
     pub compare_samples: bool,
+    /// Grid layout fits its columns to the window and shows every trace; otherwise `rows` x
+    /// `columns` is fixed and extra traces go to further pages.
+    pub auto_grid: bool,
     pub files: bool,
     pub inspector: bool,
     pub spectrum: bool,
@@ -63,6 +66,7 @@ impl Default for ViewSettings {
             rows: 3,
             columns: 2,
             compare_samples: false,
+            auto_grid: true,
             files: true,
             inspector: true,
             spectrum: true,
@@ -406,9 +410,6 @@ pub(super) fn trace_keys(app: &MzViewerApp, visible_only: bool) -> Vec<(FileId, 
     ids.sort_unstable();
     for id in ids {
         let f = &app.files[&id];
-        if !app.workspace.view.compare_samples && app.active_file_id != Some(id) {
-            continue;
-        }
         if app.presets.specs.is_some() && !app.presets.applied.contains(&id) {
             continue;
         }
@@ -1580,6 +1581,46 @@ mod tests {
         app
     }
     #[test]
+    fn overlay_and_grid_list_every_visible_sample_not_only_the_active_one() {
+        let mut app = app_with_trace();
+        let mut second = app_with_trace().files.remove(&7).unwrap();
+        second.id = 8;
+        second.name = "second.mzML".into();
+        app.files.insert(8, second);
+        // Only file 7 is highlighted, yet both samples are listed.
+        assert_eq!(app.active_file_id, Some(7));
+        let ids: Vec<_> = trace_keys(&app, true)
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(ids, vec![7, 8]);
+        // Hiding a sample removes it from the traces shown.
+        app.files.get_mut(&8).unwrap().display.visible = false;
+        let ids: Vec<_> = trace_keys(&app, true)
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(ids, vec![7]);
+    }
+    #[test]
+    fn automatic_grid_fits_columns_to_the_window_and_the_number_of_traces() {
+        use super::super::plotting::grid_columns;
+        assert_eq!(grid_columns(true, 2, 800.0, 4), 2);
+        assert_eq!(grid_columns(true, 2, 300.0, 4), 1);
+        assert_eq!(
+            grid_columns(true, 2, 2400.0, 3),
+            3,
+            "never more columns than traces"
+        );
+        assert_eq!(grid_columns(true, 2, 2400.0, 20), 6);
+        assert_eq!(
+            grid_columns(false, 3, 300.0, 9),
+            3,
+            "fixed layout ignores the width"
+        );
+        assert_eq!(grid_columns(true, 2, 800.0, 0), 1);
+    }
+    #[test]
     fn retained_xics_select_without_losing_full_resolution_or_parameters() {
         let mut app = app_with_trace();
         retain_current(&mut app, 7);
@@ -1933,6 +1974,7 @@ mod tests {
             rows: 3,
             columns: 2,
             compare_samples: false,
+            auto_grid: true,
             files: false,
             inspector: false,
             spectrum: false,
