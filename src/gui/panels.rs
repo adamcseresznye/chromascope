@@ -1131,17 +1131,16 @@ fn plot_options(app: &mut MzViewerApp, ui: &mut Ui) {
         app.workspace.view.intensity_scale,
         app.workspace.view.intensity_maximum,
     );
-    egui::ComboBox::from_id_salt("intensity_scale")
-                    .selected_text(match app.workspace.view.intensity_scale {
-                        IntensityScale::Individual => "Scale: Individual",
-                        IntensityScale::SharedHighest => "Scale: Shared highest peak",
-                        IntensityScale::SharedCustom => "Scale: Shared custom maximum",
-                    })
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut app.workspace.view.intensity_scale, IntensityScale::Individual, "Individual");
-                        ui.selectable_value(&mut app.workspace.view.intensity_scale, IntensityScale::SharedHighest, "Shared highest peak");
-                        ui.selectable_value(&mut app.workspace.view.intensity_scale, IntensityScale::SharedCustom, "Shared custom maximum");
-                    }).response.on_hover_text("Shared scales use the same intensity axis for every visible trace; data is not normalized. The automatic maximum includes all visible traces across grid pages.");
+    // Inline options: a dropdown inside this menu would close the menu as soon as it opens.
+    ui.label("Intensity scale")
+        .on_hover_text("Shared scales use the same intensity axis for every visible trace; data is not normalized. The automatic maximum includes all visible traces across grid pages.");
+    for (value, label) in [
+        (IntensityScale::Individual, "Individual"),
+        (IntensityScale::SharedHighest, "Shared highest peak"),
+        (IntensityScale::SharedCustom, "Shared custom maximum"),
+    ] {
+        ui.radio_value(&mut app.workspace.view.intensity_scale, value, label);
+    }
     if app.workspace.view.intensity_scale == IntensityScale::SharedCustom {
         ui.label("Maximum (a.u.)");
         ui.add(

@@ -30,16 +30,14 @@ fn number(
 /// algorithm uses are shown. `rt_window` supplies the defaults of the fixed window.
 pub(super) fn editor(ui: &mut egui::Ui, cfg: &mut Integration, rt_window: [f64; 2]) -> bool {
     let mut changed = false;
-    egui::ComboBox::from_id_salt("integration_algorithm")
-        .selected_text(cfg.algorithm.label())
-        .width(220.0)
-        .show_ui(ui, |ui| {
-            for a in Algorithm::ALL {
-                changed |= ui
-                    .selectable_value(&mut cfg.algorithm, a, a.label())
-                    .changed();
-            }
-        });
+    // Inline choices: dropdowns close the menu this editor may be shown in.
+    ui.horizontal_wrapped(|ui| {
+        for a in Algorithm::ALL {
+            changed |= ui
+                .selectable_value(&mut cfg.algorithm, a, a.label())
+                .changed();
+        }
+    });
     ui.small(cfg.algorithm.description());
     ui.add_space(2.0);
     egui::Grid::new("integration_params")
@@ -110,25 +108,21 @@ pub(super) fn editor(ui: &mut egui::Ui, cfg: &mut Integration, rt_window: [f64; 
                         });
                     }
                     row(ui, "Peak selection", "Which candidate to report when several peaks are found in the window.", |ui| {
-                        egui::ComboBox::from_id_salt("integration_selection")
-                            .selected_text(cfg.peak_selection.label())
-                            .show_ui(ui, |ui| {
-                                for s in PeakSelection::ALL {
-                                    changed |= ui.selectable_value(&mut cfg.peak_selection, s, s.label()).changed();
-                                }
-                            });
+                        ui.horizontal_wrapped(|ui| {
+                            for s in PeakSelection::ALL {
+                                changed |= ui.selectable_value(&mut cfg.peak_selection, s, s.label()).changed();
+                            }
+                        });
                         false
                     });
                 }
             }
             row(ui, "Baseline", "How the area under the peak is corrected for background.", |ui| {
-                egui::ComboBox::from_id_salt("integration_baseline")
-                    .selected_text(cfg.baseline.label())
-                    .show_ui(ui, |ui| {
-                        for b in BaselineKind::ALL {
-                            changed |= ui.selectable_value(&mut cfg.baseline, b, b.label()).changed();
-                        }
-                    });
+                ui.horizontal_wrapped(|ui| {
+                    for b in BaselineKind::ALL {
+                        changed |= ui.selectable_value(&mut cfg.baseline, b, b.label()).changed();
+                    }
+                });
                 false
             });
             if cfg.baseline == BaselineKind::Als {
