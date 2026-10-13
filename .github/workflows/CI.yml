@@ -69,4 +69,7 @@ jobs:
         run: cargo build --locked --all-features --bins
 
       - name: Regenerate independent scientific references
-        run: python tests/reference/verify_references.py target/ci-reference-verification
+        # The script refuses to reuse a directory, and the cached target/ may still hold one.
+        run: |
+          rm -rf target/ci-reference-verification
+          python tests/reference/verify_references.py target/ci-reference-verification
