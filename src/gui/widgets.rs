@@ -197,3 +197,15 @@ pub(super) fn icon_item(ui: &mut egui::Ui, icon: Icon, label: &str) -> Response 
     }
     response
 }
+
+/// Semibold label, used for column headers and small section titles.
+pub(super) fn strong(ui: &mut egui::Ui, text: impl Into<String>) -> Response {
+    ui.label(egui::RichText::new(text).font(semibold(ui)))
+}
+
+pub(super) fn semibold(ui: &egui::Ui) -> egui::FontId {
+    egui::FontId::new(
+        TextStyle::Body.resolve(ui.style()).size,
+        egui::FontFamily::Name("Inter SemiBold".into()),
+    )
+}

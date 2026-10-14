@@ -195,7 +195,7 @@ pub(super) fn show_with(
                     egui::pos2(cell.left() + 8., cell.center().y),
                     egui::Align2::LEFT_CENTER,
                     format!("{title}{arrow}"),
-                    egui::TextStyle::Body.resolve(ui.style()),
+                    super::widgets::semibold(ui),
                     color,
                 );
                 sort.on_hover_text("Click to sort");

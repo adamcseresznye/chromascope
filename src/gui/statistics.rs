@@ -195,7 +195,7 @@ pub(super) fn show(app: &mut super::MzViewerApp, ctx: &egui::Context) {
             },
         );
         if onboarding_step(ctx) == 4 {
-            ui.strong("Step 5 — Run the analysis and inspect the results");
+            crate::gui::widgets::strong(ui, "Step 5 — Run the analysis and inspect the results");
             let readiness = precheck(s);
             for issue in &readiness {
                 ui.colored_label(ui.visuals().error_fg_color, format!("Blocked — {issue}"));
@@ -366,7 +366,7 @@ fn parsed_settings(s: &State) -> Result<Settings, String> {
 
 /// Step 1: what is loaded, in one glance.
 fn step_load(ui: &mut egui::Ui, s: &mut State) {
-    ui.strong("Step 1 — Load or select the feature table");
+    crate::gui::widgets::strong(ui, "Step 1 — Load or select the feature table");
     ui.small("Use the buttons above (feature matrix, targeted concentrations, or a saved table). Original quantities are retained; null means unavailable, never zero.");
     match parsed_table(s) {
         Ok(table) => {
@@ -474,7 +474,7 @@ fn group_counts(table: &Table, settings: &Settings) -> (usize, usize, usize) {
 
 /// Step 2: define groups and review every sample assignment.
 fn step_groups(ui: &mut egui::Ui, s: &mut State) {
-    ui.strong("Step 2 — Define sample groups and review assignments");
+    crate::gui::widgets::strong(ui, "Step 2 — Define sample groups and review assignments");
     ui.small("Group tests assume independent samples. Imputation can bias inference, and no sample is ever excluded automatically.");
     let mut settings = match parsed_settings(s) {
         Ok(settings) => settings,
@@ -601,7 +601,7 @@ fn step_groups(ui: &mut egui::Ui, s: &mut State) {
 
 /// Step 3: the one genuinely implemented analysis plus routine parameters.
 fn step_analysis(ui: &mut egui::Ui, s: &mut State) {
-    ui.strong("Step 3 — Select the analysis and configure routine parameters");
+    crate::gui::widgets::strong(ui, "Step 3 — Select the analysis and configure routine parameters");
     ui.small("This workspace runs one combined, replayable analysis: a PCA overview, hierarchical clustering, and — when two groups are defined in step 2 — Welch group comparisons. No other statistical methods are implemented here.");
     python_status(ui);
     ui.small("Preprocessing order: exclusions → missingness filter → imputation → normalization → transformation → scaling. Welch tests use the pre-scaling values.");
@@ -624,7 +624,7 @@ fn settings_controls_open(ui: &mut egui::Ui, text: &mut String) {
 
 /// Step 4: everything visible before execution.
 fn step_review(ui: &mut egui::Ui, s: &mut State) {
-    ui.strong("Step 4 — Review assumptions, handling, and corrections");
+    crate::gui::widgets::strong(ui, "Step 4 — Review assumptions, handling, and corrections");
     let table = match parsed_table(s) {
         Ok(table) => table,
         Err(error) => {
@@ -702,7 +702,7 @@ fn step_review(ui: &mut egui::Ui, s: &mut State) {
 
 /// Explicit sample/feature exclusions with mandatory reasons.
 fn exclusions_editor(ui: &mut egui::Ui, s: &mut State, table: &Table) {
-    ui.strong("Exclusions (explicit, with reasons)");
+    crate::gui::widgets::strong(ui, "Exclusions (explicit, with reasons)");
     let mut settings = match parsed_settings(s) {
         Ok(settings) => settings,
         Err(_) => return,

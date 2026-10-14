@@ -349,7 +349,7 @@ pub(super) fn controls(app: &mut MzViewerApp, ui: &mut egui::Ui) {
         && !app.files.values().any(|f| f.is_loading);
     ui.vertical(|ui| {
         if let Some(project) = &app.project.project {
-            ui.strong("Project · saved only when you choose Save project")
+            crate::gui::widgets::strong(ui, "Project · saved only when you choose Save project")
                 .on_hover_text(format!("{}\n{}", project.id.0, app.project.root.display()));
         } else {
             ui.weak("Exploratory workspace · create a project to keep all analyses");

@@ -1242,7 +1242,7 @@ fn method_editor(
         let defaults = method_default(&*draft);
         egui::ScrollArea::both().max_height(230.0).show(ui,|ui| {
             egui::Grid::new("quant_method_table").striped(true).show(ui,|ui| {
-                for h in ["Analyte","Mode","Target m/z","Precursor m/z","ppm","Polarity","MS level","Expected RT","Window start","Window end","Integration",""] { ui.strong(h); } ui.end_row();
+                for h in ["Analyte","Mode","Target m/z","Precursor m/z","ppm","Polarity","MS level","Expected RT","Window start","Window end","Integration",""] { crate::gui::widgets::strong(ui, h); } ui.end_row();
                 for (i,a) in draft.analytes.iter_mut().enumerate() {
                         ui.add(egui::TextEdit::singleline(&mut a.extraction.name).desired_width(130.0).min_size(egui::vec2(130.0,28.0)));
                         egui::ComboBox::from_id_salt((i,"mode")).width(60.0).selected_text(format!("{:?}",a.extraction.acquisition)).show_ui(ui,|ui| {
@@ -1263,7 +1263,7 @@ fn method_editor(
                         ui.add(egui::DragValue::new(&mut a.rt_window[1]).speed(0.01).range(0.0..=1e6));
                         ui.menu_button(format!("{} ▾", integration_editor::short_name(a.integration.as_ref())), |ui| {
                             ui.set_max_width(380.0);
-                            ui.strong(format!("Integration: {}", a.extraction.name));
+                            crate::gui::widgets::strong(ui, format!("Integration: {}", a.extraction.name));
                             let mut custom = a.integration.is_some();
                             if ui.checkbox(&mut custom, "Customise for this analyte").on_hover_text("Off: classic detection with the method-level smoothing, prominence and boundary fraction").changed() {
                                 a.integration = custom.then(|| defaults.clone());

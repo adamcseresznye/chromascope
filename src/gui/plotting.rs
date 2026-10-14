@@ -482,7 +482,7 @@ fn comparison_grid(
                 .spacing(egui::vec2(8.0, 12.0))
                 .show(ui, |ui| {
                     ui.allocate_ui(egui::vec2(140.0, 24.0), |ui| {
-                        ui.strong("Analyte / sample");
+                        crate::gui::widgets::strong(ui, "Analyte / sample");
                     });
                     for id in &layout.samples {
                         ui.allocate_ui(egui::vec2(cell_width, 24.0), |ui| {

@@ -234,7 +234,7 @@ fn trends_pane(ui: &mut egui::Ui, batch: &t::BatchResult, target: &str, selected
     }
 }
 fn analyte_list(ui: &mut egui::Ui, batch: &t::BatchResult, target: &mut String, selected: &mut usize) {
-    ui.strong("Analytes");
+    crate::gui::widgets::strong(ui, "Analytes");
     for t in &batch.request.targets {
         let rows: Vec<&t::Concentration> = batch.results.iter().filter(|r| r.target == t.id).collect();
         let (dot, tip) = if t.calibration.is_none() {

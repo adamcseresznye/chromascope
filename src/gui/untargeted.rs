@@ -65,7 +65,7 @@ fn routine_setup(ui: &mut egui::Ui, s: &mut State) {
                 }
             };
             let mut changed = false;
-            ui.strong("Samples and roles");
+            crate::gui::widgets::strong(ui, "Samples and roles");
             ui.small("Blanks reveal background features and QCs track repeatability. Roles only group samples — no sample is ever excluded silently.");
             let (samples, blanks, qcs) = (
                 config.samples.iter().filter(|x| x.role == Role::Sample).count(),
@@ -110,7 +110,7 @@ fn routine_setup(ui: &mut egui::Ui, s: &mut State) {
                 changed = true;
             }
             ui.separator();
-            ui.strong("Feature detection");
+            crate::gui::widgets::strong(ui, "Feature detection");
             ui.small("Mass tolerance links neighboring scans into one trace; noise intensity drops detector chatter; peak width keeps plausible chromatography.");
             ui.horizontal_wrapped(|ui| {
                 ui.label("Polarity");
@@ -195,7 +195,7 @@ fn routine_setup(ui: &mut egui::Ui, s: &mut State) {
                     ui.end_row();
                 });
             ui.separator();
-            ui.strong("Alignment across samples");
+            crate::gui::widgets::strong(ui, "Alignment across samples");
             ui.small("Retention-time tolerance links the same compound across runs; correspondence tolerance links its mass.");
             egui::Grid::new("routine_alignment")
                 .num_columns(2)
@@ -221,7 +221,7 @@ fn routine_setup(ui: &mut egui::Ui, s: &mut State) {
                     ui.end_row();
                 });
             ui.separator();
-            ui.strong("Filtering");
+            crate::gui::widgets::strong(ui, "Filtering");
             ui.small("Blank ratio, QC repeatability, and sample coverage flag rows — flagged features stay in the matrix, never deleted.");
             egui::Grid::new("routine_filtering")
                 .num_columns(2)

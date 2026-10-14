@@ -273,6 +273,10 @@ pub fn configure_with(ctx: &Context, preference: egui::ThemePreference) {
             egui::FontId::proportional(BODY_SIZE),
         );
         style.text_styles.insert(
+            egui::TextStyle::Monospace,
+            egui::FontId::monospace(BODY_SIZE - 1.0),
+        );
+        style.text_styles.insert(
             egui::TextStyle::Small,
             egui::FontId::proportional(SMALL_SIZE),
         );

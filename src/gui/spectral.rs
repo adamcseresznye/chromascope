@@ -168,7 +168,7 @@ fn panel(
     ui.label("MS1/MS2 inspection, retained processing, local libraries, candidate overlays and evidence-based annotations");
 
     ui.horizontal_wrapped(|ui| {
-        ui.strong("Active source:");
+        crate::gui::widgets::strong(ui, "Active source:");
         if let Some(path) = path.as_ref() {
             let name = path
                 .file_name()

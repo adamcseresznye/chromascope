@@ -156,7 +156,7 @@ pub(super) fn trends(ui: &mut egui::Ui, batch: &t::BatchResult, selected: &mut u
             }
         }
     };
-    ui.strong(format!("{name}: trends over the run"));
+    crate::gui::widgets::strong(ui, format!("{name}: trends over the run"));
     let selected_sample = current.sample.clone();
     // Response used for calibration: peak area, or area ratio to the internal standard.
     let responses: Vec<_> = batch

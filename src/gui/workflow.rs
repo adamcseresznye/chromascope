@@ -456,7 +456,7 @@ pub(super) fn status_chip(app: &mut MzViewerApp, ctx: &egui::Context, ui: &mut e
     let mut chosen: Option<Destination> = None;
     ui.menu_button(label, |ui| {
         ui.set_min_width(480.0);
-        ui.strong("Analysis workflow progress");
+        crate::gui::widgets::strong(ui, "Analysis workflow progress");
         ui.small(format!(
             "{done} of 9 steps complete. Click a step to go where it is done."
         ));
@@ -469,7 +469,7 @@ pub(super) fn status_chip(app: &mut MzViewerApp, ctx: &egui::Context, ui: &mut e
             ui.horizontal(|ui| {
                 let title = format!("{} {}. {}", state_glyph(step.state), step.number, step.title);
                 if here {
-                    ui.strong(format!("{title}   \u{2190} you are here"));
+                    crate::gui::widgets::strong(ui, format!("{title}   \u{2190} you are here"));
                 } else {
                     ui.label(title);
                 }

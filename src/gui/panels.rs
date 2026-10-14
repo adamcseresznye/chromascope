@@ -746,7 +746,7 @@ pub fn update_central_panel(app: &mut MzViewerApp, ctx: &Context) {
             }
             let spectrum_id = ui.make_persistent_id("mass_spectrum");
             ui.horizontal_wrapped(|ui| {
-                ui.strong("Mass spectrum");
+                crate::gui::widgets::strong(ui, "Mass spectrum");
                 if let Some(rt) = app.user_input.retention_time_ms_spectrum {
                     ui.weak(format!("RT {rt:.3} min"));
                 }

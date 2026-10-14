@@ -222,7 +222,7 @@ pub(super) fn curve_pane(
     };
     let name = current.quantifier.extraction.extraction.name.clone();
     if current.calibration.is_none() {
-        ui.strong(&name);
+        crate::gui::widgets::strong(ui, &name);
         ui.label("Internal standard: measured in every injection, not calibrated.");
         return None;
     }
@@ -387,7 +387,7 @@ pub(super) fn curve_pane(
         // Standards: tick to include, see how well each is back-calculated.
         egui::Grid::new("cal_standards").striped(true).show(ui, |ui| {
             for h in ["Use", "Standard", "Known conc.", "Response", "Back-calculated", "Accuracy %"] {
-                ui.strong(h);
+                crate::gui::widgets::strong(ui, h);
             }
             ui.end_row();
             for r in &rows {
@@ -420,11 +420,11 @@ pub(super) fn curve_pane(
         });
         // Alternative fits on the same included standards.
         ui.add_space(4.0);
-        ui.strong("Compare fits (same weighting and origin settings)");
+        crate::gui::widgets::strong(ui, "Compare fits (same weighting and origin settings)");
         let mut pick = None;
         egui::Grid::new("cal_compare").striped(true).show(ui, |ui| {
             for h in ["Fit", "R²", "Worst deviation", "Notes", ""] {
-                ui.strong(h);
+                crate::gui::widgets::strong(ui, h);
             }
             ui.end_row();
             for (i, name) in FITS.iter().enumerate() {

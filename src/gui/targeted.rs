@@ -273,7 +273,7 @@ fn samples_section(state: &mut UiState, ui: &mut egui::Ui) {
         egui::ScrollArea::horizontal().id_salt("cal_samples_scroll").show(ui, |ui| {
             egui::Grid::new("cal_samples").striped(true).show(ui, |ui| {
                 for h in ["Sample type", "File name", "Sample ID", "Dilution", "Level"] {
-                    ui.strong(h);
+                    crate::gui::widgets::strong(ui, h);
                 }
                 ui.end_row();
                 for (i, row) in state.setup.rows.iter_mut().enumerate() {
@@ -332,7 +332,7 @@ fn levels_section(state: &mut UiState, ui: &mut egui::Ui) {
         let mut remove = None;
         egui::ScrollArea::horizontal().id_salt("cal_levels_scroll").show(ui, |ui| {
             egui::Grid::new("cal_levels").striped(true).show(ui, |ui| {
-                ui.strong("Level");
+                crate::gui::widgets::strong(ui, "Level");
                 for (name, unit) in names.iter().zip(&units) {
                     ui.strong(format!("{name} ({unit})"));
                 }
@@ -371,7 +371,7 @@ fn analytes_section(state: &mut UiState, ui: &mut egui::Ui) {
             egui::Frame::group(ui.style()).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal_wrapped(|ui| {
-                    ui.strong(&a.name);
+                    crate::gui::widgets::strong(ui, &a.name);
                     ui.checkbox(&mut a.is_standard, "Internal standard (measured, not quantified)");
                 });
                 if a.is_standard {

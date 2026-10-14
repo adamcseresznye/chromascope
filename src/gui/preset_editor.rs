@@ -442,7 +442,7 @@ fn analyte_rows(ui: &mut egui::Ui, rows: &mut [Row], dirty: &mut bool) -> Option
             egui::Frame::group(ui.style()).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal_wrapped(|ui| {
-                    ui.strong(format!("Analyte {}", i + 1));
+                    crate::gui::widgets::strong(ui, format!("Analyte {}", i + 1));
                     *dirty |= cell(ui, &mut row.name, 180.0);
                     if ui
                         .add_enabled(count < 64, egui::Button::new("Duplicate"))
