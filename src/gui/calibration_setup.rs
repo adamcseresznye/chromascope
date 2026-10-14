@@ -95,7 +95,8 @@ impl Setup {
     /// Keeps the setup in step with the loaded samples and the method's analytes: new ones are
     /// added with defaults, vanished ones dropped, everything else is left as the user set it.
     pub fn sync(&mut self, samples: &[(String, String)], analytes: &[Analyte]) {
-        self.rows.retain(|r| samples.iter().any(|s| s.0 == r.source));
+        self.rows
+            .retain(|r| samples.iter().any(|s| s.0 == r.source));
         let mut new: Vec<&str> = samples
             .iter()
             .map(|s| s.0.as_str())
@@ -110,7 +111,10 @@ impl Setup {
             }
             self.rows.push(row);
         }
-        let names: Vec<&str> = analytes.iter().map(|a| a.extraction.name.as_str()).collect();
+        let names: Vec<&str> = analytes
+            .iter()
+            .map(|a| a.extraction.name.as_str())
+            .collect();
         self.analytes.retain(|a| names.contains(&a.name.as_str()));
         for name in &names {
             if !self.analytes.iter().any(|a| a.name == *name) {
@@ -126,12 +130,17 @@ impl Setup {
             .map(|a| a.name.clone())
             .collect();
         for a in &mut self.analytes {
-            if a.is_standard || a.internal_standard.as_ref().is_some_and(|i| !standards.contains(i)) {
+            if a.is_standard
+                || a.internal_standard
+                    .as_ref()
+                    .is_some_and(|i| !standards.contains(i))
+            {
                 a.internal_standard = None;
             }
         }
-        self.exclusions
-            .retain(|e| self.rows.iter().any(|r| r.id == e.sample) && names.contains(&e.analyte.as_str()));
+        self.exclusions.retain(|e| {
+            self.rows.iter().any(|r| r.id == e.sample) && names.contains(&e.analyte.as_str())
+        });
     }
     pub fn analyte_names(&self) -> Vec<String> {
         self.analytes.iter().map(|a| a.name.clone()).collect()
@@ -208,7 +217,11 @@ impl Setup {
                         "{} '{}' has no level ({}).",
                         crate::sample_sheet::role_name(&r.role),
                         r.id,
-                        if r.level.is_empty() { "choose one" } else { "unknown level" }
+                        if r.level.is_empty() {
+                            "choose one"
+                        } else {
+                            "unknown level"
+                        }
                     )),
                     Some(l) => {
                         for a in &calibrated {
@@ -251,12 +264,19 @@ impl Setup {
             .analytes
             .iter()
             .filter_map(|analyte| {
-                let a = self.analytes.iter().find(|a| a.name == analyte.extraction.name)?;
+                let a = self
+                    .analytes
+                    .iter()
+                    .find(|a| a.name == analyte.extraction.name)?;
                 let calibration = (!a.is_standard).then(|| {
                     let range = ranges.next().unwrap();
                     let mut cfg = a.cfg.clone();
                     cfg.range = range;
-                    cfg.loq = if cfg.loq > 0.0 { cfg.loq.min(range[1]) } else { range[0] };
+                    cfg.loq = if cfg.loq > 0.0 {
+                        cfg.loq.min(range[1])
+                    } else {
+                        range[0]
+                    };
                     cfg.lod = cfg.lod.min(cfg.loq);
                     cfg
                 });
@@ -327,7 +347,10 @@ pub(super) fn missing_peaks(results: &[Measurement], request: &t::BatchRequest) 
     for s in &request.samples {
         for target in &request.targets {
             let name = &target.quantifier.extraction.extraction.name;
-            if !results.iter().any(|m| m.source == s.source && &m.analyte == name) {
+            if !results
+                .iter()
+                .any(|m| m.source == s.source && &m.analyte == name)
+            {
                 missing.push(format!(
                     "No peak measured for {name} in {} — run the batch in tab 1.",
                     stem(&s.source)
@@ -426,7 +449,10 @@ mod tests {
     fn building_lists_what_is_missing_then_wires_levels_and_internal_standards() {
         let (mut s, method) = setup();
         let problems = s.build_request(&method).err().unwrap();
-        assert!(problems.iter().any(|p| p.contains("two or more")), "{problems:?}");
+        assert!(
+            problems.iter().any(|p| p.contains("two or more")),
+            "{problems:?}"
+        );
         let sheet = "sample type,file name,sample id,dilution,level\n\
                      standard,26-7,s1,1,1\nstandard,26-8,s2,1,2\nstandard,26-9,s3,2,3\n\
                      unknown,26-10,u1,1,\n";
@@ -434,7 +460,10 @@ mod tests {
         s.analytes[1].is_standard = true;
         s.analytes[0].internal_standard = Some("IS".into());
         let problems = s.build_request(&method).err().unwrap();
-        assert!(problems.iter().any(|p| p.contains("no level")), "{problems:?}");
+        assert!(
+            problems.iter().any(|p| p.contains("no level")),
+            "{problems:?}"
+        );
         s.levels = ["1", "2", "3"]
             .iter()
             .zip([1.0, 5.0, 10.0])
@@ -462,7 +491,10 @@ mod tests {
             reason: "bad".into(),
         });
         let request = s.build_request(&method).unwrap();
-        assert_eq!(request.targets[0].calibration.as_ref().unwrap().range, [5.0, 10.0]);
+        assert_eq!(
+            request.targets[0].calibration.as_ref().unwrap().range,
+            [5.0, 10.0]
+        );
         assert_eq!(request.samples[0].exclusions["target-1"], "bad");
     }
 }

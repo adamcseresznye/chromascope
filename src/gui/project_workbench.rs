@@ -26,7 +26,10 @@ fn data_root(file: &Path) -> Result<PathBuf, String> {
     }
     let text = std::fs::read_to_string(file).map_err(|e| e.to_string())?;
     let value: Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
-    match value["data"].as_str().filter(|_| value["chromascope_project"] == 1) {
+    match value["data"]
+        .as_str()
+        .filter(|_| value["chromascope_project"] == 1)
+    {
         Some(data) if !data.contains(['/', '\\']) && data != ".." => Ok(parent.join(data)),
         _ => Err("This is not a Chromascope project file".into()),
     }
@@ -420,7 +423,14 @@ pub(super) fn controls(app: &mut MzViewerApp, ui: &mut egui::Ui) {
                 app.project.opening = false;
                 app.project.pending = Some(rx);
             }
-            if ui.button(if app.project.project.is_some() { "Save project" } else { "Create project…" }).clicked() {
+            if ui
+                .button(if app.project.project.is_some() {
+                    "Save project"
+                } else {
+                    "Create project…"
+                })
+                .clicked()
+            {
                 app.project.opening = false;
                 let value = snapshot(app, ui.ctx());
                 if let Some(project) = &app.project.project {
@@ -438,10 +448,15 @@ pub(super) fn controls(app: &mut MzViewerApp, ui: &mut egui::Ui) {
                     .save_file()
                 {
                     let file = file.with_extension("json");
-                    let stem = file.file_stem().unwrap_or_default().to_string_lossy().into_owned();
+                    let stem = file
+                        .file_stem()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned();
                     let root = file.with_file_name(format!("{stem}_data"));
                     if file.exists() || root.exists() {
-                        app.project.message = format!("'{stem}' already exists here; choose another name");
+                        app.project.message =
+                            format!("'{stem}' already exists here; choose another name");
                     } else {
                         let (tx, rx) = std::sync::mpsc::channel();
                         let (worker_root, pointer) = (root.clone(), file);
@@ -450,7 +465,8 @@ pub(super) fn controls(app: &mut MzViewerApp, ui: &mut egui::Ui) {
                                 let data = worker_root.file_name().unwrap().to_string_lossy();
                                 std::fs::write(
                                     &pointer,
-                                    serde_json::json!({"chromascope_project": 1, "data": data}).to_string(),
+                                    serde_json::json!({"chromascope_project": 1, "data": data})
+                                        .to_string(),
                                 )
                                 .map_err(|e| EngineError::new("corrupt_project", e))?;
                                 store(&worker_root, 0, value)

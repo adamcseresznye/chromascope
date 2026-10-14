@@ -399,9 +399,11 @@ pub fn fit(points: &[(String, f64, f64)], cfg: &CalibrationConfig) -> Result<Cal
             Weighting::InverseX | Weighting::InverseX2 => return Err(invalid(
                 "1/x weighting requires positive concentrations; exclude zero standards explicitly",
             )),
-            _ => return Err(invalid(
-                "1/y weighting requires positive responses; exclude such standards explicitly",
-            )),
+            _ => {
+                return Err(invalid(
+                    "1/y weighting requires positive responses; exclude such standards explicitly",
+                ))
+            }
         };
         if !weight.is_finite() || weight <= 0.0 {
             return Err(invalid("Invalid calibration weight"));
@@ -464,8 +466,7 @@ pub fn fit(points: &[(String, f64, f64)], cfg: &CalibrationConfig) -> Result<Cal
         coefficients.extend(solution.iter().copied());
         (coefficients, Vec::new(), largest / smallest)
     };
-    if coefficients.iter().any(|x| !x.is_finite())
-        || knots.iter().flatten().any(|x| !x.is_finite())
+    if coefficients.iter().any(|x| !x.is_finite()) || knots.iter().flatten().any(|x| !x.is_finite())
     {
         return Err(invalid("Calibration numerical overflow"));
     }

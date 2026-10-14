@@ -1,7 +1,9 @@
 //! Small vector icons painted with egui's `Painter` on a 16-unit grid, so they
 //! scale with the UI, follow the theme colours and need no icon font.
 
-use eframe::egui::{self, epaint::PathStroke, Color32, CornerRadius, Painter, Pos2, Rect, Shape, Stroke, StrokeKind};
+use eframe::egui::{
+    self, epaint::PathStroke, Color32, CornerRadius, Painter, Pos2, Rect, Shape, Stroke, StrokeKind,
+};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)] // Icon set kept complete for use across panels.
@@ -107,7 +109,16 @@ pub(super) fn paint(p: &Painter, rect: Rect, icon: Icon, color: Color32) {
             line(&[(12.0, 4.0), (4.0, 12.0)]);
         }
         Icon::Folder => {
-            line(&[(1.5, 4.0), (1.5, 13.0), (14.5, 13.0), (14.5, 5.5), (7.5, 5.5), (6.5, 3.5), (1.5, 3.5), (1.5, 4.0)]);
+            line(&[
+                (1.5, 4.0),
+                (1.5, 13.0),
+                (14.5, 13.0),
+                (14.5, 5.5),
+                (7.5, 5.5),
+                (6.5, 3.5),
+                (1.5, 3.5),
+                (1.5, 4.0),
+            ]);
         }
     }
 }

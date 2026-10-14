@@ -96,14 +96,24 @@ fn render_chromatogram(
                                     format!("{} · unsmoothed", file.name),
                                     raw.as_ref().clone(),
                                 )
-                                .color(super::theme::Tokens::for_mode(plot_ui.ctx().style().visuals.dark_mode).text_dim)
+                                .color(
+                                    super::theme::Tokens::for_mode(
+                                        plot_ui.ctx().style().visuals.dark_mode,
+                                    )
+                                    .text_dim,
+                                )
                                 .width(1.0_f32)
                                 .style(egui_plot::LineStyle::Dashed { length: 6. }),
                             );
                         }
                     }
                     if let Some(points) = &file.cache.display_data {
-                        plot_ui.line(create_line_for_file(app, file, points, plot_ui.ctx().style().visuals.dark_mode));
+                        plot_ui.line(create_line_for_file(
+                            app,
+                            file,
+                            points,
+                            plot_ui.ctx().style().visuals.dark_mode,
+                        ));
                     }
                 } else if let Some(t) = app
                     .workspace
@@ -251,7 +261,9 @@ pub fn render_integration_overlay(app: &MzViewerApp, plot_ui: &mut egui_plot::Pl
     // points on top, chord values at the same x on the bottom) is always
     // convex, so egui_plot::Polygon fills it correctly regardless of the
     // overall peak shape.
-    let fill_color = super::theme::Tokens::for_mode(plot_ui.ctx().style().visuals.dark_mode).good.gamma_multiply(0.35);
+    let fill_color = super::theme::Tokens::for_mode(plot_ui.ctx().style().visuals.dark_mode)
+        .good
+        .gamma_multiply(0.35);
     for i in 0..top.len().saturating_sub(1) {
         let x0 = top[i][0];
         let x1 = top[i + 1][0];
@@ -776,7 +788,10 @@ pub fn plot_mass_spectrum(app: &mut MzViewerApp, ui: &mut egui::Ui) -> egui::Res
                             .map(|(&m, &i)| {
                                 egui_plot::Bar::new(m, i.into())
                                     .width(bar_width)
-                                    .fill(line_color.to_egui_for(plot_ui.ctx().style().visuals.dark_mode))
+                                    .fill(
+                                        line_color
+                                            .to_egui_for(plot_ui.ctx().style().visuals.dark_mode),
+                                    )
                                     .name(format!("m/z = {:.4}", m))
                             })
                             .collect();

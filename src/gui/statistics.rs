@@ -601,7 +601,10 @@ fn step_groups(ui: &mut egui::Ui, s: &mut State) {
 
 /// Step 3: the one genuinely implemented analysis plus routine parameters.
 fn step_analysis(ui: &mut egui::Ui, s: &mut State) {
-    crate::gui::widgets::strong(ui, "Step 3 — Select the analysis and configure routine parameters");
+    crate::gui::widgets::strong(
+        ui,
+        "Step 3 — Select the analysis and configure routine parameters",
+    );
     ui.small("This workspace runs one combined, replayable analysis: a PCA overview, hierarchical clustering, and — when two groups are defined in step 2 — Welch group comparisons. No other statistical methods are implemented here.");
     python_status(ui);
     ui.small("Preprocessing order: exclusions → missingness filter → imputation → normalization → transformation → scaling. Welch tests use the pre-scaling values.");

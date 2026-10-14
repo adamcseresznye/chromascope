@@ -637,10 +637,10 @@ pub(super) fn inspector(app: &mut MzViewerApp, ui: &mut egui::Ui) {
         }
     }
     ui.separator();
-    crate::gui::widgets::section_title(ui, format!(
-        "Measurements ({})",
-        app.workspace.measurements.len()
-    ));
+    crate::gui::widgets::section_title(
+        ui,
+        format!("Measurements ({})", app.workspace.measurements.len()),
+    );
     if ui.button("Results table…").clicked() {
         ui.ctx()
             .data_mut(|d| d.insert_temp(egui::Id::new("results_open"), true));

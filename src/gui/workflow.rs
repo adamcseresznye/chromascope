@@ -450,7 +450,10 @@ pub(super) fn status_chip(app: &mut MzViewerApp, ctx: &egui::Context, ui: &mut e
     let done = list.iter().filter(|s| s.state == StepState::Done).count();
     let warnings = export_warnings(app);
     let label = match current.and_then(|n| list.get(n - 1)) {
-        Some(n) => format!("Workflow progress · step {} of 9: {} \u{25be}", n.number, n.action),
+        Some(n) => format!(
+            "Workflow progress · step {} of 9: {} \u{25be}",
+            n.number, n.action
+        ),
         None => "Workflow progress · complete \u{25be}".to_string(),
     };
     let mut chosen: Option<Destination> = None;
@@ -461,13 +464,21 @@ pub(super) fn status_chip(app: &mut MzViewerApp, ctx: &egui::Context, ui: &mut e
             "{done} of 9 steps complete. Click a step to go where it is done."
         ));
         if !warnings.is_empty() {
-            ui.small(format!("{} warning(s) will accompany export", warnings.len()));
+            ui.small(format!(
+                "{} warning(s) will accompany export",
+                warnings.len()
+            ));
         }
         ui.separator();
         for step in &list {
             let here = current == Some(step.number);
             ui.horizontal(|ui| {
-                let title = format!("{} {}. {}", state_glyph(step.state), step.number, step.title);
+                let title = format!(
+                    "{} {}. {}",
+                    state_glyph(step.state),
+                    step.number,
+                    step.title
+                );
                 if here {
                     crate::gui::widgets::strong(ui, format!("{title}   \u{2190} you are here"));
                 } else {

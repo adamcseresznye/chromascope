@@ -3,8 +3,7 @@
 //! primary button and a titled card. Colours come from `theme::Tokens`.
 
 use eframe::egui::{
-    self, CornerRadius, Response, Sense, Stroke, StrokeKind, TextStyle, WidgetInfo,
-    WidgetType,
+    self, CornerRadius, Response, Sense, Stroke, StrokeKind, TextStyle, WidgetInfo, WidgetType,
 };
 
 use super::icons::{self, Icon};
@@ -15,8 +14,10 @@ fn tokens(ui: &egui::Ui) -> Tokens {
 }
 
 fn hover_amount(ui: &egui::Ui, response: &Response) -> f32 {
-    ui.ctx()
-        .animate_bool_responsive(response.id.with("hover"), response.hovered() || response.has_focus())
+    ui.ctx().animate_bool_responsive(
+        response.id.with("hover"),
+        response.hovered() || response.has_focus(),
+    )
 }
 
 /// A rounded track holding `segment`s; the selected one is raised.
@@ -24,7 +25,7 @@ pub(super) fn segmented<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) ->
     let t = tokens(ui);
     egui::Frame::new()
         .fill(t.control)
-        .stroke(Stroke::new(1.0, t.border))
+        .stroke(Stroke::new(1.0_f32, t.border))
         .corner_radius(6)
         .inner_margin(2)
         .show(ui, |ui| {
@@ -35,7 +36,12 @@ pub(super) fn segmented<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) ->
 }
 
 /// One option inside `segmented` (or a standalone toggle when `selected` is a flag).
-pub(super) fn segment(ui: &mut egui::Ui, selected: bool, icon: Option<Icon>, label: &str) -> Response {
+pub(super) fn segment(
+    ui: &mut egui::Ui,
+    selected: bool,
+    icon: Option<Icon>,
+    label: &str,
+) -> Response {
     let t = tokens(ui);
     let font = TextStyle::Button.resolve(ui.style());
     let galley = ui.painter().layout_no_wrap(label.to_owned(), font, t.text);
@@ -46,13 +52,20 @@ pub(super) fn segment(ui: &mut egui::Ui, selected: bool, icon: Option<Icon>, lab
         (ui.spacing().interact_size.y - 6.0).max(galley.size().y + 6.0),
     );
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    response.widget_info(|| WidgetInfo::selected(WidgetType::SelectableLabel, ui.is_enabled(), selected, label));
+    response.widget_info(|| {
+        WidgetInfo::selected(
+            WidgetType::SelectableLabel,
+            ui.is_enabled(),
+            selected,
+            label,
+        )
+    });
     if ui.is_rect_visible(rect) {
         let enabled = ui.is_enabled();
         let hover = hover_amount(ui, &response);
         let radius = CornerRadius::same(4);
         let (fill, stroke, fg) = if selected {
-            (t.canvas, Stroke::new(1.0, t.border), t.accent)
+            (t.canvas, Stroke::new(1.0_f32, t.border), t.accent)
         } else {
             (
                 t.control_hover.gamma_multiply(hover),
@@ -61,7 +74,8 @@ pub(super) fn segment(ui: &mut egui::Ui, selected: bool, icon: Option<Icon>, lab
             )
         };
         let fg = if enabled { fg } else { t.text_disabled };
-        ui.painter().rect(rect, radius, fill, stroke, StrokeKind::Inside);
+        ui.painter()
+            .rect(rect, radius, fill, stroke, StrokeKind::Inside);
         let mut x = rect.min.x + 10.0;
         if let Some(icon) = icon {
             let r = egui::Rect::from_min_size(
@@ -87,7 +101,14 @@ pub(super) fn nav_tab(ui: &mut egui::Ui, selected: bool, label: &str) -> Respons
     let galley = ui.painter().layout_no_wrap(label.to_owned(), font, t.text);
     let size = egui::vec2(galley.size().x + 20.0, ui.spacing().interact_size.y);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    response.widget_info(|| WidgetInfo::selected(WidgetType::SelectableLabel, ui.is_enabled(), selected, label));
+    response.widget_info(|| {
+        WidgetInfo::selected(
+            WidgetType::SelectableLabel,
+            ui.is_enabled(),
+            selected,
+            label,
+        )
+    });
     if ui.is_rect_visible(rect) {
         let hover = hover_amount(ui, &response);
         if !selected && hover > 0.0 {
@@ -104,13 +125,19 @@ pub(super) fn nav_tab(ui: &mut egui::Ui, selected: bool, label: &str) -> Respons
         } else {
             t.text_dim
         };
-        ui.painter()
-            .galley(egui::pos2(rect.min.x + 10.0, rect.center().y - galley.size().y / 2.0), galley, fg);
+        ui.painter().galley(
+            egui::pos2(rect.min.x + 10.0, rect.center().y - galley.size().y / 2.0),
+            galley,
+            fg,
+        );
         if selected {
             let y = rect.max.y - 1.0;
             ui.painter().line_segment(
-                [egui::pos2(rect.min.x + 6.0, y), egui::pos2(rect.max.x - 6.0, y)],
-                Stroke::new(2.0, t.accent),
+                [
+                    egui::pos2(rect.min.x + 6.0, y),
+                    egui::pos2(rect.max.x - 6.0, y),
+                ],
+                Stroke::new(2.0_f32, t.accent),
             );
         }
     }
@@ -127,7 +154,7 @@ pub(super) fn primary_button(ui: &mut egui::Ui, label: &str) -> Response {
         w.active.weak_bg_fill = t.accent_hover;
         for state in [&mut w.inactive, &mut w.hovered, &mut w.active] {
             state.bg_stroke = Stroke::NONE;
-            state.fg_stroke = Stroke::new(1.0, t.on_accent);
+            state.fg_stroke = Stroke::new(1.0_f32, t.on_accent);
         }
         let min = egui::vec2(0.0, ui.spacing().interact_size.y);
         ui.add(egui::Button::new(egui::RichText::new(label).color(t.on_accent)).min_size(min))
@@ -140,7 +167,7 @@ pub(super) fn card<R>(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui
     let t = tokens(ui);
     egui::Frame::new()
         .fill(t.canvas)
-        .stroke(Stroke::new(1.0, t.border))
+        .stroke(Stroke::new(1.0_f32, t.border))
         .corner_radius(6)
         .inner_margin(10)
         .show(ui, |ui| {
@@ -153,7 +180,12 @@ pub(super) fn card<R>(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui
 }
 
 /// Drop-in for `ui.selectable_value` that renders as a navigation tab.
-pub(super) fn nav_value<T: PartialEq>(ui: &mut egui::Ui, current: &mut T, value: T, label: &str) -> Response {
+pub(super) fn nav_value<T: PartialEq>(
+    ui: &mut egui::Ui,
+    current: &mut T,
+    value: T,
+    label: &str,
+) -> Response {
     let mut response = nav_tab(ui, *current == value, label);
     if response.clicked() && *current != value {
         *current = value;
@@ -180,7 +212,11 @@ pub(super) fn icon_item(ui: &mut egui::Ui, icon: Icon, label: &str) -> Response 
             CornerRadius::same(4),
             t.control_hover.gamma_multiply(hover),
         );
-        let fg = if ui.is_enabled() { t.text } else { t.text_disabled };
+        let fg = if ui.is_enabled() {
+            t.text
+        } else {
+            t.text_disabled
+        };
         let icon_rect = egui::Rect::from_center_size(
             egui::pos2(rect.min.x + 14.0, rect.center().y),
             egui::vec2(14.0, 14.0),
@@ -211,7 +247,11 @@ pub(super) fn semibold_sized(ui: &egui::Ui, size: f32) -> egui::FontId {
     let installed = ui.ctx().fonts(|f| f.families().contains(&family));
     egui::FontId::new(
         size,
-        if installed { family } else { egui::FontFamily::Proportional },
+        if installed {
+            family
+        } else {
+            egui::FontFamily::Proportional
+        },
     )
 }
 
@@ -220,7 +260,8 @@ pub(super) fn section_title(ui: &mut egui::Ui, text: impl Into<String>) -> Respo
     let t = tokens(ui);
     ui.horizontal(|ui| {
         let (rect, _) = ui.allocate_exact_size(egui::vec2(3.0, 15.0), Sense::hover());
-        ui.painter().rect_filled(rect, CornerRadius::same(2), t.accent);
+        ui.painter()
+            .rect_filled(rect, CornerRadius::same(2), t.accent);
         ui.add_space(2.0);
         ui.label(egui::RichText::new(text).font(semibold_sized(ui, 15.0)))
     })
@@ -228,7 +269,12 @@ pub(super) fn section_title(ui: &mut egui::Ui, text: impl Into<String>) -> Respo
 }
 
 /// Option button for `ui.selectable_value` style rows (not inside a combo box).
-pub(super) fn segment_value<T: PartialEq>(ui: &mut egui::Ui, current: &mut T, value: T, label: &str) -> Response {
+pub(super) fn segment_value<T: PartialEq>(
+    ui: &mut egui::Ui,
+    current: &mut T,
+    value: T,
+    label: &str,
+) -> Response {
     let mut response = segment(ui, *current == value, None, label);
     if response.clicked() && *current != value {
         *current = value;

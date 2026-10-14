@@ -94,11 +94,7 @@ fn table(text: &str) -> Result<(Vec<String>, Vec<Vec<String>>)> {
         .trim_start_matches('\u{feff}')
         .lines()
         .filter(|l| !l.trim().is_empty());
-    let header = fields(
-        lines
-            .next()
-            .ok_or_else(|| invalid("The file is empty"))?,
-    );
+    let header = fields(lines.next().ok_or_else(|| invalid("The file is empty"))?);
     Ok((header, lines.map(fields).collect()))
 }
 fn find(header: &[String], names: &[&str]) -> Option<usize> {
@@ -151,7 +147,9 @@ pub fn apply(rows: &mut Vec<Row>, text: &str) -> Result<Vec<String>> {
         let Some(index) = updated.iter().position(|r| {
             file_name(&r.source).to_lowercase() == key || stem(&r.source).to_lowercase() == key
         }) else {
-            notes.push(format!("Row {line}: '{label}' is not among the loaded samples"));
+            notes.push(format!(
+                "Row {line}: '{label}' is not among the loaded samples"
+            ));
             continue;
         };
         if order.contains(&index) {
@@ -180,7 +178,10 @@ pub fn apply(rows: &mut Vec<Row>, text: &str) -> Result<Vec<String>> {
     }
     for (i, r) in updated.iter().enumerate() {
         if !order.contains(&i) {
-            notes.push(format!("Loaded sample '{}' is not in the sheet", stem(&r.source)));
+            notes.push(format!(
+                "Loaded sample '{}' is not in the sheet",
+                stem(&r.source)
+            ));
         }
     }
     // Sheet order first, then anything the sheet did not mention.
@@ -228,7 +229,11 @@ pub fn apply_levels(
         .ok_or_else(|| invalid("The level sheet needs a 'level' column"))?;
     let mut notes = Vec::new();
     let mut columns = Vec::new();
-    for (i, h) in header.iter().enumerate().filter(|(i, h)| *i != level_col && !h.is_empty()) {
+    for (i, h) in header
+        .iter()
+        .enumerate()
+        .filter(|(i, h)| *i != level_col && !h.is_empty())
+    {
         match analytes.iter().find(|a| a.eq_ignore_ascii_case(h)) {
             Some(a) => columns.push((i, a.clone())),
             None => notes.push(format!("Column '{h}' matches no analyte and was ignored")),
@@ -240,20 +245,29 @@ pub fn apply_levels(
         if name.is_empty() {
             return Err(invalid(format!("Row {}: the level has no name", n + 2)));
         }
-        let index = updated.iter().position(|l| l.name == name).unwrap_or_else(|| {
-            updated.push(Level {
-                name: name.clone(),
-                conc: BTreeMap::new(),
+        let index = updated
+            .iter()
+            .position(|l| l.name == name)
+            .unwrap_or_else(|| {
+                updated.push(Level {
+                    name: name.clone(),
+                    conc: BTreeMap::new(),
+                });
+                updated.len() - 1
             });
-            updated.len() - 1
-        });
         for (c, analyte) in &columns {
             if let Some(v) = row.get(*c).filter(|v| !v.is_empty()) {
                 let value: f64 = v.parse().map_err(|_| {
-                    invalid(format!("Row {}: concentration '{v}' is not a number", n + 2))
+                    invalid(format!(
+                        "Row {}: concentration '{v}' is not a number",
+                        n + 2
+                    ))
                 })?;
                 if !value.is_finite() || value < 0.0 {
-                    return Err(invalid(format!("Row {}: concentration '{v}' is not valid", n + 2)));
+                    return Err(invalid(format!(
+                        "Row {}: concentration '{v}' is not valid",
+                        n + 2
+                    )));
                 }
                 updated[index].conc.insert(analyte.clone(), value);
             }
@@ -335,7 +349,9 @@ mod tests {
         assert!(apply_levels(&mut levels, &analytes, "level,Analyte\n3,-1\n").is_err());
         assert_eq!(levels, before);
         let sheet = levels_template(&levels, &analytes);
-        assert!(apply_levels(&mut levels, &analytes, &sheet).unwrap().is_empty());
+        assert!(apply_levels(&mut levels, &analytes, &sheet)
+            .unwrap()
+            .is_empty());
         assert_eq!(levels, before);
     }
 }

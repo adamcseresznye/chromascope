@@ -129,14 +129,18 @@ pub(super) fn side_frame(ctx: &egui::Context) -> egui::Frame {
 
 pub(super) fn visuals(dark: bool) -> Visuals {
     let t = Tokens::for_mode(dark);
-    let mut v = if dark { Visuals::dark() } else { Visuals::light() };
+    let mut v = if dark {
+        Visuals::dark()
+    } else {
+        Visuals::light()
+    };
     v.dark_mode = dark;
     v.panel_fill = t.panel;
     v.window_fill = t.menu;
     v.extreme_bg_color = t.canvas;
     v.faint_bg_color = t.control;
     v.code_bg_color = t.control;
-    v.window_stroke = Stroke::new(1.0, t.border);
+    v.window_stroke = Stroke::new(1.0_f32, t.border);
     v.window_corner_radius = CornerRadius::same(8);
     v.menu_corner_radius = CornerRadius::same(6);
     v.window_shadow = shadow(8, 28, if dark { 110 } else { 40 });
@@ -147,40 +151,40 @@ pub(super) fn visuals(dark: bool) -> Visuals {
     v.error_fg_color = t.error;
     v.hyperlink_color = t.accent;
     v.selection.bg_fill = t.accent_soft;
-    v.selection.stroke = Stroke::new(1.0, t.accent);
+    v.selection.stroke = Stroke::new(1.0_f32, t.accent);
 
     let radius = CornerRadius::same(4);
     let w = &mut v.widgets;
     w.noninteractive.bg_fill = t.panel;
     w.noninteractive.weak_bg_fill = t.panel;
-    w.noninteractive.bg_stroke = Stroke::new(1.0, t.border);
-    w.noninteractive.fg_stroke = Stroke::new(1.0, t.text);
+    w.noninteractive.bg_stroke = Stroke::new(1.0_f32, t.border);
+    w.noninteractive.fg_stroke = Stroke::new(1.0_f32, t.text);
     w.noninteractive.corner_radius = radius;
 
     w.inactive.bg_fill = t.control;
     w.inactive.weak_bg_fill = t.control;
-    w.inactive.bg_stroke = Stroke::new(1.0, t.border);
-    w.inactive.fg_stroke = Stroke::new(1.0, t.text);
+    w.inactive.bg_stroke = Stroke::new(1.0_f32, t.border);
+    w.inactive.fg_stroke = Stroke::new(1.0_f32, t.text);
     w.inactive.corner_radius = radius;
 
     w.hovered.bg_fill = t.control_hover;
     w.hovered.weak_bg_fill = t.control_hover;
-    w.hovered.bg_stroke = Stroke::new(1.0, t.border_strong);
-    w.hovered.fg_stroke = Stroke::new(1.0, t.text);
+    w.hovered.bg_stroke = Stroke::new(1.0_f32, t.border_strong);
+    w.hovered.fg_stroke = Stroke::new(1.0_f32, t.text);
     w.hovered.corner_radius = radius;
     w.hovered.expansion = 0.0;
 
     w.active.bg_fill = t.control_active;
     w.active.weak_bg_fill = t.control_active;
-    w.active.bg_stroke = Stroke::new(1.0, t.accent);
-    w.active.fg_stroke = Stroke::new(1.0, t.text);
+    w.active.bg_stroke = Stroke::new(1.0_f32, t.accent);
+    w.active.fg_stroke = Stroke::new(1.0_f32, t.text);
     w.active.corner_radius = radius;
     w.active.expansion = 0.0;
 
     w.open.bg_fill = t.control_hover;
     w.open.weak_bg_fill = t.control_hover;
-    w.open.bg_stroke = Stroke::new(1.0, t.border_strong);
-    w.open.fg_stroke = Stroke::new(1.0, t.text);
+    w.open.bg_stroke = Stroke::new(1.0_f32, t.border_strong);
+    w.open.fg_stroke = Stroke::new(1.0_f32, t.text);
     w.open.corner_radius = radius;
     v
 }
@@ -211,7 +215,9 @@ mod tests {
         use crate::plotting_parameters::LineColor::*;
         for dark in [false, true] {
             let canvas = Tokens::for_mode(dark).canvas;
-            for c in [Red, Green, Blue, Yellow, White, Gray, Cyan, Orange, Magenta, Gold] {
+            for c in [
+                Red, Green, Blue, Yellow, White, Gray, Cyan, Orange, Magenta, Gold,
+            ] {
                 let ratio = contrast_ratio(c.to_egui_for(dark), canvas);
                 assert!(ratio >= 3.0, "{c:?} dark={dark} ratio={ratio:.2}");
             }

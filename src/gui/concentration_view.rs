@@ -15,10 +15,16 @@ pub(super) enum Health {
 }
 pub(super) fn health(row: &t::Concentration) -> Health {
     use t::State::*;
-    if matches!(row.state, Missing | Rejected | BelowRange | AboveRange | Failed | Ambiguous) {
+    if matches!(
+        row.state,
+        Missing | Rejected | BelowRange | AboveRange | Failed | Ambiguous
+    ) {
         Health::Bad
     } else if row.state != Present
-        || row.flags.iter().any(|f| !f.starts_with("calibration_excluded"))
+        || row
+            .flags
+            .iter()
+            .any(|f| !f.starts_with("calibration_excluded"))
     {
         Health::Check
     } else {
@@ -74,7 +80,9 @@ fn analyte_name(batch: &t::BatchResult, target: &str) -> String {
         .targets
         .iter()
         .find(|t| t.id == target)
-        .map_or(target.to_owned(), |t| t.quantifier.extraction.extraction.name.clone())
+        .map_or(target.to_owned(), |t| {
+            t.quantifier.extraction.extraction.name.clone()
+        })
 }
 
 fn nearest_sample(batch: &t::BatchResult, order: f64) -> Option<&t::Sample> {
@@ -96,7 +104,12 @@ pub(super) fn trends(ui: &mut egui::Ui, batch: &t::BatchResult, selected: &mut u
     let Some(current) = batch.results.get(*selected) else {
         return;
     };
-    let Some(target) = batch.request.targets.iter().find(|t| t.id == current.target) else {
+    let Some(target) = batch
+        .request
+        .targets
+        .iter()
+        .find(|t| t.id == current.target)
+    else {
         return;
     };
     let name = analyte_name(batch, &target.id);
@@ -122,7 +135,12 @@ pub(super) fn trends(ui: &mut egui::Ui, batch: &t::BatchResult, selected: &mut u
             .x_axis_label("Injection order")
             .y_axis_label(y_label.to_owned())
             .show(ui, |p| {
-                for role in [t::Role::Standard, t::Role::Qc, t::Role::Blank, t::Role::Unknown] {
+                for role in [
+                    t::Role::Standard,
+                    t::Role::Qc,
+                    t::Role::Blank,
+                    t::Role::Unknown,
+                ] {
                     let group: Vec<[f64; 2]> = points
                         .iter()
                         .filter(|p| p.2 == role && !p.3)
@@ -187,7 +205,12 @@ pub(super) fn trends(ui: &mut egui::Ui, batch: &t::BatchResult, selected: &mut u
             .filter(|o| &o.target == is)
             .filter_map(|o| {
                 let (x, role) = order_of(&o.sample)?;
-                Some((x, o.quantifier.peak.as_ref()?.area, role, o.sample == selected_sample))
+                Some((
+                    x,
+                    o.quantifier.peak.as_ref()?.area,
+                    role,
+                    o.sample == selected_sample,
+                ))
             })
             .collect();
         let bounds = batch
@@ -198,7 +221,12 @@ pub(super) fn trends(ui: &mut egui::Ui, batch: &t::BatchResult, selected: &mut u
             .and_then(|t| t.is_area_range)
             .filter(|b| b[1] / b[0] < 1e6);
         let lines: Vec<(f64, &str)> = bounds
-            .map(|b| vec![(b[0], "Lowest accepted area"), (b[1], "Highest accepted area")])
+            .map(|b| {
+                vec![
+                    (b[0], "Lowest accepted area"),
+                    (b[1], "Highest accepted area"),
+                ]
+            })
             .unwrap_or_default();
         draw(
             ui,
@@ -216,8 +244,12 @@ pub(super) fn trends(ui: &mut egui::Ui, batch: &t::BatchResult, selected: &mut u
             .filter(|r| r.target == target.id)
             .filter_map(|r| {
                 let (x, role) = order_of(&r.sample)?;
-                matches!(role, t::Role::Standard | t::Role::Qc)
-                    .then_some((x, r.accuracy_percent?, role, r.sample == selected_sample))
+                matches!(role, t::Role::Standard | t::Role::Qc).then_some((
+                    x,
+                    r.accuracy_percent?,
+                    role,
+                    r.sample == selected_sample,
+                ))
             })
             .collect();
         if !accuracy.is_empty() {
@@ -228,7 +260,11 @@ pub(super) fn trends(ui: &mut egui::Ui, batch: &t::BatchResult, selected: &mut u
                 "Accuracy of standards and QCs (% of the known concentration)",
                 "Accuracy %",
                 accuracy,
-                &[(100.0 - tol, "Lower limit"), (100.0, "Exact"), (100.0 + tol, "Upper limit")],
+                &[
+                    (100.0 - tol, "Lower limit"),
+                    (100.0, "Exact"),
+                    (100.0 + tol, "Upper limit"),
+                ],
             );
         }
     }
@@ -268,10 +304,16 @@ mod tests {
     fn results_are_graded_by_state_and_flags() {
         assert_eq!(health(&row(t::State::Present, &[])), Health::Good);
         assert_eq!(
-            health(&row(t::State::Present, &["calibration_excluded: bad point"])),
+            health(&row(
+                t::State::Present,
+                &["calibration_excluded: bad point"]
+            )),
             Health::Good
         );
-        assert_eq!(health(&row(t::State::Present, &["low_confidence_peak"])), Health::Check);
+        assert_eq!(
+            health(&row(t::State::Present, &["low_confidence_peak"])),
+            Health::Check
+        );
         assert_eq!(health(&row(t::State::BelowLoq, &[])), Health::Check);
         assert_eq!(health(&row(t::State::Missing, &[])), Health::Bad);
         assert_eq!(health(&row(t::State::AboveRange, &["x"])), Health::Bad);

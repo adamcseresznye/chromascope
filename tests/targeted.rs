@@ -880,7 +880,12 @@ fn standards(f: impl Fn(f64) -> f64) -> Vec<(String, f64, f64)> {
         .map(|(i, x)| (format!("s{i}"), *x, f(*x)))
         .collect()
 }
-fn with(curve: Curve, weighting: Weighting, intercept: Intercept, degree: usize) -> CalibrationConfig {
+fn with(
+    curve: Curve,
+    weighting: Weighting,
+    intercept: Intercept,
+    degree: usize,
+) -> CalibrationConfig {
     CalibrationConfig {
         curve,
         degree,
@@ -919,7 +924,11 @@ fn average_response_factor_is_the_mean_of_y_over_x() {
 #[test]
 fn log_log_recovers_a_power_law_and_inverts_it() {
     let points = standards(|x| 2.5 * x.powf(1.2));
-    let m = fit(&points, &with(Curve::LogLog, Weighting::Unweighted, Intercept::Free, 1)).unwrap();
+    let m = fit(
+        &points,
+        &with(Curve::LogLog, Weighting::Unweighted, Intercept::Free, 1),
+    )
+    .unwrap();
     assert_eq!(m.curve, Curve::LogLog);
     for (_, x, y) in &points {
         close(m.response(*x), *y);
@@ -938,7 +947,12 @@ fn point_to_point_passes_through_level_means_and_inverts() {
     points.push(("rep".into(), 5.0, 27.0));
     let m = fit(
         &points,
-        &with(Curve::PointToPoint, Weighting::Unweighted, Intercept::Free, 1),
+        &with(
+            Curve::PointToPoint,
+            Weighting::Unweighted,
+            Intercept::Free,
+            1,
+        ),
     )
     .unwrap();
     close(m.response(1.0), 1.0);
@@ -949,7 +963,12 @@ fn point_to_point_passes_through_level_means_and_inverts() {
     assert!(m.flags.is_empty(), "{:?}", m.flags);
     let flat = fit(
         &standards(|x| if x < 5.0 { x } else { 10.0 - x }),
-        &with(Curve::PointToPoint, Weighting::Unweighted, Intercept::Free, 1),
+        &with(
+            Curve::PointToPoint,
+            Weighting::Unweighted,
+            Intercept::Free,
+            1,
+        ),
     )
     .unwrap();
     assert!(flat.flags.iter().any(|f| f == "nonmonotonic_calibration"));

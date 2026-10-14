@@ -64,7 +64,11 @@ fn intercept_label(i: &t::Intercept) -> &'static str {
 }
 /// Curve type, weighting and origin dropdowns for one calibration. Returns whether anything
 /// changed. Options that do not apply to the chosen curve are hidden.
-pub(super) fn fit_controls(ui: &mut egui::Ui, id: impl std::hash::Hash, cfg: &mut t::CalibrationConfig) -> bool {
+pub(super) fn fit_controls(
+    ui: &mut egui::Ui,
+    id: impl std::hash::Hash,
+    cfg: &mut t::CalibrationConfig,
+) -> bool {
     let mut changed = false;
     let choice = fit_choice(cfg);
     ui.horizontal_wrapped(|ui| {
@@ -103,7 +107,11 @@ pub(super) fn fit_controls(ui: &mut egui::Ui, id: impl std::hash::Hash, cfg: &mu
             egui::ComboBox::from_id_salt((&id, "origin"))
                 .selected_text(intercept_label(&cfg.intercept))
                 .show_ui(ui, |ui| {
-                    for i in [t::Intercept::Free, t::Intercept::Zero, t::Intercept::Fixed(0.0)] {
+                    for i in [
+                        t::Intercept::Free,
+                        t::Intercept::Zero,
+                        t::Intercept::Fixed(0.0),
+                    ] {
                         changed |= ui
                             .selectable_value(&mut cfg.intercept, i.clone(), intercept_label(&i))
                             .changed();
@@ -188,7 +196,13 @@ impl State {
             .targets
             .iter()
             .find(|t| t.id == self.target && t.calibration.is_some())
-            .or_else(|| batch.request.targets.iter().find(|t| t.calibration.is_some()));
+            .or_else(|| {
+                batch
+                    .request
+                    .targets
+                    .iter()
+                    .find(|t| t.calibration.is_some())
+            });
         self.batch = Some(batch.batch_id);
         let Some(target) = target else {
             return;
@@ -217,9 +231,7 @@ pub(super) fn curve_pane(
     plot_height: f32,
     ui: &mut egui::Ui,
 ) -> Option<t::BatchResult> {
-    let Some(current) = batch.request.targets.iter().find(|t| t.id == target) else {
-        return None;
-    };
+    let current = batch.request.targets.iter().find(|t| t.id == target)?;
     let name = current.quantifier.extraction.extraction.name.clone();
     if current.calibration.is_none() {
         crate::gui::widgets::strong(ui, &name);
@@ -231,9 +243,7 @@ pub(super) fn curve_pane(
         state.reset(batch);
     }
     let mut applied: Option<t::BatchResult> = None;
-    let Some(mut cfg) = state.cfg.clone() else {
-        return None;
-    };
+    let mut cfg = state.cfg.clone()?;
     let rows = standards(batch, target);
     let usable = |r: &Standard| r.response.is_some() && !state.excluded.contains(&r.sample);
     let points: Vec<(String, f64, f64)> = rows
@@ -249,7 +259,10 @@ pub(super) fn curve_pane(
         ui.horizontal_wrapped(|ui| {
             ui.colored_label(
                 ui.visuals().warn_fg_color,
-                format!("Range {}–{} is wider than the included standards ({low}–{high}).", cfg.range[0], cfg.range[1]),
+                format!(
+                    "Range {}–{} is wider than the included standards ({low}–{high}).",
+                    cfg.range[0], cfg.range[1]
+                ),
             );
             if ui.small_button("Fit range to standards").clicked() {
                 cfg.range = [low, high];
@@ -305,12 +318,19 @@ pub(super) fn curve_pane(
     }
     match &model {
         Ok(m) => {
-            ui.label(egui::RichText::new(format!(
-                "{name}   {}   R² = {}   W: {}",
-                equation(m),
-                m.r_squared.map_or("n/a".into(), |r| format!("{r:.4}")),
-                if cfg.curve == t::Curve::PointToPoint { "–" } else { cfg.weighting.label() },
-            )).strong());
+            ui.label(
+                egui::RichText::new(format!(
+                    "{name}   {}   R² = {}   W: {}",
+                    equation(m),
+                    m.r_squared.map_or("n/a".into(), |r| format!("{r:.4}")),
+                    if cfg.curve == t::Curve::PointToPoint {
+                        "–"
+                    } else {
+                        cfg.weighting.label()
+                    },
+                ))
+                .strong(),
+            );
             if !m.flags.is_empty() {
                 ui.colored_label(ui.visuals().warn_fg_color, m.flags.join("; "));
             }
@@ -320,7 +340,10 @@ pub(super) fn curve_pane(
                 .samples
                 .iter()
                 .filter_map(|s| {
-                    let row = batch.results.iter().find(|r| r.sample == s.id && r.target == target)?;
+                    let row = batch
+                        .results
+                        .iter()
+                        .find(|r| r.sample == s.id && r.target == target)?;
                     let y = row.response?;
                     let x = match s.role {
                         t::Role::Standard | t::Role::Qc => *s.nominal.get(target)?,
@@ -330,9 +353,17 @@ pub(super) fn curve_pane(
                     Some((s.id.clone(), s.role.clone(), x, y))
                 })
                 .collect();
-            let (xmin, xmax) = if low.is_finite() { (low.min(0.0), high) } else { (0.0, 1.0) };
+            let (xmin, xmax) = if low.is_finite() {
+                (low.min(0.0), high)
+            } else {
+                (0.0, 1.0)
+            };
             let unit = cfg.unit.label();
-            let y_label = if current.internal_standard.is_some() { "Area ratio" } else { "Area" };
+            let y_label = if current.internal_standard.is_some() {
+                "Area ratio"
+            } else {
+                "Area"
+            };
             let tk = super::theme::Tokens::of(ui);
             let plot_response = super::plot_controls::plot(ui, "cal_curve")
                 .height(plot_height)
@@ -348,14 +379,25 @@ pub(super) fn curve_pane(
                             })
                             .collect::<Vec<_>>(),
                     ));
-                    let group = |role: t::Role, shape: MarkerShape, colour: Color32, label: &str, included: bool| {
+                    let group = |role: t::Role,
+                                 shape: MarkerShape,
+                                 colour: Color32,
+                                 label: &str,
+                                 included: bool| {
                         let pts: Vec<[f64; 2]> = markers
                             .iter()
-                            .filter(|m| m.1 == role && (role != t::Role::Standard || usable_id(&rows, &state.excluded, &m.0) == included))
+                            .filter(|m| {
+                                m.1 == role
+                                    && (role != t::Role::Standard
+                                        || usable_id(&rows, &state.excluded, &m.0) == included)
+                            })
                             .map(|m| [m.2, m.3])
                             .collect();
                         (!pts.is_empty()).then(|| {
-                            let mut points = Points::new(label.to_owned(), pts).shape(shape).color(colour).radius(5.0_f32);
+                            let mut points = Points::new(label.to_owned(), pts)
+                                .shape(shape)
+                                .color(colour)
+                                .radius(5.0_f32);
                             if !included {
                                 points = points.filled(false);
                             }
@@ -363,10 +405,28 @@ pub(super) fn curve_pane(
                         })
                     };
                     for points in [
-                        group(t::Role::Standard, MarkerShape::Square, tk.role_standard, "Standards", true),
-                        group(t::Role::Standard, MarkerShape::Square, tk.role_standard, "Excluded standards", false),
+                        group(
+                            t::Role::Standard,
+                            MarkerShape::Square,
+                            tk.role_standard,
+                            "Standards",
+                            true,
+                        ),
+                        group(
+                            t::Role::Standard,
+                            MarkerShape::Square,
+                            tk.role_standard,
+                            "Excluded standards",
+                            false,
+                        ),
                         group(t::Role::Qc, MarkerShape::Diamond, tk.role_qc, "QCs", true),
-                        group(t::Role::Unknown, MarkerShape::Circle, tk.role_unknown, "Unknowns", true),
+                        group(
+                            t::Role::Unknown,
+                            MarkerShape::Circle,
+                            tk.role_unknown,
+                            "Unknowns",
+                            true,
+                        ),
                     ]
                     .into_iter()
                     .flatten()
@@ -374,8 +434,16 @@ pub(super) fn curve_pane(
                         p.points(points);
                     }
                     if let Some(chosen) = markers.iter().find(|m| m.0 == selected_sample) {
-                        p.vline(VLine::new("Selected", chosen.2).color(tk.error).width(1.0_f32));
-                        p.hline(HLine::new("Selected", chosen.3).color(tk.error).width(1.0_f32));
+                        p.vline(
+                            VLine::new("Selected", chosen.2)
+                                .color(tk.error)
+                                .width(1.0_f32),
+                        );
+                        p.hline(
+                            HLine::new("Selected", chosen.3)
+                                .color(tk.error)
+                                .width(1.0_f32),
+                        );
                     }
                 });
             // Clicking a standard on the curve excludes it from (or restores it to) the fit.
@@ -383,14 +451,25 @@ pub(super) fn curve_pane(
                 markers
                     .iter()
                     .filter(|m| m.1 == t::Role::Standard)
-                    .map(|m| (m, plot_response.transform.position_from_point(&egui_plot::PlotPoint::new(m.2, m.3)).distance(pos)))
+                    .map(|m| {
+                        (
+                            m,
+                            plot_response
+                                .transform
+                                .position_from_point(&egui_plot::PlotPoint::new(m.2, m.3))
+                                .distance(pos),
+                        )
+                    })
                     .filter(|(_, d)| *d <= 10.0)
                     .min_by(|a, b| a.1.total_cmp(&b.1))
                     .map(|(m, _)| m.0.clone())
             });
             if let Some(sample) = nearest_standard {
                 let excluded = state.excluded.contains(&sample);
-                let response = plot_response.response.clone().on_hover_cursor(egui::CursorIcon::PointingHand);
+                let response = plot_response
+                    .response
+                    .clone()
+                    .on_hover_cursor(egui::CursorIcon::PointingHand);
                 response.on_hover_text(format!(
                     "{sample}: click to {} this standard",
                     if excluded { "include" } else { "exclude" }
@@ -410,39 +489,56 @@ pub(super) fn curve_pane(
     }
     ui.collapsing("Standards used and fit comparison", |ui| {
         // Standards: tick to include, see how well each is back-calculated.
-        egui::Grid::new("cal_standards").striped(true).show(ui, |ui| {
-            for h in ["Use", "Standard", "Known conc.", "Response", "Back-calculated", "Accuracy %"] {
-                crate::gui::widgets::strong(ui, h);
-            }
-            ui.end_row();
-            for r in &rows {
-                let mut on = !state.excluded.contains(&r.sample) && r.response.is_some();
-                if ui.add_enabled(r.response.is_some(), egui::Checkbox::without_text(&mut on)).changed() {
-                    if on {
-                        state.excluded.remove(&r.sample);
-                    } else {
-                        state.excluded.insert(r.sample.clone());
-                    }
-                    changed = true;
-                }
-                ui.label(&r.sample);
-                ui.label(format!("{}", r.x));
-                ui.label(r.response.map_or("no peak".into(), |y| format!("{y:.4e}")));
-                let point = model
-                    .as_ref()
-                    .ok()
-                    .and_then(|m| m.points.iter().find(|p| p.sample == r.sample));
-                ui.label(point.and_then(|p| p.back_calculated).map_or("–".into(), |v| format!("{v:.4}")));
-                let accuracy = point.and_then(|p| p.accuracy_percent);
-                let text = accuracy.map_or("–".into(), |a| format!("{a:.1}"));
-                if accuracy.is_some_and(|a| (a - 100.0).abs() > cfg.accuracy_tolerance_percent) {
-                    ui.colored_label(ui.visuals().warn_fg_color, text);
-                } else {
-                    ui.label(text);
+        egui::Grid::new("cal_standards")
+            .striped(true)
+            .show(ui, |ui| {
+                for h in [
+                    "Use",
+                    "Standard",
+                    "Known conc.",
+                    "Response",
+                    "Back-calculated",
+                    "Accuracy %",
+                ] {
+                    crate::gui::widgets::strong(ui, h);
                 }
                 ui.end_row();
-            }
-        });
+                for r in &rows {
+                    let mut on = !state.excluded.contains(&r.sample) && r.response.is_some();
+                    if ui
+                        .add_enabled(r.response.is_some(), egui::Checkbox::without_text(&mut on))
+                        .changed()
+                    {
+                        if on {
+                            state.excluded.remove(&r.sample);
+                        } else {
+                            state.excluded.insert(r.sample.clone());
+                        }
+                        changed = true;
+                    }
+                    ui.label(&r.sample);
+                    ui.label(format!("{}", r.x));
+                    ui.label(r.response.map_or("no peak".into(), |y| format!("{y:.4e}")));
+                    let point = model
+                        .as_ref()
+                        .ok()
+                        .and_then(|m| m.points.iter().find(|p| p.sample == r.sample));
+                    ui.label(
+                        point
+                            .and_then(|p| p.back_calculated)
+                            .map_or("–".into(), |v| format!("{v:.4}")),
+                    );
+                    let accuracy = point.and_then(|p| p.accuracy_percent);
+                    let text = accuracy.map_or("–".into(), |a| format!("{a:.1}"));
+                    if accuracy.is_some_and(|a| (a - 100.0).abs() > cfg.accuracy_tolerance_percent)
+                    {
+                        ui.colored_label(ui.visuals().warn_fg_color, text);
+                    } else {
+                        ui.label(text);
+                    }
+                    ui.end_row();
+                }
+            });
         // Alternative fits on the same included standards.
         ui.add_space(4.0);
         crate::gui::widgets::strong(ui, "Compare fits (same weighting and origin settings)");

@@ -211,7 +211,11 @@ pub fn activity(app: &mut MzViewerApp, ctx: &Context) {
 pub fn configure(ctx: &Context, dark: bool) {
     configure_with(
         ctx,
-        if dark { egui::ThemePreference::Dark } else { egui::ThemePreference::Light },
+        if dark {
+            egui::ThemePreference::Dark
+        } else {
+            egui::ThemePreference::Light
+        },
     );
 }
 
@@ -229,7 +233,8 @@ pub fn configure_with(ctx: &Context, preference: egui::ThemePreference) {
         ),
         (
             "JetBrains Mono",
-            include_bytes!("../../assets/fonts/jetbrains-mono/JetBrainsMono-Regular.ttf").as_slice(),
+            include_bytes!("../../assets/fonts/jetbrains-mono/JetBrainsMono-Regular.ttf")
+                .as_slice(),
         ),
     ] {
         fonts
@@ -293,8 +298,7 @@ fn trace_segments(app: &mut MzViewerApp, ui: &mut egui::Ui) {
         (PlotType::Bpc, "BPC"),
         (PlotType::Xic, "XIC"),
     ] {
-        if super::widgets::segment(ui, app.user_input.plot_type == kind, None, label)
-            .clicked()
+        if super::widgets::segment(ui, app.user_input.plot_type == kind, None, label).clicked()
             && app.user_input.plot_type != kind
         {
             app.user_input.plot_type = kind;

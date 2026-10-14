@@ -228,8 +228,9 @@ pub(super) fn show_with(
                 .data_mut(|d| d.remove_temp::<bool>(scroll_id))
                 .unwrap_or(false)
             {
-                if let Some(position) =
-                    indices.iter().position(|&i| selected == Some(rows[i].key.as_str()))
+                if let Some(position) = indices
+                    .iter()
+                    .position(|&i| selected == Some(rows[i].key.as_str()))
                 {
                     let visible = body_height.max(ROW_HEIGHT * 3.);
                     rows_area = rows_area.vertical_scroll_offset(
@@ -237,96 +238,93 @@ pub(super) fn show_with(
                     );
                 }
             }
-            rows_area
-                .show_rows(ui, ROW_HEIGHT, indices.len(), |ui, range| {
-                    for visible in range {
-                        let index = indices[visible];
-                        let row = &rows[index];
-                        let is_selected = selected == Some(row.key.as_str());
-                        let (rect, response) = ui.allocate_exact_size(
-                            egui::vec2(total, ROW_HEIGHT),
-                            egui::Sense::click(),
+            rows_area.show_rows(ui, ROW_HEIGHT, indices.len(), |ui, range| {
+                for visible in range {
+                    let index = indices[visible];
+                    let row = &rows[index];
+                    let is_selected = selected == Some(row.key.as_str());
+                    let (rect, response) =
+                        ui.allocate_exact_size(egui::vec2(total, ROW_HEIGHT), egui::Sense::click());
+                    response.widget_info(|| {
+                        egui::WidgetInfo::selected(
+                            egui::WidgetType::SelectableLabel,
+                            true,
+                            is_selected,
+                            row.cells
+                                .iter()
+                                .map(|c| c.text.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                        )
+                    });
+                    let visuals = ui.visuals();
+                    let fill = if is_selected {
+                        visuals.selection.bg_fill
+                    } else if response.hovered() {
+                        visuals.widgets.hovered.weak_bg_fill
+                    } else if visible % 2 == 1 {
+                        visuals.faint_bg_color
+                    } else {
+                        egui::Color32::TRANSPARENT
+                    };
+                    ui.painter().rect_filled(rect, 0., fill);
+                    let mut x = rect.left();
+                    let mut hovered_text = None;
+                    for (column, cell) in row.cells.iter().enumerate() {
+                        let width = widths.get(column).copied().unwrap_or(150.);
+                        let area = egui::Rect::from_min_size(
+                            egui::pos2(x, rect.top()),
+                            egui::vec2(width, ROW_HEIGHT),
                         );
-                        response.widget_info(|| {
-                            egui::WidgetInfo::selected(
-                                egui::WidgetType::SelectableLabel,
-                                true,
-                                is_selected,
-                                row.cells
-                                    .iter()
-                                    .map(|c| c.text.as_str())
-                                    .collect::<Vec<_>>()
-                                    .join(", "),
-                            )
-                        });
-                        let visuals = ui.visuals();
-                        let fill = if is_selected {
-                            visuals.selection.bg_fill
-                        } else if response.hovered() {
-                            visuals.widgets.hovered.weak_bg_fill
-                        } else if visible % 2 == 1 {
-                            visuals.faint_bg_color
-                        } else {
-                            egui::Color32::TRANSPARENT
-                        };
-                        ui.painter().rect_filled(rect, 0., fill);
-                        let mut x = rect.left();
-                        let mut hovered_text = None;
-                        for (column, cell) in row.cells.iter().enumerate() {
-                            let width = widths.get(column).copied().unwrap_or(150.);
-                            let area = egui::Rect::from_min_size(
-                                egui::pos2(x, rect.top()),
-                                egui::vec2(width, ROW_HEIGHT),
+                        x += width;
+                        if response.hover_pos().is_some_and(|p| area.contains(p)) {
+                            hovered_text = Some(
+                                cell.number
+                                    .map(|v| v.to_string())
+                                    .unwrap_or_else(|| cell.text.clone()),
                             );
-                            x += width;
-                            if response.hover_pos().is_some_and(|p| area.contains(p)) {
-                                hovered_text = Some(
-                                    cell.number
-                                        .map(|v| v.to_string())
-                                        .unwrap_or_else(|| cell.text.clone()),
-                                );
-                            }
-                            if response.clicked()
-                                && response
-                                    .interact_pointer_pos()
-                                    .is_some_and(|p| area.contains(p))
-                            {
-                                ui.ctx().data_mut(|d| {
-                                    d.insert_temp(egui::Id::new(("table_column", id)), column)
-                                });
-                            }
-                            let color = cell.color.unwrap_or(if is_selected {
-                                ui.visuals().strong_text_color()
-                            } else {
-                                ui.visuals().text_color()
+                        }
+                        if response.clicked()
+                            && response
+                                .interact_pointer_pos()
+                                .is_some_and(|p| area.contains(p))
+                        {
+                            ui.ctx().data_mut(|d| {
+                                d.insert_temp(egui::Id::new(("table_column", id)), column)
                             });
-                            let painter = ui.painter().with_clip_rect(area);
-                            if cell.number.is_some() {
-                                painter.text(
-                                    egui::pos2(area.right() - 10., area.center().y),
-                                    egui::Align2::RIGHT_CENTER,
-                                    &cell.text,
-                                    egui::TextStyle::Monospace.resolve(ui.style()),
-                                    color,
-                                );
-                            } else {
-                                painter.text(
-                                    egui::pos2(area.left() + 8., area.center().y),
-                                    egui::Align2::LEFT_CENTER,
-                                    &cell.text,
-                                    egui::TextStyle::Body.resolve(ui.style()),
-                                    color,
-                                );
-                            }
                         }
-                        if response.clicked() {
-                            clicked = Some(index);
-                        }
-                        if let Some(text) = hovered_text {
-                            response.on_hover_text(text);
+                        let color = cell.color.unwrap_or(if is_selected {
+                            ui.visuals().strong_text_color()
+                        } else {
+                            ui.visuals().text_color()
+                        });
+                        let painter = ui.painter().with_clip_rect(area);
+                        if cell.number.is_some() {
+                            painter.text(
+                                egui::pos2(area.right() - 10., area.center().y),
+                                egui::Align2::RIGHT_CENTER,
+                                &cell.text,
+                                egui::TextStyle::Monospace.resolve(ui.style()),
+                                color,
+                            );
+                        } else {
+                            painter.text(
+                                egui::pos2(area.left() + 8., area.center().y),
+                                egui::Align2::LEFT_CENTER,
+                                &cell.text,
+                                egui::TextStyle::Body.resolve(ui.style()),
+                                color,
+                            );
                         }
                     }
-                });
+                    if response.clicked() {
+                        clicked = Some(index);
+                    }
+                    if let Some(text) = hovered_text {
+                        response.on_hover_text(text);
+                    }
+                }
+            });
         });
     ui.add_space(2.);
     ui.small(if indices.len() == rows.len() {

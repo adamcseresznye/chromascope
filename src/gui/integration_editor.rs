@@ -33,7 +33,8 @@ pub(super) fn editor(ui: &mut egui::Ui, cfg: &mut Integration, rt_window: [f64; 
     // Inline choices: dropdowns close the menu this editor may be shown in.
     ui.horizontal_wrapped(|ui| {
         for a in Algorithm::ALL {
-            changed |= super::widgets::segment_value(ui, &mut cfg.algorithm, a, a.label()).changed();
+            changed |=
+                super::widgets::segment_value(ui, &mut cfg.algorithm, a, a.label()).changed();
         }
     });
     ui.small(cfg.algorithm.description());

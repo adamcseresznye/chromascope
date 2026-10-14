@@ -224,11 +224,16 @@ fn save_csv(message: &mut String, name: &str, text: &str) {
 fn signature(request: &t::BatchRequest, results: &[Measurement]) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    serde_json::to_string(request).unwrap_or_default().hash(&mut hasher);
+    serde_json::to_string(request)
+        .unwrap_or_default()
+        .hash(&mut hasher);
     for s in &request.samples {
         for target in &request.targets {
             let name = &target.quantifier.extraction.extraction.name;
-            if let Some(m) = results.iter().find(|m| m.source == s.source && &m.analyte == name) {
+            if let Some(m) = results
+                .iter()
+                .find(|m| m.source == s.source && &m.analyte == name)
+            {
                 (&m.source, &m.analyte, format!("{:?}", m.status)).hash(&mut hasher);
                 if let Some(p) = &m.peak {
                     (p.start.to_bits(), p.end.to_bits(), p.area.to_bits()).hash(&mut hasher);
@@ -266,97 +271,165 @@ fn samples_section(state: &mut UiState, ui: &mut egui::Ui) {
                 });
             }
             if ui.button("Save sheet template…").clicked() {
-                save_csv(&mut state.message, "sample-sheet.csv", &crate::sample_sheet::template(&state.setup.rows));
+                save_csv(
+                    &mut state.message,
+                    "sample-sheet.csv",
+                    &crate::sample_sheet::template(&state.setup.rows),
+                );
             }
         });
         let levels: Vec<String> = state.setup.levels.iter().map(|l| l.name.clone()).collect();
-        egui::ScrollArea::horizontal().id_salt("cal_samples_scroll").show(ui, |ui| {
-            egui::Grid::new("cal_samples").striped(true).show(ui, |ui| {
-                for h in ["Sample type", "File name", "Sample ID", "Dilution", "Level"] {
-                    crate::gui::widgets::strong(ui, h);
-                }
-                ui.end_row();
-                for (i, row) in state.setup.rows.iter_mut().enumerate() {
-                    egui::ComboBox::from_id_salt(("cal_role", i))
-                        .selected_text(role_label(&row.role))
-                        .width(90.0)
-                        .show_ui(ui, |ui| {
-                            for role in [t::Role::Standard, t::Role::Qc, t::Role::Blank, t::Role::Unknown] {
-                                ui.selectable_value(&mut row.role, role.clone(), role_label(&role));
-                            }
-                        });
-                    ui.label(crate::sample_sheet::stem(&row.source));
-                    ui.add(egui::TextEdit::singleline(&mut row.id).desired_width(110.0));
-                    ui.add(egui::DragValue::new(&mut row.dilution).speed(0.1).range(0.0001..=1e9));
-                    if matches!(row.role, t::Role::Standard | t::Role::Qc) {
-                        egui::ComboBox::from_id_salt(("cal_level", i))
-                            .selected_text(if row.level.is_empty() { "choose…" } else { row.level.as_str() })
-                            .width(90.0)
-                            .show_ui(ui, |ui| {
-                                for l in &levels {
-                                    ui.selectable_value(&mut row.level, l.clone(), l);
-                                }
-                            });
-                    } else {
-                        ui.weak("–");
+        egui::ScrollArea::horizontal()
+            .id_salt("cal_samples_scroll")
+            .show(ui, |ui| {
+                egui::Grid::new("cal_samples").striped(true).show(ui, |ui| {
+                    for h in ["Sample type", "File name", "Sample ID", "Dilution", "Level"] {
+                        crate::gui::widgets::strong(ui, h);
                     }
                     ui.end_row();
-                }
+                    for (i, row) in state.setup.rows.iter_mut().enumerate() {
+                        egui::ComboBox::from_id_salt(("cal_role", i))
+                            .selected_text(role_label(&row.role))
+                            .width(90.0)
+                            .show_ui(ui, |ui| {
+                                for role in [
+                                    t::Role::Standard,
+                                    t::Role::Qc,
+                                    t::Role::Blank,
+                                    t::Role::Unknown,
+                                ] {
+                                    ui.selectable_value(
+                                        &mut row.role,
+                                        role.clone(),
+                                        role_label(&role),
+                                    );
+                                }
+                            });
+                        ui.label(crate::sample_sheet::stem(&row.source));
+                        ui.add(egui::TextEdit::singleline(&mut row.id).desired_width(110.0));
+                        ui.add(
+                            egui::DragValue::new(&mut row.dilution)
+                                .speed(0.1)
+                                .range(0.0001..=1e9),
+                        );
+                        if matches!(row.role, t::Role::Standard | t::Role::Qc) {
+                            egui::ComboBox::from_id_salt(("cal_level", i))
+                                .selected_text(if row.level.is_empty() {
+                                    "choose…"
+                                } else {
+                                    row.level.as_str()
+                                })
+                                .width(90.0)
+                                .show_ui(ui, |ui| {
+                                    for l in &levels {
+                                        ui.selectable_value(&mut row.level, l.clone(), l);
+                                    }
+                                });
+                        } else {
+                            ui.weak("–");
+                        }
+                        ui.end_row();
+                    }
+                });
             });
-        });
     });
 }
 fn levels_section(state: &mut UiState, ui: &mut egui::Ui) {
     section("2 · Levels — known concentrations", true, ui, |ui| {
         ui.small("A level is one prepared solution. Enter what it contains for every analyte; standards and QCs point to a level in step 1. Internal standards need no concentration.");
-        let names: Vec<String> = state.setup.analytes.iter().filter(|a| !a.is_standard).map(|a| a.name.clone()).collect();
+        let names: Vec<String> = state
+            .setup
+            .analytes
+            .iter()
+            .filter(|a| !a.is_standard)
+            .map(|a| a.name.clone())
+            .collect();
         let all = state.setup.analyte_names();
         ui.horizontal_wrapped(|ui| {
             if ui.button("Add level").clicked() {
-                let next = (1..).map(|n| n.to_string()).find(|n| !state.setup.levels.iter().any(|l| &l.name == n)).unwrap();
-                state.setup.levels.push(crate::sample_sheet::Level { name: next, ..Default::default() });
+                let next = (1..)
+                    .map(|n| n.to_string())
+                    .find(|n| !state.setup.levels.iter().any(|l| &l.name == n))
+                    .unwrap();
+                state.setup.levels.push(crate::sample_sheet::Level {
+                    name: next,
+                    ..Default::default()
+                });
             }
-            if ui.button("Import levels (CSV)…").on_hover_text("Columns: level, then one column per analyte").clicked() {
+            if ui
+                .button("Import levels (CSV)…")
+                .on_hover_text("Columns: level, then one column per analyte")
+                .clicked()
+            {
                 let levels = &mut state.setup.levels;
-                import_csv(&mut state.message, "Levels", |text| crate::sample_sheet::apply_levels(levels, &all, text));
+                import_csv(&mut state.message, "Levels", |text| {
+                    crate::sample_sheet::apply_levels(levels, &all, text)
+                });
             }
             if ui.button("Save level template…").clicked() {
-                save_csv(&mut state.message, "levels.csv", &crate::sample_sheet::levels_template(&state.setup.levels, &names));
+                save_csv(
+                    &mut state.message,
+                    "levels.csv",
+                    &crate::sample_sheet::levels_template(&state.setup.levels, &names),
+                );
             }
         });
         if state.setup.levels.is_empty() {
             ui.label("No levels yet — add one, or import them from a CSV.");
             return;
         }
-        let units: Vec<&'static str> = state.setup.analytes.iter().filter(|a| !a.is_standard).map(|a| a.cfg.unit.label()).collect();
+        let units: Vec<&'static str> = state
+            .setup
+            .analytes
+            .iter()
+            .filter(|a| !a.is_standard)
+            .map(|a| a.cfg.unit.label())
+            .collect();
         let mut remove = None;
-        egui::ScrollArea::horizontal().id_salt("cal_levels_scroll").show(ui, |ui| {
-            egui::Grid::new("cal_levels").striped(true).show(ui, |ui| {
-                crate::gui::widgets::strong(ui, "Level");
-                for (name, unit) in names.iter().zip(&units) {
-                    ui.strong(format!("{name} ({unit})"));
-                }
-                ui.end_row();
-                for (i, level) in state.setup.levels.iter_mut().enumerate() {
-                    ui.add(egui::TextEdit::singleline(&mut level.name).desired_width(70.0));
-                    for name in &names {
-                        let known = level.conc.get(name).copied();
-                        let mut value = known.unwrap_or(0.0);
-                        let set = known.is_some();
-                        if ui
-                            .add(egui::DragValue::new(&mut value).speed(0.1).range(0.0..=1e12).custom_formatter(move |n, _| if set { format!("{n}") } else { "–".into() }))
-                            .changed()
-                        {
-                            level.conc.insert(name.clone(), value);
-                        }
-                    }
-                    if ui.small_button("✕").on_hover_text("Remove this level").clicked() {
-                        remove = Some(i);
+        egui::ScrollArea::horizontal()
+            .id_salt("cal_levels_scroll")
+            .show(ui, |ui| {
+                egui::Grid::new("cal_levels").striped(true).show(ui, |ui| {
+                    crate::gui::widgets::strong(ui, "Level");
+                    for (name, unit) in names.iter().zip(&units) {
+                        ui.strong(format!("{name} ({unit})"));
                     }
                     ui.end_row();
-                }
+                    for (i, level) in state.setup.levels.iter_mut().enumerate() {
+                        ui.add(egui::TextEdit::singleline(&mut level.name).desired_width(70.0));
+                        for name in &names {
+                            let known = level.conc.get(name).copied();
+                            let mut value = known.unwrap_or(0.0);
+                            let set = known.is_some();
+                            if ui
+                                .add(
+                                    egui::DragValue::new(&mut value)
+                                        .speed(0.1)
+                                        .range(0.0..=1e12)
+                                        .custom_formatter(move |n, _| {
+                                            if set {
+                                                format!("{n}")
+                                            } else {
+                                                "–".into()
+                                            }
+                                        }),
+                                )
+                                .changed()
+                            {
+                                level.conc.insert(name.clone(), value);
+                            }
+                        }
+                        if ui
+                            .small_button("✕")
+                            .on_hover_text("Remove this level")
+                            .clicked()
+                        {
+                            remove = Some(i);
+                        }
+                        ui.end_row();
+                    }
+                });
             });
-        });
         if let Some(i) = remove {
             state.setup.levels.remove(i);
         }
@@ -365,7 +438,13 @@ fn levels_section(state: &mut UiState, ui: &mut egui::Ui) {
 fn analytes_section(state: &mut UiState, ui: &mut egui::Ui) {
     section("3 · Analytes and calibration", true, ui, |ui| {
         ui.small("External calibration uses the analyte's peak area. Internal calibration divides it by the area of an internal standard in the same injection. Ion and retention-time settings stay in the method (tab 1).");
-        let standards: Vec<String> = state.setup.analytes.iter().filter(|a| a.is_standard).map(|a| a.name.clone()).collect();
+        let standards: Vec<String> = state
+            .setup
+            .analytes
+            .iter()
+            .filter(|a| a.is_standard)
+            .map(|a| a.name.clone())
+            .collect();
         let mut copy_from = None;
         for (i, a) in state.setup.analytes.iter_mut().enumerate() {
             egui::Frame::group(ui.style()).show(ui, |ui| {
@@ -431,13 +510,22 @@ fn analytes_section(state: &mut UiState, ui: &mut egui::Ui) {
         if let Some(i) = copy_from {
             let source = state.setup.analytes[i].clone();
             for a in state.setup.analytes.iter_mut().filter(|a| !a.is_standard) {
-                a.cfg = t::CalibrationConfig { lod: a.cfg.lod, loq: a.cfg.loq, ..source.cfg.clone() };
+                a.cfg = t::CalibrationConfig {
+                    lod: a.cfg.lod,
+                    loq: a.cfg.loq,
+                    ..source.cfg.clone()
+                };
                 a.internal_standard = source.internal_standard.clone();
             }
         }
     });
 }
-fn calculate_section(state: &mut UiState, method: &Method, measurements: &[Measurement], ui: &mut egui::Ui) {
+fn calculate_section(
+    state: &mut UiState,
+    method: &Method,
+    measurements: &[Measurement],
+    ui: &mut egui::Ui,
+) {
     section("4 · Calculate concentrations", true, ui, |ui| {
         let request = state.setup.build_request(method);
         let mut problems = match &request {
@@ -478,7 +566,12 @@ fn calculate_section(state: &mut UiState, method: &Method, measurements: &[Measu
         }
     });
 }
-fn start_calculation(state: &mut UiState, request: t::BatchRequest, observations: Vec<t::Observation>, signature: u64) {
+fn start_calculation(
+    state: &mut UiState,
+    request: t::BatchRequest,
+    observations: Vec<t::Observation>,
+    signature: u64,
+) {
     let (tx, rx) = mpsc::channel();
     let control = crate::jobs::JobControl::default();
     state.control = Some(control.clone());
@@ -493,7 +586,13 @@ fn start_calculation(state: &mut UiState, request: t::BatchRequest, observations
             for s in &request.samples {
                 let hash = match cache.get(&file_key(&s.source)) {
                     Some(h) => h.clone(),
-                    None => crate::project::source_identity_controlled(std::path::Path::new(&s.source), Some(&control))?.0,
+                    None => {
+                        crate::project::source_identity_controlled(
+                            std::path::Path::new(&s.source),
+                            Some(&control),
+                        )?
+                        .0
+                    }
                 };
                 hashes.insert(s.id.clone(), hash);
             }
@@ -508,38 +607,113 @@ fn advanced_section(state: &mut UiState, ui: &mut egui::Ui) {
         ui.small("The request below is what step 4 calculates. Running it from the raw files re-extracts every peak and ignores the integrations in tab 1.");
         ui.horizontal_wrapped(|ui| {
             if ui.button("Open targeted request…").clicked() {
-                if let Some(path) = rfd::FileDialog::new().add_filter("JSON", &["json"]).pick_file() {
-                    match std::fs::read_to_string(path) { Ok(text) => state.draft = text, Err(e) => state.message = e.to_string() }
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("JSON", &["json"])
+                    .pick_file()
+                {
+                    match std::fs::read_to_string(path) {
+                        Ok(text) => state.draft = text,
+                        Err(e) => state.message = e.to_string(),
+                    }
                 }
             }
             if ui.button("Open targeted history…").clicked() {
-                if let Some(path) = rfd::FileDialog::new().add_filter("JSON", &["json"]).pick_file() {
-                    let result = std::fs::read_to_string(path).map_err(|e| e.to_string()).and_then(|text| serde_json::from_str::<Vec<t::BatchResult>>(&text).map_err(|e| e.to_string())).and_then(|batches| { for batch in &batches { t::verify(batch).map_err(|e| e.to_string())?; } Ok(batches) });
-                    match result { Ok(batches) => { state.history.extend(batches); state.current_batch=state.history.len().saturating_sub(1); state.selected = 0; }, Err(e) => state.message = e }
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("JSON", &["json"])
+                    .pick_file()
+                {
+                    let result = std::fs::read_to_string(path)
+                        .map_err(|e| e.to_string())
+                        .and_then(|text| {
+                            serde_json::from_str::<Vec<t::BatchResult>>(&text)
+                                .map_err(|e| e.to_string())
+                        })
+                        .and_then(|batches| {
+                            for batch in &batches {
+                                t::verify(batch).map_err(|e| e.to_string())?;
+                            }
+                            Ok(batches)
+                        });
+                    match result {
+                        Ok(batches) => {
+                            state.history.extend(batches);
+                            state.current_batch = state.history.len().saturating_sub(1);
+                            state.selected = 0;
+                        }
+                        Err(e) => state.message = e,
+                    }
                 }
             }
-            if ui.button("Save targeted request…").clicked() { if let Some(path) = rfd::FileDialog::new().set_file_name("targeted-request.json").save_file() { state.message = match write_new(&path, state.draft.as_bytes()) { Ok(()) => "Request saved".into(), Err(e) => e.to_string() }; } }
-            if !state.history.is_empty() && ui.button("Save targeted history…").clicked() { if let Some(path) = rfd::FileDialog::new().set_file_name("targeted-history.json").save_file() { state.message = match serde_json::to_vec_pretty(&state.history).map_err(|e| e.to_string()).and_then(|bytes| write_new(&path, &bytes).map_err(|e| e.to_string())) { Ok(()) => "All runs and reviews saved".into(), Err(e) => e }; } }
+            if ui.button("Save targeted request…").clicked() {
+                if let Some(path) = rfd::FileDialog::new()
+                    .set_file_name("targeted-request.json")
+                    .save_file()
+                {
+                    state.message = match write_new(&path, state.draft.as_bytes()) {
+                        Ok(()) => "Request saved".into(),
+                        Err(e) => e.to_string(),
+                    };
+                }
+            }
+            if !state.history.is_empty() && ui.button("Save targeted history…").clicked() {
+                if let Some(path) = rfd::FileDialog::new()
+                    .set_file_name("targeted-history.json")
+                    .save_file()
+                {
+                    state.message = match serde_json::to_vec_pretty(&state.history)
+                        .map_err(|e| e.to_string())
+                        .and_then(|bytes| write_new(&path, &bytes).map_err(|e| e.to_string()))
+                    {
+                        Ok(()) => "All runs and reviews saved".into(),
+                        Err(e) => e,
+                    };
+                }
+            }
         });
-        super::forms::typed::<t::BatchRequest>(ui,"Additional sample exclusions and target controls",&mut state.draft);
+        super::forms::typed::<t::BatchRequest>(
+            ui,
+            "Additional sample exclusions and target controls",
+            &mut state.draft,
+        );
         ui.collapsing("Method / sample JSON editor", |ui| {
             ui.label("Edit degree (1/2/3), intercept (free/zero/fixed), weighting (unweighted/inverse_x/inverse_x2/inverse_y/inverse_y2), curve (polynomial/log_log/point_to_point), range, LOD/LOQ, units and QC thresholds. Internal standards are separate targets with is_area_range, calibration=null; reference their ID in internal_standard. Qualifiers specify extraction and ratio_range. RT windows are in minutes. Exclusions map target ID to a reason. Saved runs retain their original request.");
             ui.add(egui::TextEdit::multiline(&mut state.draft).code_editor().desired_rows(12).desired_width(f32::INFINITY));
         });
         ui.horizontal_wrapped(|ui| {
-            if ui.add_enabled(state.receiver.is_none() && !state.draft.is_empty(), egui::Button::new("Run targeted quantification")).clicked() {
-                let request = serde_json::from_str::<t::BatchRequest>(&state.draft).map_err(|e| crate::domain::EngineError::new("invalid_parameters", e));
-                match request.and_then(|r| { t::validate(&r)?; Ok(r) }) {
+            if ui
+                .add_enabled(
+                    state.receiver.is_none() && !state.draft.is_empty(),
+                    egui::Button::new("Run targeted quantification"),
+                )
+                .clicked()
+            {
+                let request = serde_json::from_str::<t::BatchRequest>(&state.draft)
+                    .map_err(|e| crate::domain::EngineError::new("invalid_parameters", e));
+                match request.and_then(|r| {
+                    t::validate(&r)?;
+                    Ok(r)
+                }) {
                     Ok(request) => {
-                        let (tx, rx) = mpsc::channel(); let control = crate::jobs::JobControl::default();
-                        state.control = Some(control.clone()); state.receiver = Some(rx);
-                        std::thread::spawn(move || { let _ = tx.send(t::run(request, &control)); });
+                        let (tx, rx) = mpsc::channel();
+                        let control = crate::jobs::JobControl::default();
+                        state.control = Some(control.clone());
+                        state.receiver = Some(rx);
+                        std::thread::spawn(move || {
+                            let _ = tx.send(t::run(request, &control));
+                        });
                         state.message = "Quantifying raw sources…".into();
                     }
                     Err(e) => state.message = e.to_string(),
                 }
             }
-            if state.receiver.is_some() { ui.spinner(); if ui.button("Cancel targeted run").clicked() { if let Some(control) = &state.control { control.cancel(); } } }
+            if state.receiver.is_some() {
+                ui.spinner();
+                if ui.button("Cancel targeted run").clicked() {
+                    if let Some(control) = &state.control {
+                        control.cancel();
+                    }
+                }
+            }
         });
     });
 }
@@ -589,7 +763,15 @@ pub(super) fn panel(
         let current = state.current_batch;
         if let Some(batch) = state.history.get(current) {
             if let Some(row) = batch.results.get(state.selected) {
-                match t::review(batch, batch.reviews.len(), &row.sample, &row.target, accepted, "gui", &state.reason) {
+                match t::review(
+                    batch,
+                    batch.reviews.len(),
+                    &row.sample,
+                    &row.target,
+                    accepted,
+                    "gui",
+                    &state.reason,
+                ) {
                     Ok(next) => state.history[current] = next,
                     Err(e) => state.message = e.to_string(),
                 }
@@ -606,11 +788,24 @@ fn header(state: &mut UiState, method: &Method, measurements: &[Measurement], ui
         });
         if state.mode == Mode::Browser && !state.history.is_empty() {
             egui::ComboBox::from_id_salt("targeted_history_run")
-                .selected_text(format!("Run {} of {}", state.current_batch + 1, state.history.len()))
+                .selected_text(format!(
+                    "Run {} of {}",
+                    state.current_batch + 1,
+                    state.history.len()
+                ))
                 .show_ui(ui, |ui| {
                     for (index, batch) in state.history.iter().enumerate() {
                         if ui
-                            .selectable_value(&mut state.current_batch, index, format!("Run {}: {} ({})", index + 1, batch.request.name, batch.batch_id))
+                            .selectable_value(
+                                &mut state.current_batch,
+                                index,
+                                format!(
+                                    "Run {}: {} ({})",
+                                    index + 1,
+                                    batch.request.name,
+                                    batch.batch_id
+                                ),
+                            )
                             .changed()
                         {
                             state.selected = 0;
@@ -618,10 +813,14 @@ fn header(state: &mut UiState, method: &Method, measurements: &[Measurement], ui
                     }
                 });
             let ready = state.setup.build_request(method).is_ok_and(|r| {
-                !measurements.is_empty() && super::calibration_setup::missing_peaks(measurements, &r).is_empty()
+                !measurements.is_empty()
+                    && super::calibration_setup::missing_peaks(measurements, &r).is_empty()
             });
             if ui
-                .add_enabled(ready && state.receiver.is_none(), egui::Button::new("Recalculate"))
+                .add_enabled(
+                    ready && state.receiver.is_none(),
+                    egui::Button::new("Recalculate"),
+                )
                 .on_hover_text("Calculate again from the peaks in tab 1 with the current setup")
                 .clicked()
             {
@@ -635,9 +834,13 @@ fn header(state: &mut UiState, method: &Method, measurements: &[Measurement], ui
                     }
                 }
             }
-            if let (Ok(request), Some(done)) = (state.setup.build_request(method), state.calculated) {
+            if let (Ok(request), Some(done)) = (state.setup.build_request(method), state.calculated)
+            {
                 if done != signature(&request, measurements) && state.receiver.is_none() {
-                    ui.colored_label(ui.visuals().warn_fg_color, "Peaks or settings changed since this calculation — press Recalculate.");
+                    ui.colored_label(
+                        ui.visuals().warn_fg_color,
+                        "Peaks or settings changed since this calculation — press Recalculate.",
+                    );
                 }
             }
         }
@@ -649,9 +852,13 @@ fn header(state: &mut UiState, method: &Method, measurements: &[Measurement], ui
 }
 fn next_step(state: &UiState, method: &Method, measurements: &[Measurement]) -> String {
     if measurements.is_empty() {
-        "Start in tab 1: select samples, run the batch and review the peaks. Then come back here.".into()
+        "Start in tab 1: select samples, run the batch and review the peaks. Then come back here."
+            .into()
     } else if let Err(p) = state.setup.build_request(method) {
-        format!("Next: fill in steps 1–3 ({} thing(s) still missing, listed in step 4).", p.len())
+        format!(
+            "Next: fill in steps 1–3 ({} thing(s) still missing, listed in step 4).",
+            p.len()
+        )
     } else if state.history.is_empty() || state.calculated.is_none() {
         "Next: press Calculate concentrations (step 4).".into()
     } else {
@@ -766,7 +973,11 @@ mod tests {
     #[test]
     fn the_results_browser_renders_wide_and_narrow_and_follows_the_analyte_list() {
         let temp = tempfile::tempdir().unwrap();
-        let batch = t::run(raw_request(temp.path()), &crate::jobs::JobControl::default()).unwrap();
+        let batch = t::run(
+            raw_request(temp.path()),
+            &crate::jobs::JobControl::default(),
+        )
+        .unwrap();
         let mut state = UiState::default();
         state.history.push(batch);
         state.mode = Mode::Browser;
@@ -774,18 +985,30 @@ mod tests {
         let ctx = egui::Context::default();
         for width in [700.0, 1500.0] {
             for _ in 0..2 {
-                ctx.run(
+                let _ = ctx.run(
                     egui::RawInput {
-                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 900.0))),
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 900.0),
+                        )),
                         ..Default::default()
                     },
                     |ctx| {
-                        egui::CentralPanel::default().show(ctx, |ui| panel(&mut state, &Method::default(), &[], &[], ui));
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            panel(&mut state, &Method::default(), &[], &[], ui)
+                        });
                     },
                 );
             }
         }
-        let calibrated = state.history[0].request.targets.iter().find(|t| t.calibration.is_some()).unwrap().id.clone();
+        let calibrated = state.history[0]
+            .request
+            .targets
+            .iter()
+            .find(|t| t.calibration.is_some())
+            .unwrap()
+            .id
+            .clone();
         assert_eq!(state.browse_target, calibrated);
         assert_eq!(state.history[0].results[state.selected].target, calibrated);
     }
@@ -805,7 +1028,7 @@ mod tests {
             .collect();
         let mut state = UiState::default();
         let ctx = egui::Context::default();
-        let mut run = |state: &mut UiState| {
+        let run = |state: &mut UiState| {
             ctx.run(egui::RawInput::default(), |ctx| {
                 egui::CentralPanel::default()
                     .show(ctx, |ui| panel(state, &method, &samples, &[], ui));
@@ -815,7 +1038,10 @@ mod tests {
         assert_eq!(state.setup.rows.len(), 4);
         state.setup.analytes[1].is_standard = true;
         state.setup.analytes[0].internal_standard = Some("IS".into());
-        state.setup.levels.push(crate::sample_sheet::Level::default());
+        state
+            .setup
+            .levels
+            .push(crate::sample_sheet::Level::default());
         run(&mut state);
         run(&mut state);
         assert!(state.setup.analytes[0].internal_standard.is_some());
@@ -828,14 +1054,21 @@ mod tests {
             target.qualifiers.clear();
         }
         let raw = t::run(request.clone(), &crate::jobs::JobControl::default()).unwrap();
-        let mut results: Vec<Measurement> =
-            raw.observations.iter().map(|o| o.quantifier.clone()).collect();
+        let mut results: Vec<Measurement> = raw
+            .observations
+            .iter()
+            .map(|o| o.quantifier.clone())
+            .collect();
         let observations =
             super::super::calibration_setup::observations(&results, &request).unwrap();
         let same = t::evaluate(request.clone(), observations, raw.source_hashes.clone()).unwrap();
         assert_eq!(same.results, raw.results);
         // A hand-adjusted peak is used as it is.
-        let target = request.targets.iter().find(|t| t.calibration.is_some()).unwrap();
+        let target = request
+            .targets
+            .iter()
+            .find(|t| t.calibration.is_some())
+            .unwrap();
         let name = &target.quantifier.extraction.extraction.name;
         let method = Method {
             analytes: vec![target.quantifier.extraction.clone()],
