@@ -408,12 +408,13 @@ pub(super) fn show(state: &mut UiState, ui: &mut egui::Ui) -> Outcome {
     if size.x >= 900.0 {
         let left = size.x - list_width - 12.0;
         let top = (size.y * 0.42).clamp(170.0, 460.0);
+        egui::ScrollArea::vertical().id_salt("browser_wide").auto_shrink([false, false]).show(ui, |ui| {
         ui.horizontal_top(|ui| {
             ui.allocate_ui_with_layout(egui::vec2(left, size.y), egui::Layout::top_down(egui::Align::Min), |ui| {
                 ui.set_width(left);
                 table_pane(ui, &table_rows, &indices, selected_key.as_deref(), selected, filter, top - 40.0);
                 ui.add_space(4.0);
-                let bottom = (size.y - top - 12.0).max(200.0);
+                let bottom = (size.y - top - 12.0).max(420.0);
                 let half = (left - 14.0) / 2.0;
                 ui.horizontal_top(|ui| {
                     ui.allocate_ui_with_layout(egui::vec2(half, bottom), egui::Layout::top_down(egui::Align::Min), |ui| {
@@ -437,6 +438,7 @@ pub(super) fn show(state: &mut UiState, ui: &mut egui::Ui) -> Outcome {
                     analyte_list(ui, batch, browse_target, selected);
                 });
             });
+        });
         });
     } else {
         egui::ScrollArea::vertical().id_salt("browser_narrow").auto_shrink([false, false]).show(ui, |ui| {

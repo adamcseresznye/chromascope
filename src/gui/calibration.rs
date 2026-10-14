@@ -334,7 +334,7 @@ pub(super) fn curve_pane(
             let unit = cfg.unit.label();
             let y_label = if current.internal_standard.is_some() { "Area ratio" } else { "Area" };
             let tk = super::theme::Tokens::of(ui);
-            super::plot_controls::plot(ui, "cal_curve")
+            let plot_response = super::plot_controls::plot(ui, "cal_curve")
                 .height(plot_height)
                 .x_axis_label(format!("Concentration ({unit})"))
                 .y_axis_label(y_label)
@@ -378,6 +378,31 @@ pub(super) fn curve_pane(
                         p.hline(HLine::new("Selected", chosen.3).color(tk.error).width(1.0_f32));
                     }
                 });
+            // Clicking a standard on the curve excludes it from (or restores it to) the fit.
+            let nearest_standard = plot_response.response.hover_pos().and_then(|pos| {
+                markers
+                    .iter()
+                    .filter(|m| m.1 == t::Role::Standard)
+                    .map(|m| (m, plot_response.transform.position_from_point(&egui_plot::PlotPoint::new(m.2, m.3)).distance(pos)))
+                    .filter(|(_, d)| *d <= 10.0)
+                    .min_by(|a, b| a.1.total_cmp(&b.1))
+                    .map(|(m, _)| m.0.clone())
+            });
+            if let Some(sample) = nearest_standard {
+                let excluded = state.excluded.contains(&sample);
+                let response = plot_response.response.clone().on_hover_cursor(egui::CursorIcon::PointingHand);
+                response.on_hover_text(format!(
+                    "{sample}: click to {} this standard",
+                    if excluded { "include" } else { "exclude" }
+                ));
+                if plot_response.response.clicked() {
+                    if !state.excluded.remove(&sample) {
+                        state.excluded.insert(sample);
+                    }
+                    changed = true;
+                }
+            }
+            ui.small("Click a standard on the curve to exclude or include it; changes are previewed until applied.");
         }
         Err(e) => {
             ui.colored_label(ui.visuals().error_fg_color, e.to_string());
