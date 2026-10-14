@@ -134,11 +134,19 @@ pub fn update_data_selection_panel(app: &mut MzViewerApp, ctx: &Context) {
                     if changed { app.workspace.view.focus_restore = None; }
                     ui.separator();
                 }
-                let dark = ui.visuals().dark_mode;
-                if ui.button(if dark { "Light theme" } else { "Dark theme" }).clicked() {
-                    super::workbench::configure(ctx, !dark);
-                    ui.close();
-                }
+                ui.label("Theme");
+                let preference = ctx.options(|o| o.theme_preference);
+                ui.horizontal(|ui| {
+                    for (value, label) in [
+                        (egui::ThemePreference::System, "System"),
+                        (egui::ThemePreference::Light, "Light"),
+                        (egui::ThemePreference::Dark, "Dark"),
+                    ] {
+                        if ui.selectable_label(preference == value, label).clicked() {
+                            ctx.set_theme(value);
+                        }
+                    }
+                });
             });
             ui.separator();
             super::workbench::navigation(app, ui);

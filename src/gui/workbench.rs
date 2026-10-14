@@ -209,6 +209,14 @@ pub fn activity(app: &mut MzViewerApp, ctx: &Context) {
 }
 
 pub fn configure(ctx: &Context, dark: bool) {
+    configure_with(
+        ctx,
+        if dark { egui::ThemePreference::Dark } else { egui::ThemePreference::Light },
+    );
+}
+
+/// Installs fonts and both themes; `preference` may follow the OS (`System`).
+pub fn configure_with(ctx: &Context, preference: egui::ThemePreference) {
     let mut fonts = egui::FontDefinitions::default();
     for (name, bytes) in [
         (
@@ -236,8 +244,10 @@ pub fn configure(ctx: &Context, dark: bool) {
     heading_fonts.extend(fallback);
     fonts.families.insert(heading_family.clone(), heading_fonts);
     ctx.set_fonts(fonts);
-    ctx.set_visuals(super::theme::visuals(dark));
-    ctx.style_mut(|style| {
+    ctx.set_visuals_of(egui::Theme::Dark, super::theme::visuals(true));
+    ctx.set_visuals_of(egui::Theme::Light, super::theme::visuals(false));
+    ctx.set_theme(preference);
+    ctx.all_styles_mut(|style| {
         style.spacing.item_spacing = egui::vec2(8.0, 6.0);
         style.interaction.tooltip_delay = 0.45;
         style.spacing.button_padding = egui::vec2(10.0, 6.0);
@@ -255,7 +265,7 @@ pub fn configure(ctx: &Context, dark: bool) {
         );
         style.text_styles.insert(
             egui::TextStyle::Heading,
-            egui::FontId::new(16.0, heading_family),
+            egui::FontId::new(16.0, heading_family.clone()),
         );
     });
 }

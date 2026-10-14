@@ -157,7 +157,7 @@ impl MzViewerApp {
     /// - All other fields in `user_input` are set to their default values.
     /// - All other fields in the `MzViewerApp` struct are set to their default values.
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
-        workbench::configure(&_cc.egui_ctx, _cc.egui_ctx.style().visuals.dark_mode);
+        workbench::configure_with(&_cc.egui_ctx, egui::ThemePreference::System);
         Self {
             files: HashMap::new(),
             active_file_id: None,
