@@ -147,7 +147,7 @@ pub(super) fn card<R>(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui
             ui.set_width(ui.available_width());
             ui.label(egui::RichText::new(title).font(egui::FontId::new(
                 14.0,
-                egui::FontFamily::Name("Inter Medium".into()),
+                egui::FontFamily::Name("Inter SemiBold".into()),
             )));
             ui.add_space(2.0);
             add(ui)
@@ -161,6 +161,39 @@ pub(super) fn nav_value<T: PartialEq>(ui: &mut egui::Ui, current: &mut T, value:
     if response.clicked() && *current != value {
         *current = value;
         response.mark_changed();
+    }
+    response
+}
+
+/// Full-width menu row with a leading painted icon.
+pub(super) fn icon_item(ui: &mut egui::Ui, icon: Icon, label: &str) -> Response {
+    let t = tokens(ui);
+    let font = TextStyle::Button.resolve(ui.style());
+    let galley = ui.painter().layout_no_wrap(label.to_owned(), font, t.text);
+    let size = egui::vec2(
+        ui.available_width().max(galley.size().x + 40.0),
+        ui.spacing().interact_size.y,
+    );
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, ui.is_enabled(), label));
+    if ui.is_rect_visible(rect) {
+        let hover = hover_amount(ui, &response);
+        ui.painter().rect_filled(
+            rect,
+            CornerRadius::same(4),
+            t.control_hover.gamma_multiply(hover),
+        );
+        let fg = if ui.is_enabled() { t.text } else { t.text_disabled };
+        let icon_rect = egui::Rect::from_center_size(
+            egui::pos2(rect.min.x + 14.0, rect.center().y),
+            egui::vec2(14.0, 14.0),
+        );
+        icons::paint(ui.painter(), icon_rect, icon, fg);
+        ui.painter().galley(
+            egui::pos2(rect.min.x + 30.0, rect.center().y - galley.size().y / 2.0),
+            galley,
+            fg,
+        );
     }
     response
 }

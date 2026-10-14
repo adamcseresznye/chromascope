@@ -605,7 +605,7 @@ pub(super) fn trace_row(
                 .on_hover_text("Delete trace from workspace and figures");
             controls.1 = deletion.rect;
             delete = deletion.clicked();
-            ui.colored_label(color.to_egui(), "●")
+            ui.colored_label(color.to_egui_for(ui.visuals().dark_mode), "●")
                 .on_hover_text("Retained trace color in figures");
             let response = ui
                 .add_sized(
@@ -1226,11 +1226,7 @@ pub(super) fn figure_svg(app: &MzViewerApp) -> Option<String> {
     svg.push_str(r#"<defs><clipPath id="overlay-plot"><rect x="90" y="60" width="1070" height="420"/></clipPath></defs>"#);
     let mut legend_row = 0;
     for (label, data, color) in &lines {
-        let c = if *color == LineColor::White {
-            egui::Color32::BLACK
-        } else {
-            color.to_egui()
-        };
+        let c = color.to_egui_for(false);
         let color = format!("#{:02x}{:02x}{:02x}", c.r(), c.g(), c.b());
         let coords = data
             .iter()
@@ -1390,11 +1386,7 @@ fn grid_svg_scaled(
     for (index, (label, data, color)) in selected.iter().enumerate() {
         let ymax =
             shared_maximum.unwrap_or_else(|| data.iter().map(|p| p[1]).fold(1.0, f64::max) * 1.05);
-        let c = if *color == LineColor::White {
-            egui::Color32::BLACK
-        } else {
-            color.to_egui()
-        };
+        let c = color.to_egui_for(false);
         let color = format!("#{:02x}{:02x}{:02x}", c.r(), c.g(), c.b());
         svg.push_str(&format!(r##"<g transform="translate({} {})" font-family="Arial,sans-serif" font-size="13" fill="#222"><path d="M90 80V260H1160" fill="none" stroke="#222"/><text x="510" y="315">Retention time (min)</text><text transform="translate(22 230) rotate(-90)">Intensity (a.u.)</text>"##,(index%columns)*1200,(index/columns)*340));
         let chars: Vec<_> = label.chars().collect();
@@ -1461,7 +1453,7 @@ pub(super) fn spectrum_svg(app: &MzViewerApp) -> Option<String> {
         let y = ymax * i as f64 / 5.0;
         svg.push_str(&format!(r#"<text x="{}" y="505" text-anchor="middle">{x:.3}</text><text x="80" y="{}" text-anchor="end">{y:.2e}</text>"#,90.0+i as f64*214.0,485.0-i as f64*84.0));
     }
-    let color = f.display.color.to_egui();
+    let color = f.display.color.to_egui_for(false);
     let color = format!("#{:02x}{:02x}{:02x}", color.r(), color.g(), color.b());
     for (mz, intensity) in peaks {
         let x = 90.0 + (mz - xmin) / (xmax - xmin) * 1070.0;

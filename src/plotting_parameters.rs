@@ -50,19 +50,45 @@ pub enum LineColor {
 }
 
 impl LineColor {
+    /// Colour tuned for the plot surface of the active theme, so no choice is
+    /// ever invisible: `White` becomes dark ink on light backgrounds, and the
+    /// light hues (yellow, cyan, gold) darken on light backgrounds.
     #[cfg(feature = "gui")]
-    pub fn to_egui(&self) -> egui::ecolor::Color32 {
-        match self {
-            Self::Red => egui::ecolor::Color32::from_rgb(202, 75, 75),
-            Self::Green => egui::ecolor::Color32::from_rgb(45, 150, 110),
-            Self::Blue => egui::ecolor::Color32::from_rgb(55, 135, 205),
-            Self::Yellow => egui::ecolor::Color32::YELLOW,
-            Self::White => egui::ecolor::Color32::WHITE,
-            Self::Gray => egui::ecolor::Color32::GRAY,
-            Self::Cyan => egui::ecolor::Color32::CYAN,
-            Self::Orange => egui::ecolor::Color32::from_rgb(201, 125, 58),
-            Self::Magenta => egui::ecolor::Color32::from_rgb(162, 103, 195),
-            Self::Gold => egui::ecolor::Color32::GOLD,
+    pub fn to_egui_for(&self, dark: bool) -> egui::ecolor::Color32 {
+        use egui::ecolor::Color32 as C;
+        match (self, dark) {
+            (Self::Red, _) => C::from_rgb(202, 75, 75),
+            (Self::Green, _) => C::from_rgb(45, 150, 110),
+            (Self::Blue, _) => C::from_rgb(55, 135, 205),
+            (Self::Orange, _) => C::from_rgb(201, 125, 58),
+            (Self::Magenta, _) => C::from_rgb(162, 103, 195),
+            (Self::Yellow, true) => C::YELLOW,
+            (Self::Yellow, false) => C::from_rgb(163, 124, 0),
+            (Self::White, true) => C::from_rgb(240, 243, 247),
+            (Self::White, false) => C::from_rgb(28, 37, 49),
+            (Self::Gray, true) => C::from_rgb(170, 178, 190),
+            (Self::Gray, false) => C::from_rgb(100, 110, 125),
+            (Self::Cyan, true) => C::CYAN,
+            (Self::Cyan, false) => C::from_rgb(0, 128, 150),
+            (Self::Gold, true) => C::GOLD,
+            (Self::Gold, false) => C::from_rgb(145, 105, 0),
+        }
+    }
+
+    /// Name shown in pickers; `White` reads as black on light themes.
+    pub fn label(&self, dark: bool) -> &'static str {
+        match (self, dark) {
+            (Self::White, true) => "White",
+            (Self::White, false) => "Black",
+            (Self::Red, _) => "Red",
+            (Self::Green, _) => "Green",
+            (Self::Blue, _) => "Blue",
+            (Self::Yellow, _) => "Yellow",
+            (Self::Gray, _) => "Gray",
+            (Self::Cyan, _) => "Cyan",
+            (Self::Orange, _) => "Orange",
+            (Self::Magenta, _) => "Magenta",
+            (Self::Gold, _) => "Gold",
         }
     }
 }

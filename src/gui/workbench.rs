@@ -227,6 +227,14 @@ pub fn configure_with(ctx: &Context, preference: egui::ThemePreference) {
             "Inter Medium",
             include_bytes!("../../assets/fonts/inter/Inter-Medium.ttf").as_slice(),
         ),
+        (
+            "Inter SemiBold",
+            include_bytes!("../../assets/fonts/inter/Inter-SemiBold.ttf").as_slice(),
+        ),
+        (
+            "JetBrains Mono",
+            include_bytes!("../../assets/fonts/jetbrains-mono/JetBrainsMono-Regular.ttf").as_slice(),
+        ),
     ] {
         fonts
             .font_data
@@ -239,8 +247,13 @@ pub fn configure_with(ctx: &Context, preference: egui::ThemePreference) {
         .get_mut(&egui::FontFamily::Proportional)
         .unwrap()
         .insert(0, "Inter".into());
-    let heading_family = egui::FontFamily::Name("Inter Medium".into());
-    let mut heading_fonts = vec!["Inter Medium".into()];
+    fonts
+        .families
+        .get_mut(&egui::FontFamily::Monospace)
+        .unwrap()
+        .insert(0, "JetBrains Mono".into());
+    let heading_family = egui::FontFamily::Name("Inter SemiBold".into());
+    let mut heading_fonts = vec!["Inter SemiBold".into()];
     heading_fonts.extend(fallback);
     fonts.families.insert(heading_family.clone(), heading_fonts);
     ctx.set_fonts(fonts);
@@ -323,8 +336,8 @@ pub fn status(app: &mut MzViewerApp, ctx: &Context) {
                     ui.small("Exploratory · no project");
                 }
             }
-            let low_contrast = app.files.values().any(|file| file.display.visible && contrast_ratio(file.display.color.to_egui(),ui.visuals().panel_fill)<3.0)
-                || app.workspace.traces.values().flatten().any(|trace|trace.visible && contrast_ratio(trace.color.to_egui(),ui.visuals().panel_fill)<3.0);
+            let low_contrast = app.files.values().any(|file| file.display.visible && contrast_ratio(file.display.color.to_egui_for(ui.visuals().dark_mode),ui.visuals().panel_fill)<3.0)
+                || app.workspace.traces.values().flatten().any(|trace|trace.visible && contrast_ratio(trace.color.to_egui_for(ui.visuals().dark_mode),ui.visuals().panel_fill)<3.0);
             if low_contrast { ui.colored_label(ui.visuals().warn_fg_color,"Low-contrast trace color · adjust Appearance or switch theme"); }
             ui.separator();
             if advanced_active(app,ctx) || app.quant.active {
@@ -478,7 +491,7 @@ pub fn inspector(app: &mut MzViewerApp, ctx: &Context) {
                             egui::Slider::new(&mut app.user_input.line_width, 0.5..=4.0)
                                 .text("Line width"),
                         );
-                        if contrast_ratio(app.user_input.line_color.to_egui(), ui.visuals().panel_fill) < 3.0 {
+                        if contrast_ratio(app.user_input.line_color.to_egui_for(ui.visuals().dark_mode), ui.visuals().panel_fill) < 3.0 {
                             ui.label("Trace color has low contrast in this theme.");
                             if ui.button("Use visible trace color").clicked() {
                                 app.user_input.line_color = if ui.visuals().dark_mode { LineColor::Cyan } else { LineColor::Blue };
@@ -510,7 +523,7 @@ pub fn inspector(app: &mut MzViewerApp, ctx: &Context) {
                                 ui.painter().circle_filled(
                                     response.rect.center(),
                                     5.0,
-                                    color.to_egui(),
+                                    color.to_egui_for(ui.visuals().dark_mode),
                                 );
                                 response.widget_info(|| {
                                     egui::WidgetInfo::selected(

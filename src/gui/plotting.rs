@@ -103,7 +103,7 @@ fn render_chromatogram(
                         }
                     }
                     if let Some(points) = &file.cache.display_data {
-                        plot_ui.line(create_line_for_file(app, file, points));
+                        plot_ui.line(create_line_for_file(app, file, points, plot_ui.ctx().style().visuals.dark_mode));
                     }
                 } else if let Some(t) = app
                     .workspace
@@ -116,7 +116,7 @@ fn render_chromatogram(
                             format!("{} · {}", file.name, t.name),
                             t.display_points.clone(),
                         )
-                        .color(t.color.to_egui())
+                        .color(t.color.to_egui_for(plot_ui.ctx().style().visuals.dark_mode))
                         .width(app.user_input.line_width),
                     );
                 }
@@ -154,6 +154,7 @@ pub fn create_line_for_file(
     app: &MzViewerApp,
     file: &OpenFile,
     data: &[[f64; 2]],
+    dark: bool,
 ) -> Line<'static> {
     Line::new(
         format!(
@@ -168,7 +169,7 @@ pub fn create_line_for_file(
         PlotPoints::from(data.to_vec()),
     )
     .width(app.user_input.line_width)
-    .color(file.display.color.to_egui())
+    .color(file.display.color.to_egui_for(dark))
 }
 
 /// Draws the integration region shading and boundary lines on the chromatogram plot.
@@ -775,7 +776,7 @@ pub fn plot_mass_spectrum(app: &mut MzViewerApp, ui: &mut egui::Ui) -> egui::Res
                             .map(|(&m, &i)| {
                                 egui_plot::Bar::new(m, i.into())
                                     .width(bar_width)
-                                    .fill(line_color.to_egui())
+                                    .fill(line_color.to_egui_for(plot_ui.ctx().style().visuals.dark_mode))
                                     .name(format!("m/z = {:.4}", m))
                             })
                             .collect();

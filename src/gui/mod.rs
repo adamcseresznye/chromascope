@@ -996,7 +996,7 @@ mod tests {
 
         let test_data: Vec<[f64; 2]> = vec![[1.0, 100.0], [2.0, 200.0], [3.0, 150.0]];
 
-        let _line = plotting::create_line_for_file(&app, &file, &test_data);
+        let _line = plotting::create_line_for_file(&app, &file, &test_data, false);
 
         // Line widget is created - we can't easily test its internal properties
         // without rendering, but we verify the method doesn't panic

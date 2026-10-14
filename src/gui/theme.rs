@@ -195,4 +195,16 @@ mod tests {
             assert!(contrast_ratio(t.border_strong, t.canvas) >= 3.0);
         }
     }
+
+    #[test]
+    fn every_trace_colour_is_visible_on_its_theme() {
+        use crate::plotting_parameters::LineColor::*;
+        for dark in [false, true] {
+            let canvas = Tokens::for_mode(dark).canvas;
+            for c in [Red, Green, Blue, Yellow, White, Gray, Cyan, Orange, Magenta, Gold] {
+                let ratio = contrast_ratio(c.to_egui_for(dark), canvas);
+                assert!(ratio >= 3.0, "{c:?} dark={dark} ratio={ratio:.2}");
+            }
+        }
+    }
 }

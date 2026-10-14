@@ -31,15 +31,14 @@ pub fn update_data_selection_panel(app: &mut MzViewerApp, ctx: &Context) {
     egui::TopBottomPanel::top("data_selection_panel").show(ctx, |ui| {
         ui.horizontal_wrapped(|ui| {
             ui.menu_button("File", |ui| {
-                if ui.button("Open data…").on_hover_text("Open one or more data files").clicked() {
+                if super::widgets::icon_item(ui, super::icons::Icon::Folder, "Open data…").on_hover_text("Open one or more data files").clicked() {
                     debug!("File open button clicked.");
                     handle_file_selection(app);
                     info!("File selection handled.");
                     ui.close();
                 }
 
-                if ui
-                    .button("Open dataset folder…")
+                if super::widgets::icon_item(ui, super::icons::Icon::Folder, "Open dataset folder…")
                     .on_hover_text("Open a vendor dataset directory, such as .d or Waters .raw")
                     .clicked()
                 {
@@ -261,21 +260,22 @@ pub fn add_display_options(app: &mut MzViewerApp, ui: &mut Ui) {
 pub fn add_line_color_options(app: &mut MzViewerApp, ui: &mut Ui) {
     let previous_color = app.user_input.line_color;
 
-    ui.horizontal(|ui| {
-        ui.radio_value(&mut app.user_input.line_color, LineColor::Red, "Red");
-        ui.radio_value(&mut app.user_input.line_color, LineColor::Blue, "Blue");
-        ui.radio_value(&mut app.user_input.line_color, LineColor::Green, "Green");
-        ui.radio_value(&mut app.user_input.line_color, LineColor::Yellow, "Yellow");
-        ui.radio_value(&mut app.user_input.line_color, LineColor::White, "White");
-        ui.radio_value(&mut app.user_input.line_color, LineColor::Gray, "Gray");
-        ui.radio_value(&mut app.user_input.line_color, LineColor::Cyan, "Cyan");
-        ui.radio_value(&mut app.user_input.line_color, LineColor::Orange, "Orange");
-        ui.radio_value(
-            &mut app.user_input.line_color,
+    let dark = ui.visuals().dark_mode;
+    ui.horizontal_wrapped(|ui| {
+        for color in [
+            LineColor::Red,
+            LineColor::Blue,
+            LineColor::Green,
+            LineColor::Yellow,
+            LineColor::White,
+            LineColor::Gray,
+            LineColor::Cyan,
+            LineColor::Orange,
             LineColor::Magenta,
-            "Magenta",
-        );
-        ui.radio_value(&mut app.user_input.line_color, LineColor::Gold, "Gold");
+            LineColor::Gold,
+        ] {
+            ui.radio_value(&mut app.user_input.line_color, color, color.label(dark));
+        }
     });
 
     // Propagate new color to the active file's chromatogram line
@@ -589,7 +589,7 @@ pub fn update_file_information_panel(app: &mut MzViewerApp, ctx: &egui::Context)
                                     ui.painter().circle_filled(
                                         marker.center(),
                                         4.0,
-                                        file.display.color.to_egui(),
+                                        file.display.color.to_egui_for(ui.visuals().dark_mode),
                                     );
                                 }
                                 ui.with_layout(
