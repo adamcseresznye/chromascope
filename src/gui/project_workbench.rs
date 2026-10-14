@@ -14,6 +14,23 @@ pub(super) struct State {
     pending_root: Option<PathBuf>,
     opening: bool,
 }
+/// The file the user picks is a small pointer; the project's revisions and results live in the
+/// `<name>_data` folder next to it. A bare revision file (older projects) opens its own folder.
+fn data_root(file: &Path) -> Result<PathBuf, String> {
+    let parent = file.parent().unwrap_or(Path::new("."));
+    if file
+        .file_name()
+        .is_some_and(|n| n.to_string_lossy().starts_with("revision-"))
+    {
+        return Ok(parent.to_path_buf());
+    }
+    let text = std::fs::read_to_string(file).map_err(|e| e.to_string())?;
+    let value: Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    match value["data"].as_str().filter(|_| value["chromascope_project"] == 1) {
+        Some(data) if !data.contains(['/', '\\']) && data != ".." => Ok(parent.join(data)),
+        _ => Err("This is not a Chromascope project file".into()),
+    }
+}
 fn snapshot(app: &MzViewerApp, ctx: &egui::Context) -> Value {
     let mut value = serde_json::json!({"version":1,"viewer":super::workspace::project_snapshot(app,ctx),"quant":app.quant,"spectral":app.spectral,"untargeted":app.untargeted,"statistics":app.statistics,"ai":app.ai,"delivery":app.delivery});
     value["quant"]["restore_samples"] =
@@ -279,7 +296,7 @@ pub(super) fn poll(app: &mut MzViewerApp, ctx: &egui::Context) {
                             route_result(app, response);
                         }
                         app.ai.merge_project_reviews(&project.review_proposals);
-                        state.message = format!("Project revision {} retained", project.revision);
+                        state.message = format!("Project saved (revision {})", project.revision);
                         if let Some(root) = state.pending_root.take() {
                             state.root = root;
                         }
@@ -301,12 +318,17 @@ pub(super) fn poll(app: &mut MzViewerApp, ctx: &egui::Context) {
     app.project = state;
 }
 pub(super) fn menu(app: &mut MzViewerApp, ui: &mut egui::Ui) {
-    let label = app
-        .project
-        .project
-        .as_ref()
-        .map(|p| format!("Project · r{}", p.revision))
-        .unwrap_or_else(|| "Project".into());
+    let label = if app.project.project.is_some() {
+        let name = app
+            .project
+            .root
+            .file_name()
+            .map(|n| n.to_string_lossy().trim_end_matches("_data").to_owned())
+            .unwrap_or_default();
+        format!("Project · {name}")
+    } else {
+        "Project".into()
+    };
     let message = app.project.message.clone();
     ui.menu_button(label, |ui| controls(app, ui))
         .response
@@ -327,31 +349,26 @@ pub(super) fn controls(app: &mut MzViewerApp, ui: &mut egui::Ui) {
         && !app.files.values().any(|f| f.is_loading);
     ui.vertical(|ui| {
         if let Some(project) = &app.project.project {
-            ui.strong(format!("Project · revision {}", project.revision))
+            ui.strong("Project · saved only when you choose Save project")
                 .on_hover_text(format!("{}\n{}", project.id.0, app.project.root.display()));
         } else {
-            ui.weak("Exploratory workspace · create a project to retain all analyses");
+            ui.weak("Exploratory workspace · create a project to keep all analyses");
         }
         ui.add_enabled_ui(ready, |ui| {
-            if ui.button("Create project…").clicked() {
-                app.project.opening = false;
-                if let Some(parent) = rfd::FileDialog::new()
-                    .set_title("Choose parent folder for a new chromascope-project directory")
-                    .pick_folder()
-                {
-                    let root = parent.join("chromascope-project");
-                    let worker_root = root.clone();
-                    let (tx, rx) = std::sync::mpsc::channel();
-                    std::thread::spawn(move || {
-                        let _ = tx.send(Project::create(&worker_root).map(|p| (p, None, vec![])));
-                    });
-                    app.project.pending_root = Some(root);
-                    app.project.pending = Some(rx);
-                }
-            }
             if ui.button("Open project…").clicked() {
                 app.project.opening = true;
-                if let Some(root) = rfd::FileDialog::new().pick_folder() {
+                if let Some(root) = rfd::FileDialog::new()
+                    .set_title("Open a Chromascope project file")
+                    .add_filter("Chromascope project", &["json"])
+                    .pick_file()
+                    .and_then(|file| match data_root(&file) {
+                        Ok(root) => Some(root),
+                        Err(e) => {
+                            app.project.message = e;
+                            None
+                        }
+                    })
+                {
                     let worker_root = root.clone();
                     let (tx, rx) = std::sync::mpsc::channel();
                     std::thread::spawn(move || {
@@ -403,22 +420,46 @@ pub(super) fn controls(app: &mut MzViewerApp, ui: &mut egui::Ui) {
                 app.project.opening = false;
                 app.project.pending = Some(rx);
             }
-            if ui
-                .add_enabled(
-                    app.project.project.is_some(),
-                    egui::Button::new("Save project revision"),
-                )
-                .clicked()
-            {
+            if ui.button(if app.project.project.is_some() { "Save project" } else { "Create project…" }).clicked() {
                 app.project.opening = false;
                 let value = snapshot(app, ui.ctx());
-                let expected = app.project.project.as_ref().unwrap().revision;
-                let root = app.project.root.clone();
-                let (tx, rx) = std::sync::mpsc::channel();
-                std::thread::spawn(move || {
-                    let _ = tx.send(store(&root, expected, value));
-                });
-                app.project.pending = Some(rx);
+                if let Some(project) = &app.project.project {
+                    let expected = project.revision;
+                    let root = app.project.root.clone();
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    std::thread::spawn(move || {
+                        let _ = tx.send(store(&root, expected, value));
+                    });
+                    app.project.pending = Some(rx);
+                } else if let Some(file) = rfd::FileDialog::new()
+                    .set_title("Name your project")
+                    .set_file_name("my-project.json")
+                    .add_filter("Chromascope project", &["json"])
+                    .save_file()
+                {
+                    let file = file.with_extension("json");
+                    let stem = file.file_stem().unwrap_or_default().to_string_lossy().into_owned();
+                    let root = file.with_file_name(format!("{stem}_data"));
+                    if file.exists() || root.exists() {
+                        app.project.message = format!("'{stem}' already exists here; choose another name");
+                    } else {
+                        let (tx, rx) = std::sync::mpsc::channel();
+                        let (worker_root, pointer) = (root.clone(), file);
+                        std::thread::spawn(move || {
+                            let _ = tx.send(Project::create(&worker_root).and_then(|_| {
+                                let data = worker_root.file_name().unwrap().to_string_lossy();
+                                std::fs::write(
+                                    &pointer,
+                                    serde_json::json!({"chromascope_project": 1, "data": data}).to_string(),
+                                )
+                                .map_err(|e| EngineError::new("corrupt_project", e))?;
+                                store(&worker_root, 0, value)
+                            }));
+                        });
+                        app.project.pending_root = Some(root);
+                        app.project.pending = Some(rx);
+                    }
+                }
             }
         });
         if app.project.pending.is_some() {
@@ -556,5 +597,23 @@ mod project_desktop_tests {
             serde_json::to_value(restored.untargeted.latest_matrix().unwrap()).unwrap(),
             expected_matrix
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn the_project_file_points_at_its_data_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("study.json");
+        std::fs::write(&file, r#"{"chromascope_project":1,"data":"study_data"}"#).unwrap();
+        assert_eq!(data_root(&file).unwrap(), dir.path().join("study_data"));
+        std::fs::write(&file, r#"{"chromascope_project":1,"data":"../x"}"#).unwrap();
+        assert!(data_root(&file).is_err());
+        std::fs::write(&file, "{}").unwrap();
+        assert!(data_root(&file).is_err());
+        let old = dir.path().join("revision-00000000000000000003.json");
+        assert_eq!(data_root(&old).unwrap(), dir.path());
     }
 }

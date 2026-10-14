@@ -200,7 +200,7 @@ fn panel(
             .iter()
             .enumerate()
             {
-                ui.selectable_value(&mut stage, index, *label);
+                super::widgets::nav_value(ui, &mut stage, index, label);
             }
         });
         ui.ctx().data_mut(|d| d.insert_temp(stage_key, stage));

@@ -62,7 +62,7 @@ pub fn render_xic_settings_window(app: &mut MzViewerApp, ctx: &egui::Context) {
                                     "{:.2} - {:.2}",
                                     bounds.min_mz, bounds.max_mz
                                 ))
-                                .color(egui::Color32::from_rgb(100, 149, 237)),
+                                .color(ui.visuals().hyperlink_color),
                             );
                         });
 
@@ -74,7 +74,7 @@ pub fn render_xic_settings_window(app: &mut MzViewerApp, ctx: &egui::Context) {
                                     "{:.2} - {:.2} min",
                                     bounds.min_rt, bounds.max_rt
                                 ))
-                                .color(egui::Color32::from_rgb(100, 149, 237)),
+                                .color(ui.visuals().hyperlink_color),
                             );
                         });
 
@@ -83,7 +83,7 @@ pub fn render_xic_settings_window(app: &mut MzViewerApp, ctx: &egui::Context) {
                             ui.label("Total scans:");
                             ui.label(
                                 egui::RichText::new(format!("{}", bounds.scan_count))
-                                    .color(egui::Color32::from_rgb(100, 149, 237)),
+                                    .color(ui.visuals().hyperlink_color),
                             );
                         });
 
@@ -93,7 +93,7 @@ pub fn render_xic_settings_window(app: &mut MzViewerApp, ctx: &egui::Context) {
                 } else {
                     ui.add_space(5.0);
                     ui.colored_label(
-                        egui::Color32::from_rgb(255, 140, 0),
+                        ui.visuals().warn_fg_color,
                         "⚠ Open a file to see valid parameter ranges",
                     );
                     ui.add_space(5.0);
@@ -313,7 +313,7 @@ pub fn render_range_window(app: &mut MzViewerApp, ctx: &egui::Context) {
                                 b.min_mz, b.max_mz
                             ))
                             .small()
-                            .color(egui::Color32::GRAY),
+                            .color(ui.visuals().weak_text_color()),
                         );
                     }
                 }

@@ -22,7 +22,7 @@ fn raw_request(root: &std::path::Path) -> chromascope::targeted::BatchRequest {
     }
     let ion = |name:&str,mass:f64| {let mut a=quant::new_analyte(1);a.expected_rt=1.0;a.rt_window=[0.0,2.0];a.extraction.mass=Some(mass);a.extraction.name=name.into();Ion{extraction:a}};
     BatchRequest{version:1,name:"Synthetic raw triangular reference".into(),detection_smoothing:0,minimum_height:0.0,boundary_fraction:0.05,samples,targets:vec![
-        Target{id:"a".into(),quantifier:ion("quantifier",100.0),qualifiers:vec![Qualifier{ion:ion("qualifier",200.0),ratio_range:[0.4,0.6],rt_tolerance_minutes:0.1}],internal_standard:Some("is".into()),is_area_range:None,calibration:Some(CalibrationConfig{degree:1,intercept:Intercept::Zero,weighting:Weighting::InverseX2,unit:Unit::NgMl,range:[1.0,8.0],lod:1.0,loq:1.0,accuracy_tolerance_percent:15.0,qc_cv_limit_percent:15.0,blank_response_limit:0.01})},
+        Target{id:"a".into(),quantifier:ion("quantifier",100.0),qualifiers:vec![Qualifier{ion:ion("qualifier",200.0),ratio_range:[0.4,0.6],rt_tolerance_minutes:0.1}],internal_standard:Some("is".into()),is_area_range:None,calibration:Some(CalibrationConfig{curve:Curve::Polynomial,degree:1,intercept:Intercept::Zero,weighting:Weighting::InverseX2,unit:Unit::NgMl,range:[1.0,8.0],lod:1.0,loq:1.0,accuracy_tolerance_percent:15.0,qc_cv_limit_percent:15.0,blank_response_limit:0.01})},
         Target{id:"is".into(),quantifier:ion("IS",300.0),qualifiers:vec![],internal_standard:None,is_area_range:Some([80.0,120.0]),calibration:None}
     ]}
 }

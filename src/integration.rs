@@ -284,6 +284,19 @@ fn fwhm(smooth: &[[f64; 2]], apex: usize, left: usize, right: usize, base: f64) 
     Some(r? - l?)
 }
 
+/// Whether the signal is still dropping towards the window edge at `edge` (rather than lying
+/// flat on a baseline that merely sits above the window minimum). `height` is the apex height
+/// above the window floor.
+fn still_falling(smooth: &[[f64; 2]], edge: usize, left_edge: bool, height: f64) -> bool {
+    const POINTS: usize = 3;
+    let inner = if left_edge {
+        (edge + POINTS).min(smooth.len() - 1)
+    } else {
+        edge.saturating_sub(POINTS)
+    };
+    smooth[inner][1] - smooth[edge][1] > 0.02 * height
+}
+
 /// A peak found in the RT window, with what the confidence checks need to know about it.
 #[derive(Clone, Debug)]
 pub struct Candidate {
@@ -398,8 +411,12 @@ pub fn candidates(
                 candidates.push(Candidate {
                     apex_rt: smooth[i][0],
                     peak,
-                    clipped: (left == 0 && smooth[left][1] > clip_threshold)
-                        || (right == smooth.len() - 1 && smooth[right][1] > clip_threshold),
+                    clipped: (left == 0
+                        && smooth[left][1] > clip_threshold
+                        && still_falling(&smooth, left, true, smooth[i][1] - floor))
+                        || (right == smooth.len() - 1
+                            && smooth[right][1] > clip_threshold
+                            && still_falling(&smooth, right, false, smooth[i][1] - floor)),
                 });
             }
         }

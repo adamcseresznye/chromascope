@@ -96,11 +96,7 @@ fn render_chromatogram(
                                     format!("{} · unsmoothed", file.name),
                                     raw.as_ref().clone(),
                                 )
-                                .color(if plot_ui.ctx().style().visuals.dark_mode {
-                                    egui::Color32::LIGHT_GRAY
-                                } else {
-                                    egui::Color32::DARK_GRAY
-                                })
+                                .color(super::theme::Tokens::for_mode(plot_ui.ctx().style().visuals.dark_mode).text_dim)
                                 .width(1.0_f32)
                                 .style(egui_plot::LineStyle::Dashed { length: 6. }),
                             );
@@ -184,7 +180,7 @@ pub fn render_integration_overlay(app: &MzViewerApp, plot_ui: &mut egui_plot::Pl
 
     plot_ui.vline(
         VLine::new("Integration start", start)
-            .color(egui::Color32::from_rgb(0, 180, 0))
+            .color(super::theme::Tokens::for_mode(plot_ui.ctx().style().visuals.dark_mode).good)
             .width(2.0_f32)
             .style(egui_plot::LineStyle::Dashed { length: 6.0 }),
     );
@@ -196,7 +192,7 @@ pub fn render_integration_overlay(app: &MzViewerApp, plot_ui: &mut egui_plot::Pl
 
     plot_ui.vline(
         VLine::new("Integration end", end)
-            .color(egui::Color32::from_rgb(0, 180, 0))
+            .color(super::theme::Tokens::for_mode(plot_ui.ctx().style().visuals.dark_mode).good)
             .width(2.0_f32)
             .style(egui_plot::LineStyle::Dashed { length: 6.0 }),
     );
@@ -254,7 +250,7 @@ pub fn render_integration_overlay(app: &MzViewerApp, plot_ui: &mut egui_plot::Pl
     // points on top, chord values at the same x on the bottom) is always
     // convex, so egui_plot::Polygon fills it correctly regardless of the
     // overall peak shape.
-    let fill_color = egui::Color32::from_rgba_unmultiplied(60, 200, 60, 80);
+    let fill_color = super::theme::Tokens::for_mode(plot_ui.ctx().style().visuals.dark_mode).good.gamma_multiply(0.35);
     for i in 0..top.len().saturating_sub(1) {
         let x0 = top[i][0];
         let x1 = top[i + 1][0];
@@ -274,11 +270,7 @@ pub fn render_integration_overlay(app: &MzViewerApp, plot_ui: &mut egui_plot::Pl
     // Use a contrasting baseline in both themes so the user can see
     // exactly where the integration baseline sits.
     let baseline = egui_plot::Line::new("Baseline chord", vec![[s, i_start], [e, i_end]])
-        .color(if plot_ui.ctx().style().visuals.dark_mode {
-            egui::Color32::from_rgb(245, 195, 90)
-        } else {
-            egui::Color32::from_rgb(140, 85, 15)
-        })
+        .color(super::theme::Tokens::for_mode(plot_ui.ctx().style().visuals.dark_mode).warn)
         .width(1.5_f32)
         .style(egui_plot::LineStyle::Dashed { length: 6.0 });
     plot_ui.line(baseline);

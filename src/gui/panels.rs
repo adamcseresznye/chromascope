@@ -134,10 +134,6 @@ pub fn update_data_selection_panel(app: &mut MzViewerApp, ctx: &Context) {
                     if changed { app.workspace.view.focus_restore = None; }
                     ui.separator();
                 }
-                if ui.button("Analysis workflow guide…").clicked() {
-                    ctx.data_mut(|d| d.insert_temp(egui::Id::new("workflow_guide_open"), true));
-                    ui.close();
-                }
                 let dark = ui.visuals().dark_mode;
                 if ui.button(if dark { "Light theme" } else { "Dark theme" }).clicked() {
                     super::workbench::configure(ctx, !dark);
@@ -153,11 +149,18 @@ pub fn update_data_selection_panel(app: &mut MzViewerApp, ctx: &Context) {
                 ui.add_enabled_ui(loaded, |ui| super::workbench::trace_buttons(app, ui));
                 ui.separator();
                 ui.add_enabled_ui(!app.workspace.view.compare_samples, |ui| {
-                    ui.selectable_value(&mut app.workspace.overlay, false, "Grid");
-                    ui.selectable_value(&mut app.workspace.overlay, true, "Overlay");
+                    super::widgets::segmented(ui, |ui| {
+                        use super::icons::Icon;
+                        if super::widgets::segment(ui, !app.workspace.overlay, Some(Icon::Grid), "Grid").clicked() {
+                            app.workspace.overlay = false;
+                        }
+                        if super::widgets::segment(ui, app.workspace.overlay, Some(Icon::Overlay), "Overlay").clicked() {
+                            app.workspace.overlay = true;
+                        }
+                    });
                 });
                 ui.menu_button("Plot options", |ui| plot_options(app, ui));
-                if ui.selectable_label(app.workspace.view.focus_restore.is_some(), "Focus")
+                if super::widgets::segment(ui, app.workspace.view.focus_restore.is_some(), Some(super::icons::Icon::Focus), "Focus")
                     .on_hover_text("Focus on chromatograms; toggle to restore data files, trace settings and spectrum panels.").clicked() {
                     app.workspace.view.toggle_focus();
                 }
@@ -209,7 +212,7 @@ pub fn add_display_options(app: &mut MzViewerApp, ui: &mut Ui) {
                 {
                     ui.add_space(5.0);
                     ui.colored_label(
-                        egui::Color32::from_rgb(255, 100, 100),
+                        ui.visuals().error_fg_color,
                         format!(
                             "⚠ Window ({}) is large for {} scans. Max recommended: {}",
                             app.user_input.smoothing, bounds.scan_count, max_reasonable
@@ -683,20 +686,6 @@ pub fn update_central_panel(app: &mut MzViewerApp, ctx: &Context) {
                 .inner_margin(16),
         )
         .show(ctx, |ui| {
-            let guide_id = egui::Id::new("workflow_guide_open");
-            let mut guide_open = ctx.data(|d| d.get_temp::<bool>(guide_id)).unwrap_or(false);
-            egui::Window::new("Analysis workflow guide")
-                .open(&mut guide_open)
-                .default_width(560.0)
-                .max_height(480.0)
-                .show(ctx, |ui| {
-                    egui::ScrollArea::vertical()
-                        .id_salt("analysis_workflow_guide_scroll")
-                        .show(ui, |ui| {
-                            super::workflow::guide(app, ctx, ui);
-                        });
-                });
-            ctx.data_mut(|d| d.insert_temp(guide_id, guide_open));
             if app.files.is_empty() {
                 ui.centered_and_justified(|ui| {
                     ui.vertical_centered(|ui| {
@@ -705,7 +694,7 @@ pub fn update_central_panel(app: &mut MzViewerApp, ctx: &Context) {
                             "Open mzML or a vendor dataset to view chromatograms and spectra.",
                         );
                         ui.add_space(12.0);
-                        if ui.button("Open data…").clicked() {
+                        if super::widgets::primary_button(ui, "Open data…").clicked() {
                             handle_file_selection(app);
                         }
                         ui.small("For directory datasets, use File > Open dataset folder.");
@@ -897,7 +886,7 @@ pub fn add_native_chromatogram_dropdown(app: &mut MzViewerApp, ui: &mut Ui) {
             vec![]
         };
     if available.is_empty() {
-        ui.colored_label(egui::Color32::GRAY, "No file opened");
+        ui.colored_label(ui.visuals().weak_text_color(), "No file opened");
         return;
     }
     let current = app.user_input.native_chromatogram.and_then(|sel| {
@@ -942,13 +931,13 @@ pub fn add_range_options(app: &mut MzViewerApp, ui: &mut Ui) {
                     "{:.0} \u{2013} {:.0} m/z",
                     app.user_input.range_min.value, app.user_input.range_max.value
                 ))
-                .color(egui::Color32::from_rgb(100, 149, 237)),
+                .color(ui.visuals().hyperlink_color),
             );
             if ui.small_button("Set Range\u{2026}").clicked() {
                 app.user_input.range_window_open = true;
             }
         } else {
-            ui.colored_label(egui::Color32::GRAY, "Full range");
+            ui.colored_label(ui.visuals().weak_text_color(), "Full range");
             if ui.small_button("Set Range\u{2026}").clicked() {
                 app.user_input.range_window_open = true;
             }
@@ -975,7 +964,7 @@ pub fn add_scan_filter_dropdown(app: &mut MzViewerApp, ui: &mut Ui) {
     };
 
     if available_filters.is_empty() {
-        ui.colored_label(egui::Color32::GRAY, "No file opened");
+        ui.colored_label(ui.visuals().weak_text_color(), "No file opened");
         return;
     }
 

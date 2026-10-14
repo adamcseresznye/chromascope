@@ -13,6 +13,7 @@ use std::{
 };
 fn config() -> CalibrationConfig {
     CalibrationConfig {
+        curve: Curve::Polynomial,
         degree: 1,
         intercept: Intercept::Free,
         weighting: Weighting::Unweighted,
@@ -870,4 +871,92 @@ fn low_confidence_peaks_stay_in_the_result_but_are_flagged_until_reviewed() {
             .unwrap()
             .response
     );
+}
+
+fn standards(f: impl Fn(f64) -> f64) -> Vec<(String, f64, f64)> {
+    [0.5, 1.0, 2.0, 5.0, 10.0]
+        .iter()
+        .enumerate()
+        .map(|(i, x)| (format!("s{i}"), *x, f(*x)))
+        .collect()
+}
+fn with(curve: Curve, weighting: Weighting, intercept: Intercept, degree: usize) -> CalibrationConfig {
+    CalibrationConfig {
+        curve,
+        degree,
+        weighting,
+        intercept,
+        ..config()
+    }
+}
+#[test]
+fn every_weighting_recovers_an_exact_line() {
+    let points = standards(|x| 3.0 * x + 2.0);
+    for w in [
+        Weighting::Unweighted,
+        Weighting::InverseX,
+        Weighting::InverseX2,
+        Weighting::InverseY,
+        Weighting::InverseY2,
+    ] {
+        let m = fit(&points, &with(Curve::Polynomial, w, Intercept::Free, 1)).unwrap();
+        close(m.coefficients[0], 2.0);
+        close(m.coefficients[1] / m.scale, 3.0);
+        close(m.inverse(17.0, [0.5, 10.0]).unwrap(), 5.0);
+    }
+}
+#[test]
+fn average_response_factor_is_the_mean_of_y_over_x() {
+    let points = standards(|x| 4.0 * x + 0.1 * x * x);
+    let mean = points.iter().map(|p| p.2 / p.1).sum::<f64>() / points.len() as f64;
+    let m = fit(
+        &points,
+        &with(Curve::Polynomial, Weighting::InverseX2, Intercept::Zero, 1),
+    )
+    .unwrap();
+    close(m.coefficients[1] / m.scale, mean);
+}
+#[test]
+fn log_log_recovers_a_power_law_and_inverts_it() {
+    let points = standards(|x| 2.5 * x.powf(1.2));
+    let m = fit(&points, &with(Curve::LogLog, Weighting::Unweighted, Intercept::Free, 1)).unwrap();
+    assert_eq!(m.curve, Curve::LogLog);
+    for (_, x, y) in &points {
+        close(m.response(*x), *y);
+        assert!((m.inverse(*y, [0.5, 10.0]).unwrap() - x).abs() < 1e-6 * x);
+    }
+    assert!(m.flags.is_empty(), "{:?}", m.flags);
+    assert!(fit(
+        &standards(|x| x - 0.5),
+        &with(Curve::LogLog, Weighting::Unweighted, Intercept::Free, 1)
+    )
+    .is_err());
+}
+#[test]
+fn point_to_point_passes_through_level_means_and_inverts() {
+    let mut points = standards(|x| x * x);
+    points.push(("rep".into(), 5.0, 27.0));
+    let m = fit(
+        &points,
+        &with(Curve::PointToPoint, Weighting::Unweighted, Intercept::Free, 1),
+    )
+    .unwrap();
+    close(m.response(1.0), 1.0);
+    close(m.response(5.0), 26.0);
+    close(m.response(3.5), 4.0 + (26.0 - 4.0) * 1.5 / 3.0);
+    let x = m.inverse(15.0, [0.5, 10.0]).unwrap();
+    close(m.response(x), 15.0);
+    assert!(m.flags.is_empty(), "{:?}", m.flags);
+    let flat = fit(
+        &standards(|x| if x < 5.0 { x } else { 10.0 - x }),
+        &with(Curve::PointToPoint, Weighting::Unweighted, Intercept::Free, 1),
+    )
+    .unwrap();
+    assert!(flat.flags.iter().any(|f| f == "nonmonotonic_calibration"));
+}
+#[test]
+fn old_configurations_without_a_curve_still_load_as_polynomial() {
+    let json = r#"{"degree":1,"intercept":{"kind":"free"},"weighting":"inverse_x","unit":"ng_ml","range":[1.0,10.0],"lod":0.0,"loq":1.0,"accuracy_tolerance_percent":15.0,"qc_cv_limit_percent":15.0,"blank_response_limit":0.0}"#;
+    let cfg: CalibrationConfig = serde_json::from_str(json).unwrap();
+    assert_eq!(cfg.curve, Curve::Polynomial);
 }

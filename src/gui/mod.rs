@@ -124,7 +124,13 @@ pub(crate) mod remote;
 mod spectral;
 pub(crate) mod state;
 mod statistics;
+mod calibration;
+mod calibration_setup;
+mod concentration_view;
 mod table;
+mod theme;
+mod icons;
+mod widgets;
 #[cfg(any(test, feature = "mcp"))]
 mod test_render;
 mod untargeted;

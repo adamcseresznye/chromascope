@@ -87,9 +87,14 @@ impl Quality {
         } else {
             0.0
         };
-        // High means nothing was flagged: one flag keeps a peak below High, and a severe flag
-        // or several flags keep it Medium at best, however good the rest of the peak is.
-        let flagged: Vec<&Check> = self.checks.iter().filter(|c| c.flag.is_some()).collect();
+        // High means nothing significant was flagged: one flag keeps a peak below High, and a
+        // severe flag or several flags keep it Medium at best, however good the rest of the
+        // peak is. A mild flag (low weight, only slightly under its limit) just lowers the mean.
+        let flagged: Vec<&Check> = self
+            .checks
+            .iter()
+            .filter(|c| c.flag.is_some() && (c.weight >= 0.08 || c.score < 0.25))
+            .collect();
         let flag_cap = match flagged.len() {
             0 => 100,
             1 if flagged[0].score >= 0.25 => HIGH_FROM - 1,
@@ -299,15 +304,36 @@ pub fn assess(
         .map(|i| smooth[i - 1][1] - 2.0 * smooth[i][1] + smooth[i + 1][1])
         .collect();
     let strongest = d2.iter().copied().fold(0.0_f64, f64::min);
+    // Curvature below this is indistinguishable from noise (second difference of white noise
+    // has sigma * sqrt(6)).
+    let noise_sigma = {
+        let x: Vec<f64> = window.iter().map(|p| p[0]).collect();
+        let y: Vec<f64> = window.iter().map(|p| p[1]).collect();
+        chromatography::noise_sigma(&x, &y)
+    };
+    let d2_noise = if noise_sigma.is_finite() {
+        noise_sigma * 6.0_f64.sqrt()
+    } else {
+        0.0
+    };
+    // Lobes of strongly negative curvature, each separated from the next by a stretch of
+    // clearly positive curvature. Ripples and shallow dips between them do not count.
+    let lobe_depth = (0.25 * strongest.abs()).max(4.0 * d2_noise);
+    let gap_height = (0.10 * strongest.abs()).max(4.0 * d2_noise);
     let mut lobes = 0;
     let mut inside = false;
+    let mut gap_max = f64::NEG_INFINITY;
     for d in &d2 {
-        let negative = strongest < 0.0 && *d < 0.25 * strongest;
-        if negative && !inside {
-            lobes += 1;
-        }
-        if *d > 0.0 || negative {
-            inside = negative;
+        let negative = strongest < 0.0 && *d < -lobe_depth;
+        if negative {
+            if !inside && (lobes == 0 || gap_max > gap_height) {
+                lobes += 1;
+            }
+            inside = true;
+            gap_max = f64::NEG_INFINITY;
+        } else {
+            inside = false;
+            gap_max = gap_max.max(*d);
         }
     }
     b.add(
@@ -318,7 +344,7 @@ pub fn assess(
             "single maximum".into()
         },
         if lobes > 1 { 0.3 } else { 1.0 },
-        0.05,
+        0.08,
         "shoulder_or_split",
         0.7,
     );
@@ -410,11 +436,8 @@ pub fn assess(
     );
 
     // 4. Signal to noise.
-    let x: Vec<f64> = window.iter().map(|p| p[0]).collect();
-    let y: Vec<f64> = window.iter().map(|p| p[1]).collect();
-    let sigma = chromatography::noise_sigma(&x, &y);
-    let snr = if sigma.is_finite() && sigma > 0.0 {
-        height / sigma
+    let snr = if noise_sigma.is_finite() && noise_sigma > 0.0 {
+        height / noise_sigma
     } else {
         f64::INFINITY
     };
@@ -643,6 +666,21 @@ mod tests {
         assert_eq!(q.tier, Tier::High);
         assert!(q.flags().is_empty(), "{:?}", q.flags());
         assert!(q.fwhm.unwrap() > 0.25 && q.fwhm.unwrap() < 0.32);
+    }
+    #[test]
+    fn a_clean_peak_on_an_offset_baseline_in_a_tight_window_is_high() {
+        // Baseline sits higher on the left than on the right, and the window starts close to
+        // the peak: neither may be mistaken for a clipped or multi-lobed peak.
+        let t = trace(0.01, |x| {
+            gauss(5.0, 0.04, 100_000.0)(x) + 2_000.0 - 150.0 * x
+        });
+        let cfg = Integration::default();
+        let window = [4.8, 5.4];
+        let c = integration::candidates(&t, window, 5.0, &cfg);
+        let q = assess(&t, window, 5.0, &cfg, &c).unwrap();
+        assert!(!c[0].clipped);
+        assert!(q.flags().is_empty(), "{:?}", q.checks);
+        assert!(q.score >= 90, "{q:#?}");
     }
     #[test]
     fn tailing_is_flagged() {

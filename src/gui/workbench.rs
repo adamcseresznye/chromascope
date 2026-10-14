@@ -1,7 +1,7 @@
 //! Persistent controls and visual styling for the scientific workbench.
 use super::{panels, state::StateChange, MzViewerApp};
 use crate::plotting_parameters::{LineColor, PlotType};
-use eframe::egui::{self, Color32, Context};
+use eframe::egui::{self, Context};
 
 // Shared dimensions keep controls legible at native and scaled display sizes.
 const BODY_SIZE: f32 = 14.0;
@@ -55,7 +55,7 @@ pub fn navigation(app: &mut MzViewerApp, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
     ui.horizontal_wrapped(|ui| {
         for (id, label) in &destinations {
-            if ui.selectable_label(selected == *id, *label).clicked() {
+            if super::widgets::nav_tab(ui, selected == *id, label).clicked() {
                 selected = *id;
             }
         }
@@ -236,55 +236,10 @@ pub fn configure(ctx: &Context, dark: bool) {
     heading_fonts.extend(fallback);
     fonts.families.insert(heading_family.clone(), heading_fonts);
     ctx.set_fonts(fonts);
-    let mut visuals = if dark {
-        egui::Visuals::dark()
-    } else {
-        egui::Visuals::light()
-    };
-    visuals.panel_fill = if dark {
-        Color32::from_rgb(39, 46, 55)
-    } else {
-        Color32::from_rgb(243, 245, 248)
-    };
-    visuals.extreme_bg_color = if dark {
-        Color32::from_rgb(32, 37, 44)
-    } else {
-        Color32::WHITE
-    };
-    visuals.selection.bg_fill = if dark {
-        Color32::from_rgb(41, 63, 88)
-    } else {
-        Color32::from_rgb(224, 237, 252)
-    };
-    visuals.selection.stroke = egui::Stroke::new(
-        1.0_f32,
-        if dark {
-            Color32::from_rgb(119, 185, 241)
-        } else {
-            Color32::from_rgb(25, 104, 179)
-        },
-    );
-    visuals.widgets.noninteractive.bg_stroke.color = if dark {
-        Color32::from_rgb(58, 70, 84)
-    } else {
-        Color32::from_rgb(220, 226, 233)
-    };
-    visuals.override_text_color = Some(if dark {
-        Color32::from_rgb(231, 235, 241)
-    } else {
-        Color32::from_rgb(28, 37, 49)
-    });
-    visuals.weak_text_color = Some(if dark {
-        Color32::from_rgb(184, 196, 210)
-    } else {
-        Color32::from_rgb(75, 87, 104)
-    });
-    visuals.warn_fg_color = super::plot_controls::scientific_color(dark, 2);
-    visuals.error_fg_color = super::plot_controls::scientific_color(dark, 4);
-    visuals.hyperlink_color = super::plot_controls::scientific_color(dark, 1);
-    ctx.set_visuals(visuals);
+    ctx.set_visuals(super::theme::visuals(dark));
     ctx.style_mut(|style| {
-        style.spacing.item_spacing = egui::vec2(8.0, 8.0);
+        style.spacing.item_spacing = egui::vec2(8.0, 6.0);
+        style.interaction.tooltip_delay = 0.45;
         style.spacing.button_padding = egui::vec2(10.0, 6.0);
         style.spacing.interact_size.y = CONTROL_HEIGHT;
         style
@@ -300,19 +255,22 @@ pub fn configure(ctx: &Context, dark: bool) {
         );
         style.text_styles.insert(
             egui::TextStyle::Heading,
-            egui::FontId::new(18.0, heading_family),
+            egui::FontId::new(16.0, heading_family),
         );
     });
 }
 
 pub fn trace_buttons(app: &mut MzViewerApp, ui: &mut egui::Ui) {
+    super::widgets::segmented(ui, |ui| trace_segments(app, ui));
+}
+
+fn trace_segments(app: &mut MzViewerApp, ui: &mut egui::Ui) {
     for (kind, label) in [
         (PlotType::Tic, "TIC"),
         (PlotType::Bpc, "BPC"),
         (PlotType::Xic, "XIC"),
     ] {
-        if ui
-            .selectable_label(app.user_input.plot_type == kind, label)
+        if super::widgets::segment(ui, app.user_input.plot_type == kind, None, label)
             .clicked()
             && app.user_input.plot_type != kind
         {
@@ -473,7 +431,7 @@ pub fn inspector(app: &mut MzViewerApp, ctx: &Context) {
                 });
                 ui.add_space(10.0);
                 super::workspace::inspector(app, ui);
-                ui.heading("Selection");
+                super::widgets::card(ui, "Selection", |ui| {
                 ui.small("Inspect a spectrum, then integrate a peak. Batch review happens in Quantification and QC.");
                 numeric_spectrum(app,ui);
                 if let Some(rt) = app.user_input.retention_time_ms_spectrum {
@@ -501,6 +459,7 @@ pub fn inspector(app: &mut MzViewerApp, ctx: &Context) {
                     super::plot_controls::export(ui,points,"Retention time (min)","Intensity (instrument units)");
                 }
                 ui.small("Integration uses the full-resolution processed trace and a straight line between endpoints as baseline. Set smoothing to 0 to inspect unsmoothed data.");
+                });
                 ui.add_space(10.0);
                 egui::CollapsingHeader::new("Appearance")
                     .default_open(false)
@@ -963,7 +922,7 @@ mod tests {
                 )),
                 ..Default::default()
             };
-            let mut atlas = egui::ColorImage::new([1, 1], vec![Color32::WHITE]);
+            let mut atlas = egui::ColorImage::new([1, 1], vec![egui::Color32::WHITE]);
             let mut outputs = Vec::new();
             for frame in 0..3 {
                 input.time = Some(frame as f64 * 0.2);

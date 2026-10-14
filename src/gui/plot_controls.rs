@@ -314,25 +314,8 @@ pub(super) fn export_status(ui: &mut egui::Ui) {
 
 /// Fixed analytical roles use colors visible against their active plot surface.
 pub(super) fn scientific_color(dark: bool, role: usize) -> egui::Color32 {
-    let colors = if dark {
-        [
-            [184, 196, 210],
-            [119, 185, 241],
-            [245, 195, 90],
-            [134, 218, 176],
-            [255, 150, 150],
-        ]
-    } else {
-        [
-            [75, 87, 104],
-            [25, 104, 179],
-            [140, 85, 15],
-            [20, 110, 70],
-            [148, 34, 34],
-        ]
-    };
-    let [r, g, b] = colors[role.min(colors.len() - 1)];
-    egui::Color32::from_rgb(r, g, b)
+    let t = super::theme::Tokens::for_mode(dark);
+    [t.text_dim, t.info, t.warn, t.good, t.error][role.min(4)]
 }
 
 #[cfg(test)]

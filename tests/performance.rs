@@ -152,6 +152,7 @@ fn analytical_workloads() {
         chromatography::verify(&a).unwrap();
     });
     let cfg = CalibrationConfig {
+        curve: chromascope::targeted::Curve::Polynomial,
         degree: 1,
         intercept: Intercept::Free,
         weighting: Weighting::InverseX2,

@@ -88,6 +88,10 @@ pub(super) fn show(
     show_with(ui, id, headers, rows, selected, 280., &[])
 }
 const ROW_HEIGHT: f32 = 26.;
+/// Asks table `id` to bring its selected row into view on its next frame.
+pub(super) fn scroll_to_selected(ctx: &egui::Context, id: &str) {
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new(("table_scroll", id)), true));
+}
 /// Table with a filter bar, sortable/resizable header and striped, click-to-select rows.
 /// `body_height` bounds the scrolling row area; `weights` seed relative column widths.
 pub(super) fn show_with(
@@ -214,10 +218,26 @@ pub(super) fn show_with(
                     );
                 }
             }
-            egui::ScrollArea::vertical()
+            let mut rows_area = egui::ScrollArea::vertical()
                 .id_salt((id, "rows"))
                 .max_height(body_height.max(ROW_HEIGHT * 3.))
-                .auto_shrink([false, true])
+                .auto_shrink([false, true]);
+            let scroll_id = egui::Id::new(("table_scroll", id));
+            if ui
+                .ctx()
+                .data_mut(|d| d.remove_temp::<bool>(scroll_id))
+                .unwrap_or(false)
+            {
+                if let Some(position) =
+                    indices.iter().position(|&i| selected == Some(rows[i].key.as_str()))
+                {
+                    let visible = body_height.max(ROW_HEIGHT * 3.);
+                    rows_area = rows_area.vertical_scroll_offset(
+                        (position as f32 * ROW_HEIGHT - (visible - ROW_HEIGHT) / 2.).max(0.),
+                    );
+                }
+            }
+            rows_area
                 .show_rows(ui, ROW_HEIGHT, indices.len(), |ui, range| {
                     for visible in range {
                         let index = indices[visible];

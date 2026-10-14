@@ -1,4 +1,5 @@
 //! Batch measurements are independent of exploratory viewer traces and measurements.
+use super::theme::Tokens;
 use super::MzViewerApp;
 use crate::processing::{self, ProcessingResult};
 use eframe::egui::{self, Color32};
@@ -77,6 +78,12 @@ pub(super) struct QuantState {
     pending_sources: Vec<PathBuf>,
     #[serde(skip)]
     pending_method: Option<MethodAction>,
+}
+impl QuantState {
+    /// Opens the batch method editor (used by the workflow map).
+    pub(super) fn open_method(&mut self) {
+        self.method_open = true;
+    }
 }
 impl Default for QuantState {
     fn default() -> Self {
@@ -901,17 +908,20 @@ pub(super) fn show(app: &mut MzViewerApp, ctx: &egui::Context) {
         let mut stage = ui.ctx().data(|d| d.get_temp::<usize>(stage_id)).unwrap_or(0);
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().button_padding = egui::vec2(12.0, 5.0);
-            ui.selectable_value(
-                &mut stage,
-                0,
-                if unresolved > 0 {
-                    format!("1 · Areas and peak review ({unresolved} need review)")
-                } else {
-                    "1 · Areas and peak review".to_string()
-                },
-            );
-            ui.selectable_value(&mut stage, 1, "2 · Calibration and concentrations");
-            ui.selectable_value(&mut stage, 2, "3 · Batch QC and validation");
+            let first = if unresolved > 0 {
+                format!("1 · Areas and peak review ({unresolved} need review)")
+            } else {
+                "1 · Areas and peak review".to_string()
+            };
+            for (index, label) in [
+                (0, first.as_str()),
+                (1, "2 · Calibration and concentrations"),
+                (2, "3 · Batch QC and validation"),
+            ] {
+                if super::widgets::nav_tab(ui, stage == index, label).clicked() {
+                    stage = index;
+                }
+            }
         });
         ui.ctx().data_mut(|d| d.insert_temp(stage_id, stage));
         ui.add_space(6.0);
@@ -1049,28 +1059,30 @@ pub(super) fn show(app: &mut MzViewerApp, ctx: &egui::Context) {
         if stage == 0 {
             // Master/detail layout manages its own scrolling so the plot can use the full height.
             review_stage(&mut q, ui);
+        } else if stage == 1 {
+            // The calibration tab lays out and scrolls its own panes (results browser).
+            let samples = if q.batch_samples.is_empty() {
+                let mut samples: Vec<_> = app
+                    .files
+                    .values()
+                    .filter(|f| !f.is_loading && q.selected_samples.contains(&f.id))
+                    .map(|f| (f.path.clone(), f.name.clone()))
+                    .collect();
+                samples.sort();
+                samples
+            } else {
+                q.batch_samples.clone()
+            };
+            super::targeted::panel(&mut q.targeted, &q.method, &samples, &q.results, ui);
+            if let Some((source, analyte)) = q.targeted.take_revisit() {
+                revisit(&mut q, ui.ctx(), &source, &analyte);
+            }
         } else {
             egui::ScrollArea::vertical()
                 .id_salt("quantification_content")
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    if stage == 1 {
-                        let samples = if q.batch_samples.is_empty() {
-                            let mut samples: Vec<_> = app
-                                .files
-                                .values()
-                                .filter(|f| !f.is_loading && q.selected_samples.contains(&f.id))
-                                .map(|f| (f.path.clone(), f.name.clone()))
-                                .collect();
-                            samples.sort();
-                            samples
-                        } else {
-                            q.batch_samples.clone()
-                        };
-                        super::targeted::panel(&mut q.targeted, &q.method, &samples, ui);
-                    } else {
-                        q.targeted.qc_panel(ui);
-                    }
+                    q.targeted.qc_panel(ui);
                     super::workbench::scroll_new_focus(ui);
                 });
         }
@@ -1270,7 +1282,7 @@ fn method_editor(
         });
         if let Some(i)=remove { draft.analytes.remove(i); }
         if ui.add_enabled(draft.analytes.len()<64,egui::Button::new("Add analyte")).clicked() { draft.analytes.push(new_analyte(draft.analytes.len()+1)); }
-        if let Err(e)=validate(&*draft) { ui.colored_label(Color32::from_rgb(210,110,50),e); }
+        if let Err(e)=validate(&*draft) { ui.colored_label(Tokens::of(ui).error,e); }
         if !q.message.is_empty() { ui.small(&q.message); }
     });
 }
@@ -1305,10 +1317,11 @@ fn confidence_tone(visuals: &egui::Visuals, r: &Measurement, stale: bool) -> (St
             (format!("{:?}", r.status), visuals.weak_text_color())
         }
         (_, quality, tier) => {
+            let good = Tokens::for_mode(visuals.dark_mode).good;
             let color = match tier {
-                Some(Tier::High) => Color32::from_rgb(80, 175, 120),
+                Some(Tier::High) => good,
                 Some(Tier::Medium) => visuals.warn_fg_color,
-                Some(Tier::Low) => Color32::from_rgb(225, 110, 70),
+                Some(Tier::Low) => visuals.error_fg_color,
                 None => visuals.weak_text_color(),
             };
             let label = match (quality, tier) {
@@ -1320,17 +1333,46 @@ fn confidence_tone(visuals: &egui::Visuals, r: &Measurement, stale: bool) -> (St
         }
     }
 }
-fn next_needing_review(q: &mut QuantState) {
+/// Opens the peak of `analyte` in `source` in the peak review (tab 1).
+fn revisit(q: &mut QuantState, ctx: &egui::Context, source: &str, analyte: &str) {
+    if let Some(i) = q
+        .results
+        .iter()
+        .position(|r| r.source == source && r.analyte == analyte)
+    {
+        select(q, i);
+        ctx.data_mut(|d| d.insert_temp(egui::Id::new("quantification_stage"), 0_usize));
+        super::table::scroll_to_selected(ctx, "quant_result_matrix");
+        ctx.request_repaint();
+    }
+}
+/// Medium-confidence automatic peaks nobody has looked at yet: the second pass once nothing is
+/// flagged outright.
+fn worth_a_look(r: &Measurement) -> bool {
+    r.review() == crate::quant::Review::NotReviewed
+        && r.peak.is_some()
+        && r.tier() == Some(Tier::Medium)
+}
+/// Selects the next result after the current one that needs review (flagged, stale or failed);
+/// when none does, the next unreviewed medium-confidence one. Returns whether it moved.
+fn next_needing_review(q: &mut QuantState) -> bool {
     if q.results.is_empty() {
-        return;
+        return false;
     }
     let fresh = fresh(&q.method);
     let start = q.selected.map_or(0, |i| i + 1);
-    if let Some(i) = (0..q.results.len())
-        .map(|offset| (start + offset) % q.results.len())
-        .find(|&i| q.results[i].needs_review() || fresh.stale(&q.results[i]))
-    {
-        select(q, i);
+    let cycle = |pick: &dyn Fn(&Measurement) -> bool| {
+        (0..q.results.len())
+            .map(|offset| (start + offset) % q.results.len())
+            .find(|&i| pick(&q.results[i]))
+    };
+    let found = cycle(&|r| r.needs_review() || fresh.stale(r)).or_else(|| cycle(&worth_a_look));
+    match found {
+        Some(i) => {
+            select(q, i);
+            true
+        }
+        None => false,
     }
 }
 fn empty_state(q: &mut QuantState, ui: &mut egui::Ui) {
@@ -1384,14 +1426,26 @@ fn review_stage(q: &mut QuantState, ui: &mut egui::Ui) {
                 format!("● {unresolved} need review"),
             );
         } else {
-            ui.colored_label(Color32::from_rgb(80, 175, 120), "● nothing needs review");
+            ui.colored_label(Tokens::of(ui).good, "● nothing needs review");
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let more = q.results.iter().any(worth_a_look);
+            let label = if unresolved > 0 {
+                "Next needing review ›"
+            } else {
+                "Next unreviewed peak ›"
+            };
             if ui
-                .add_enabled(unresolved > 0, egui::Button::new("Next needing review ›"))
+                .add_enabled(unresolved > 0 || more, egui::Button::new(label))
+                .on_hover_text(if unresolved > 0 {
+                    "Jump to the next peak that is flagged, missing or measured with older settings"
+                } else {
+                    "Nothing is flagged; jump to the next medium-confidence peak you have not reviewed"
+                })
                 .clicked()
+                && next_needing_review(q)
             {
-                next_needing_review(q);
+                super::table::scroll_to_selected(ui.ctx(), "quant_result_matrix");
             }
         });
     });
@@ -1609,7 +1663,7 @@ fn review(q: &mut QuantState, ui: &mut egui::Ui) {
             }
             if stale {
                 ui.colored_label(
-                    Color32::from_rgb(210, 110, 50),
+                    Tokens::of(ui).error,
                     "Method changed: use Reprocess above before adjusting this result.",
                 );
             }
@@ -1641,31 +1695,32 @@ fn review(q: &mut QuantState, ui: &mut egui::Ui) {
                 .y_axis_label("Intensity (instrument units)")
                 .allow_boxed_zoom(false)
                 .allow_drag(false);
+            let tk = Tokens::of(ui);
             let response = plot.show(ui, |plot_ui| {
                 let display = processing::decimate_for_display(&r.trace);
                 plot_ui.line(
                     Line::new("Unsmoothed XIC", PlotPoints::from(display))
-                        .color(Color32::from_rgb(75, 150, 215)),
+                        .color(tk.info),
                 );
-                plot_ui.vline(VLine::new("Start", q.start).color(Color32::from_rgb(50, 160, 115)));
-                plot_ui.vline(VLine::new("End", q.end).color(Color32::from_rgb(220, 140, 60)));
+                plot_ui.vline(VLine::new("Start", q.start).color(tk.good));
+                plot_ui.vline(VLine::new("End", q.end).color(tk.warn));
                 if q.start < q.end {
                     if let Ok(profile) = integration::profile(&r.trace, q.start, q.end, &applied) {
                         plot_ui.line(
-                            Line::new("Baseline", profile.baseline.clone()).color(Color32::GRAY),
+                            Line::new("Baseline", profile.baseline.clone()).color(tk.text_dim),
                         );
                         plot_ui.polygon(
                             Polygon::new("Integrated peak", profile_outline(&profile))
                                 .stroke(egui::Stroke::new(
                                     1.0_f32,
-                                    Color32::from_rgba_unmultiplied(75, 150, 215, 100),
+                                    tk.info.gamma_multiply(0.4),
                                 ))
-                                .fill_color(Color32::from_rgba_unmultiplied(75, 150, 215, 45)),
+                                .fill_color(tk.info.gamma_multiply(0.18)),
                         );
                     }
                 }
                 if let Some((peak, profile)) = &overlay {
-                    let orange = Color32::from_rgb(235, 140, 40);
+                    let orange = tk.warn;
                     plot_ui.line(
                         Line::new("Preview baseline", profile.baseline.clone())
                             .color(orange)
@@ -1674,7 +1729,7 @@ fn review(q: &mut QuantState, ui: &mut egui::Ui) {
                     plot_ui.polygon(
                         Polygon::new("Preview peak", profile_outline(profile))
                             .stroke(egui::Stroke::new(1.5_f32, orange))
-                            .fill_color(Color32::from_rgba_unmultiplied(235, 140, 40, 40)),
+                            .fill_color(tk.warn.gamma_multiply(0.16)),
                     );
                     plot_ui.vline(
                         VLine::new("Preview start", peak.start)

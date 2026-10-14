@@ -17,7 +17,15 @@ use eframe::egui;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Destination {
     Data,
+    /// File dialog to import datasets.
+    OpenData,
     Quant,
+    /// Quantification tab, with its stage selected.
+    QuantReview,
+    QuantCalibration,
+    QuantQc,
+    /// Quantification tab with the method editor open.
+    Method,
     Identify,
     Untargeted,
     Statistics,
@@ -65,7 +73,26 @@ const TITLES: [&str; 9] = [
 /// Switch the visible workspace, preserving project, dataset, analyte, and
 /// result context. Also links the open project into Reports when empty.
 pub(super) fn go(app: &mut MzViewerApp, ctx: &egui::Context, destination: Destination) {
-    app.quant.active = destination == Destination::Quant;
+    app.quant.active = matches!(
+        destination,
+        Destination::Quant
+            | Destination::QuantReview
+            | Destination::QuantCalibration
+            | Destination::QuantQc
+            | Destination::Method
+    );
+    let stage = match destination {
+        Destination::QuantReview | Destination::Method => Some(0_usize),
+        Destination::QuantCalibration => Some(1),
+        Destination::QuantQc => Some(2),
+        _ => None,
+    };
+    if let Some(stage) = stage {
+        ctx.data_mut(|d| d.insert_temp(egui::Id::new("quantification_stage"), stage));
+    }
+    if destination == Destination::Method {
+        app.quant.open_method();
+    }
     app.spectral.open = destination == Destination::Identify;
     app.untargeted.open = destination == Destination::Untargeted;
     app.statistics.open = destination == Destination::Statistics;
@@ -76,6 +103,9 @@ pub(super) fn go(app: &mut MzViewerApp, ctx: &egui::Context, destination: Destin
             destination == Destination::Activity,
         );
     });
+    if destination == Destination::OpenData {
+        super::panels::handle_file_selection(app);
+    }
     if destination == Destination::Reports && app.project.has_project() {
         let root = std::path::PathBuf::from(app.project.root_label());
         app.delivery.set_project_if_empty(&root);
@@ -116,12 +146,12 @@ pub(super) fn steps(app: &MzViewerApp) -> Vec<StepStatus> {
                 StepState::Todo
             },
             detail: if let Some(revision) = app.project.revision() {
-                format!("Project revision {revision} retains all analyses")
+                format!("Project open — use Project ▸ Save project to store your latest work (save {revision})")
             } else {
-                "Exploratory workspace — create a project to retain revisions".into()
+                "Exploratory workspace — use Project ▸ Create project to keep your work".into()
             },
             destination: Destination::Data,
-            action: "Open project",
+            action: "Project menu",
         },
         StepStatus {
             number: 2,
@@ -147,7 +177,7 @@ pub(super) fn steps(app: &MzViewerApp) -> Vec<StepStatus> {
             } else {
                 "No datasets yet — open mzML or a vendor folder".into()
             },
-            destination: Destination::Data,
+            destination: Destination::OpenData,
             action: "Open data",
         },
         StepStatus {
@@ -163,7 +193,7 @@ pub(super) fn steps(app: &MzViewerApp) -> Vec<StepStatus> {
             } else {
                 method_error
             },
-            destination: Destination::Quant,
+            destination: Destination::Method,
             action: "Edit method",
         },
         StepStatus {
@@ -211,7 +241,7 @@ pub(super) fn steps(app: &MzViewerApp) -> Vec<StepStatus> {
             } else {
                 "All peak integrations resolved".into()
             },
-            destination: Destination::Quant,
+            destination: Destination::QuantReview,
             action: "Review peaks",
         },
         StepStatus {
@@ -235,7 +265,7 @@ pub(super) fn steps(app: &MzViewerApp) -> Vec<StepStatus> {
             } else {
                 format!("{fitted} calibration model(s) fitted; concentrations calculated")
             },
-            destination: Destination::Quant,
+            destination: Destination::QuantCalibration,
             action: "Calibrate",
         },
         StepStatus {
@@ -267,7 +297,7 @@ pub(super) fn steps(app: &MzViewerApp) -> Vec<StepStatus> {
                     }
                 }
             },
-            destination: Destination::Quant,
+            destination: Destination::QuantQc,
             action: "Review QC",
         },
         StepStatus {
@@ -298,7 +328,7 @@ pub(super) fn steps(app: &MzViewerApp) -> Vec<StepStatus> {
             } else {
                 format!("All {total} results reviewed")
             },
-            destination: Destination::Activity,
+            destination: Destination::QuantCalibration,
             action: "Review results",
         },
         StepStatus {
@@ -312,7 +342,7 @@ pub(super) fn steps(app: &MzViewerApp) -> Vec<StepStatus> {
                 StepState::Todo
             },
             detail: if !has_project {
-                "Open a project first — the report exports project evidence".into()
+                "Create a project first (Project menu) — the report exports project evidence".into()
             } else if has_destination && !destination_exists {
                 "Project and new output folder are set — ready to export".into()
             } else if destination_exists {
@@ -404,10 +434,11 @@ fn state_glyph(state: StepState) -> &'static str {
     }
 }
 
-/// Status-bar chip naming the next workflow step; its menu holds the details and actions.
+/// Navigation-bar button "Workflow progress"; its popup lists every step with its state, marks
+/// the current one and jumps straight to the place where it is done.
 pub(super) fn status_chip(app: &mut MzViewerApp, ctx: &egui::Context, ui: &mut egui::Ui) {
     let list = steps(app);
-    let next = list
+    let current = list
         .iter()
         .find(|s| s.state == StepState::Blocked)
         .or_else(|| list.iter().find(|s| s.state == StepState::Attention))
@@ -415,113 +446,46 @@ pub(super) fn status_chip(app: &mut MzViewerApp, ctx: &egui::Context, ui: &mut e
             list.iter()
                 .find(|s| s.state == StepState::Todo || s.state == StepState::Ready)
         })
-        .cloned();
+        .map(|s| s.number);
+    let done = list.iter().filter(|s| s.state == StepState::Done).count();
     let warnings = export_warnings(app);
-    let label = match &next {
-        Some(n) => format!("Step {}/9 · {} \u{25be}", n.number, n.action),
-        None => "● Workflow complete".to_string(),
+    let label = match current.and_then(|n| list.get(n - 1)) {
+        Some(n) => format!("Workflow progress · step {} of 9: {} \u{25be}", n.number, n.action),
+        None => "Workflow progress · complete \u{25be}".to_string(),
     };
     let mut chosen: Option<Destination> = None;
-    ui.menu_button(egui::RichText::new(label).small(), |ui| {
-        ui.set_max_width(340.0);
-        match &next {
-            Some(n) => {
-                ui.strong(format!("Step {} of 9 — {}", n.number, n.title));
-                ui.small(&n.detail);
-                if !warnings.is_empty() && n.number >= 5 {
-                    ui.small(format!(
-                        "{} warning(s) will accompany export",
-                        warnings.len()
-                    ));
-                }
-                if ui
-                    .add(
-                        egui::Button::new(
-                            egui::RichText::new(format!("Next: {}", n.action)).strong(),
-                        )
-                        .fill(ui.visuals().selection.bg_fill),
-                    )
-                    .clicked()
-                {
-                    chosen = Some(n.destination);
-                    ui.close();
-                }
-            }
-            None => {
-                ui.strong("Analysis complete — review the release checklist in Reports.");
-                if ui.button("Open Reports").clicked() {
-                    chosen = Some(Destination::Reports);
-                    ui.close();
-                }
-            }
+    ui.menu_button(label, |ui| {
+        ui.set_min_width(480.0);
+        ui.strong("Analysis workflow progress");
+        ui.small(format!(
+            "{done} of 9 steps complete. Click a step to go where it is done."
+        ));
+        if !warnings.is_empty() {
+            ui.small(format!("{} warning(s) will accompany export", warnings.len()));
         }
         ui.separator();
-        if ui.button("All steps…").clicked() {
-            ctx.data_mut(|d| d.insert_temp(egui::Id::new("workflow_guide_open"), true));
-            ui.close();
+        for step in &list {
+            let here = current == Some(step.number);
+            ui.horizontal(|ui| {
+                let title = format!("{} {}. {}", state_glyph(step.state), step.number, step.title);
+                if here {
+                    ui.strong(format!("{title}   \u{2190} you are here"));
+                } else {
+                    ui.label(title);
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if step.number > 1 && ui.small_button(step.action).clicked() {
+                        chosen = Some(step.destination);
+                        ui.close();
+                    }
+                });
+            });
+            ui.small(&step.detail);
+            ui.add_space(2.0);
         }
     })
     .response
-    .on_hover_text("Analysis workflow progress");
-    if let Some(destination) = chosen {
-        go(app, ctx, destination);
-    }
-}
-
-/// Full numbered guide with per-step status and contextual navigation.
-/// Uses a compact list below 950 px so step text and actions are never
-/// squeezed out of view at typical window sizes.
-pub(super) fn guide(app: &mut MzViewerApp, ctx: &egui::Context, ui: &mut egui::Ui) {
-    ui.heading("Analysis workflow");
-    ui.small("Follow the numbered steps from project to report. Your project, datasets, and results stay selected while you move.");
-    if ui.available_width() < 950.0 {
-        step_list(app, ctx, ui);
-        return;
-    }
-    let list = steps(app);
-    let done = list.iter().filter(|s| s.state == StepState::Done).count();
-    ui.small(format!("{done} of 9 steps complete"));
-    let mut chosen: Option<Destination> = None;
-    egui::Grid::new("analysis_workflow_steps")
-        .num_columns(3)
-        .striped(true)
-        .show(ui, |ui| {
-            for step in &list {
-                let glyph = state_glyph(step.state);
-                let label = match step.state {
-                    StepState::Done => "Complete",
-                    StepState::Ready => "Ready",
-                    StepState::Attention => "Needs review",
-                    StepState::Blocked => "Blocked",
-                    StepState::Todo => "Not started",
-                };
-                ui.label(format!("{glyph} {}. {}", step.number, step.title));
-                ui.small(format!("{label} — {}", step.detail));
-                if ui.button(step.action).clicked() {
-                    chosen = Some(step.destination);
-                }
-                ui.end_row();
-            }
-        });
-    if let Some(destination) = chosen {
-        go(app, ctx, destination);
-    }
-}
-
-/// Non-grid fallback used where a table layout is unavailable.
-pub(super) fn step_list(app: &mut MzViewerApp, ctx: &egui::Context, ui: &mut egui::Ui) {
-    let list = steps(app);
-    let mut chosen: Option<Destination> = None;
-    for step in &list {
-        let glyph = state_glyph(step.state);
-        ui.horizontal_wrapped(|ui| {
-            ui.label(format!("{glyph} {}. {}", step.number, step.title));
-            if ui.small_button(step.action).clicked() {
-                chosen = Some(step.destination);
-            }
-        });
-        ui.small(&step.detail);
-    }
+    .on_hover_text("Where you are in the analysis, from project to report");
     if let Some(destination) = chosen {
         go(app, ctx, destination);
     }

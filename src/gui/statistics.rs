@@ -319,7 +319,7 @@ fn step_navigator(ctx: &egui::Context, ui: &mut egui::Ui, s: &mut State) {
         .iter()
         .enumerate()
         {
-            ui.selectable_value(&mut step, index, *label);
+            super::widgets::nav_value(ui, &mut step, index, label);
         }
     });
     ctx.data_mut(|d| d.insert_temp(egui::Id::new("statistics_onboarding_step"), step));

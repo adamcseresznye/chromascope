@@ -47,6 +47,44 @@ pub enum Weighting {
     Unweighted,
     InverseX,
     InverseX2,
+    InverseY,
+    InverseY2,
+}
+impl Weighting {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Unweighted => "None",
+            Self::InverseX => "1/x",
+            Self::InverseX2 => "1/x²",
+            Self::InverseY => "1/y",
+            Self::InverseY2 => "1/y²",
+        }
+    }
+}
+/// Shape of the calibration curve. Average response factor is `Polynomial` of degree 1 through
+/// zero weighted 1/x² (the weighted least-squares slope is exactly the mean of y/x).
+#[cfg_attr(feature = "mcp-headless", derive(rmcp::schemars::JsonSchema))]
+#[cfg_attr(feature = "mcp-headless", schemars(crate = "rmcp::schemars"))]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum Curve {
+    /// Polynomial in concentration; `degree` and `intercept` apply.
+    #[default]
+    Polynomial,
+    /// Straight line in log(response) against log(concentration): y = a·x^b.
+    /// Weights apply to the log-transformed regression; `degree` and `intercept` are ignored.
+    LogLog,
+    /// Straight segments between the mean response of each concentration level.
+    PointToPoint,
+}
+impl Curve {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Polynomial => "Polynomial",
+            Self::LogLog => "Log-log",
+            Self::PointToPoint => "Point-to-point",
+        }
+    }
 }
 #[cfg_attr(feature = "mcp-headless", derive(rmcp::schemars::JsonSchema))]
 #[cfg_attr(feature = "mcp-headless", schemars(crate = "rmcp::schemars"))]
@@ -62,6 +100,8 @@ pub enum Intercept {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct CalibrationConfig {
+    #[serde(default)]
+    pub curve: Curve,
     pub degree: usize,
     pub intercept: Intercept,
     pub weighting: Weighting,
@@ -164,6 +204,11 @@ pub struct PointDiagnostic {
 #[cfg_attr(feature = "mcp-headless", schemars(crate = "rmcp::schemars"))]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Calibration {
+    #[serde(default)]
+    pub curve: Curve,
+    /// Point-to-point only: (concentration, mean response) of each level, ascending.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub knots: Vec<[f64; 2]>,
     pub range: [f64; 2],
     pub unit: Unit,
     pub coefficients: Vec<f64>,
@@ -178,16 +223,37 @@ pub struct Calibration {
 }
 impl Calibration {
     pub fn response(&self, x: f64) -> f64 {
-        self.coefficients
-            .iter()
-            .rev()
-            .fold(0.0, |v, c| v * (x / self.scale) + c)
+        match self.curve {
+            Curve::Polynomial => self
+                .coefficients
+                .iter()
+                .rev()
+                .fold(0.0, |v, c| v * (x / self.scale) + c),
+            Curve::LogLog => {
+                if x <= 0.0 {
+                    0.0
+                } else {
+                    (self.coefficients[0] + self.coefficients[1] * (x / self.scale).ln()).exp()
+                }
+            }
+            Curve::PointToPoint => {
+                let k = &self.knots;
+                let i = k
+                    .windows(2)
+                    .position(|w| x <= w[1][0])
+                    .unwrap_or(k.len().saturating_sub(2));
+                let (a, b) = (k[i], k[i + 1]);
+                a[1] + (b[1] - a[1]) * (x - a[0]) / (b[0] - a[0])
+            }
+        }
     }
     /// All distinct roots within the validated domain. Never chooses among multiple roots.
     pub fn inverse(&self, y: f64, range: [f64; 2]) -> Result<f64> {
         if !y.is_finite()
-            || self.coefficients.len() < 2
-            || self.coefficients.len() > 4
+            || (self.curve == Curve::Polynomial
+                && (self.coefficients.len() < 2 || self.coefficients.len() > 4))
+            || (self.curve == Curve::LogLog && self.coefficients.len() != 2)
+            || (self.curve == Curve::PointToPoint && self.knots.len() < 2)
             || self.coefficients.iter().any(|v| !v.is_finite())
             || !self.scale.is_finite()
             || self.scale <= 0.0
@@ -200,10 +266,13 @@ impl Calibration {
         }
         let c = &self.coefficients;
         let mut edges = vec![range[0], range[1]];
-        if c.len() == 3 && c[2] != 0.0 {
+        if self.curve == Curve::PointToPoint {
+            edges.extend(self.knots.iter().map(|k| k[0]));
+        }
+        if self.curve == Curve::Polynomial && c.len() == 3 && c[2] != 0.0 {
             edges.push(-c[1] / (2.0 * c[2]) * self.scale);
         }
-        if c.len() == 4 {
+        if self.curve == Curve::Polynomial && c.len() == 4 {
             let (a, b, d) = (3.0 * c[3], 2.0 * c[2], c[1]);
             if a == 0.0 {
                 if b != 0.0 {
@@ -274,20 +343,31 @@ impl Calibration {
 }
 pub fn fit(points: &[(String, f64, f64)], cfg: &CalibrationConfig) -> Result<Calibration> {
     validate_config(cfg)?;
-    let free = matches!(cfg.intercept, Intercept::Free);
+    let curve = cfg.curve;
+    let poly = curve == Curve::Polynomial;
+    let free = !poly || matches!(cfg.intercept, Intercept::Free);
     let offset = match cfg.intercept {
-        Intercept::Fixed(v) => v,
+        Intercept::Fixed(v) if poly => v,
         _ => 0.0,
     };
-    let columns = cfg.degree + usize::from(free);
-    if points.len() <= columns {
-        return Err(invalid(
-            "Calibration requires more observations than fitted parameters",
-        ));
-    }
+    let degree = if poly { cfg.degree } else { 1 };
     let distinct: HashSet<_> = points.iter().map(|p| p.1.to_bits()).collect();
-    if distinct.len() < cfg.degree + 1 {
-        return Err(invalid("Insufficient distinct calibration levels"));
+    let columns = degree + usize::from(free);
+    if curve == Curve::PointToPoint {
+        if distinct.len() < 2 {
+            return Err(invalid(
+                "Point-to-point calibration needs at least two levels",
+            ));
+        }
+    } else {
+        if points.len() <= columns {
+            return Err(invalid(
+                "Calibration requires more observations than fitted parameters",
+            ));
+        }
+        if distinct.len() < degree + 1 {
+            return Err(invalid("Insufficient distinct calibration levels"));
+        }
     }
     let scale = points.iter().map(|p| p.1.abs()).fold(0.0, f64::max);
     if scale <= 0.0 {
@@ -300,12 +380,27 @@ pub fn fit(points: &[(String, f64, f64)], cfg: &CalibrationConfig) -> Result<Cal
                 "Calibration observations must be finite, with nonnegative concentrations",
             ));
         }
-        let weight = match cfg.weighting {
+        if curve == Curve::LogLog && (*x <= 0.0 || *y <= 0.0) {
+            return Err(invalid(
+                "Log-log calibration needs positive concentrations and responses; exclude zero standards explicitly",
+            ));
+        }
+        let weighting = if curve == Curve::PointToPoint {
+            &Weighting::Unweighted
+        } else {
+            &cfg.weighting
+        };
+        let weight = match weighting {
             Weighting::Unweighted => 1.0,
             Weighting::InverseX if *x > 0.0 => 1.0 / x,
             Weighting::InverseX2 if *x > 0.0 => 1.0 / (x * x),
-            _ => return Err(invalid(
+            Weighting::InverseY if *y > 0.0 => 1.0 / y,
+            Weighting::InverseY2 if *y > 0.0 => 1.0 / (y * y),
+            Weighting::InverseX | Weighting::InverseX2 => return Err(invalid(
                 "1/x weighting requires positive concentrations; exclude zero standards explicitly",
+            )),
+            _ => return Err(invalid(
+                "1/y weighting requires positive responses; exclude such standards explicitly",
             )),
         };
         if !weight.is_finite() || weight <= 0.0 {
@@ -320,38 +415,74 @@ pub fn fit(points: &[(String, f64, f64)], cfg: &CalibrationConfig) -> Result<Cal
             "Validated range exceeds observed standard concentrations",
         ));
     }
-    let a = DMatrix::from_fn(points.len(), columns, |r, c| {
-        weights[r].sqrt() * (points[r].1 / scale).powi((c + usize::from(!free)) as i32)
-    });
-    let b = DVector::from_iterator(
-        points.len(),
-        points
-            .iter()
-            .zip(&weights)
-            .map(|(p, w)| (p.2 - offset) * w.sqrt()),
-    );
-    let svd = a.svd(true, true);
-    let largest = svd.singular_values[0];
-    let smallest = svd.singular_values[columns - 1];
-    if smallest <= largest * 1e-12 {
-        return Err(EngineError::new(
-            "singular_calibration",
-            "Rank-deficient calibration",
-        ));
-    }
-    let solution = svd.solve(&b, largest * 1e-12).map_err(invalid)?;
-    let mut coefficients = if free { Vec::new() } else { vec![offset] };
-    coefficients.extend(solution.iter().copied());
-    if coefficients.iter().any(|x| !x.is_finite()) {
+    let (coefficients, knots, condition_number) = if curve == Curve::PointToPoint {
+        let mut levels: BTreeMap<u64, (f64, f64, usize)> = BTreeMap::new();
+        for (_, x, y) in points {
+            let level = levels.entry(x.to_bits()).or_insert((*x, 0.0, 0));
+            level.1 += y;
+            level.2 += 1;
+        }
+        let mut knots: Vec<[f64; 2]> = levels
+            .values()
+            .map(|(x, sum, n)| [*x, sum / *n as f64])
+            .collect();
+        knots.sort_by(|a, b| a[0].total_cmp(&b[0]));
+        (Vec::new(), knots, 1.0)
+    } else {
+        let log = curve == Curve::LogLog;
+        let a = DMatrix::from_fn(points.len(), columns, |r, c| {
+            let x = points[r].1 / scale;
+            let basis = if log {
+                if c == 0 {
+                    1.0
+                } else {
+                    x.ln()
+                }
+            } else {
+                x.powi((c + usize::from(!free)) as i32)
+            };
+            weights[r].sqrt() * basis
+        });
+        let b = DVector::from_iterator(
+            points.len(),
+            points.iter().zip(&weights).map(|(p, w)| {
+                let y = if log { p.2.ln() } else { p.2 - offset };
+                y * w.sqrt()
+            }),
+        );
+        let svd = a.svd(true, true);
+        let largest = svd.singular_values[0];
+        let smallest = svd.singular_values[columns - 1];
+        if smallest <= largest * 1e-12 {
+            return Err(EngineError::new(
+                "singular_calibration",
+                "Rank-deficient calibration",
+            ));
+        }
+        let solution = svd.solve(&b, largest * 1e-12).map_err(invalid)?;
+        let mut coefficients = if free { Vec::new() } else { vec![offset] };
+        coefficients.extend(solution.iter().copied());
+        (coefficients, Vec::new(), largest / smallest)
+    };
+    if coefficients.iter().any(|x| !x.is_finite())
+        || knots.iter().flatten().any(|x| !x.is_finite())
+    {
         return Err(invalid("Calibration numerical overflow"));
     }
+    let parameters = if curve == Curve::PointToPoint {
+        knots.len()
+    } else {
+        columns
+    };
     let mut model = Calibration {
+        curve,
+        knots,
         range: cfg.range,
         unit: cfg.unit.clone(),
         coefficients,
         scale,
-        condition_number: largest / smallest,
-        residual_degrees_of_freedom: points.len() - columns,
+        condition_number,
+        residual_degrees_of_freedom: points.len().saturating_sub(parameters),
         r_squared: None,
         weighted_rmse: 0.0,
         residual_standard_error: None,
@@ -402,34 +533,50 @@ pub fn fit(points: &[(String, f64, f64)], cfg: &CalibrationConfig) -> Result<Cal
         None
     };
     model.weighted_rmse = (wsse / weights.iter().sum::<f64>()).sqrt();
-    model.residual_standard_error = Some((wsse / model.residual_degrees_of_freedom as f64).sqrt());
-    if !model.weighted_rmse.is_finite() || !model.residual_standard_error.unwrap().is_finite() {
+    model.residual_standard_error = (model.residual_degrees_of_freedom > 0)
+        .then(|| (wsse / model.residual_degrees_of_freedom as f64).sqrt());
+    if !model.weighted_rmse.is_finite()
+        || model
+            .residual_standard_error
+            .is_some_and(|v| !v.is_finite())
+    {
         return Err(invalid("Calibration diagnostic overflow"));
     }
-    if cfg.degree == 3 {
+    if poly && cfg.degree == 3 {
         model.flags.push("cubic_requires_review".into());
     }
     // A nonmonotonic curve is retained as evidence, but inverse predictions are gated.
-    let c = &model.coefficients;
-    let mut probes = vec![cfg.range[0] / scale, cfg.range[1] / scale];
-    if c.len() == 4 && c[3] != 0.0 {
-        let vertex = -c[2] / (3.0 * c[3]);
-        if vertex > probes[0] && vertex < probes[1] {
-            probes.push(vertex);
+    match curve {
+        Curve::Polynomial => {
+            let c = &model.coefficients;
+            let mut probes = vec![cfg.range[0] / scale, cfg.range[1] / scale];
+            if c.len() == 4 && c[3] != 0.0 {
+                let vertex = -c[2] / (3.0 * c[3]);
+                if vertex > probes[0] && vertex < probes[1] {
+                    probes.push(vertex);
+                }
+            }
+            let derivatives: Vec<_> = probes
+                .into_iter()
+                .map(|x| {
+                    c.iter()
+                        .enumerate()
+                        .skip(1)
+                        .map(|(j, c)| j as f64 * c * x.powi(j as i32 - 1))
+                        .sum::<f64>()
+                })
+                .collect();
+            if derivatives.iter().any(|d| *d < 0.0) && derivatives.iter().any(|d| *d > 0.0) {
+                model.flags.push("nonmonotonic_calibration".into());
+            }
         }
-    }
-    let derivatives: Vec<_> = probes
-        .into_iter()
-        .map(|x| {
-            c.iter()
-                .enumerate()
-                .skip(1)
-                .map(|(j, c)| j as f64 * c * x.powi(j as i32 - 1))
-                .sum::<f64>()
-        })
-        .collect();
-    if derivatives.iter().any(|d| *d < 0.0) && derivatives.iter().any(|d| *d > 0.0) {
-        model.flags.push("nonmonotonic_calibration".into());
+        Curve::LogLog => {}
+        Curve::PointToPoint => {
+            let steps: Vec<f64> = model.knots.windows(2).map(|w| w[1][1] - w[0][1]).collect();
+            if steps.iter().any(|d| *d <= 0.0) && steps.iter().any(|d| *d >= 0.0) {
+                model.flags.push("nonmonotonic_calibration".into());
+            }
+        }
     }
     if model.condition_number > 1e8 {
         model.flags.push("ill_conditioned_calibration".into());
