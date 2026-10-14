@@ -145,10 +145,7 @@ pub(super) fn card<R>(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui
         .inner_margin(10)
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.label(egui::RichText::new(title).font(egui::FontId::new(
-                14.0,
-                egui::FontFamily::Name("Inter SemiBold".into()),
-            )));
+            ui.label(egui::RichText::new(title).font(semibold_sized(ui, 14.0)));
             ui.add_space(2.0);
             add(ui)
         })
@@ -204,8 +201,16 @@ pub(super) fn strong(ui: &mut egui::Ui, text: impl Into<String>) -> Response {
 }
 
 pub(super) fn semibold(ui: &egui::Ui) -> egui::FontId {
+    semibold_sized(ui, TextStyle::Body.resolve(ui.style()).size)
+}
+
+/// SemiBold when the font is installed (fonts apply from the frame after
+/// `configure`, and bare test contexts never install them), else the default.
+pub(super) fn semibold_sized(ui: &egui::Ui, size: f32) -> egui::FontId {
+    let family = egui::FontFamily::Name("Inter SemiBold".into());
+    let installed = ui.ctx().fonts(|f| f.families().contains(&family));
     egui::FontId::new(
-        TextStyle::Body.resolve(ui.style()).size,
-        egui::FontFamily::Name("Inter SemiBold".into()),
+        size,
+        if installed { family } else { egui::FontFamily::Proportional },
     )
 }
