@@ -83,7 +83,8 @@ pub fn update_data_selection_panel(app: &mut MzViewerApp, ctx: &Context) {
                     ui.menu_button("Export", |ui| {
                         let has_trace=app.active_file_id.and_then(|id|app.files.get(&id)).is_some_and(|f|f.cache.plot_data.is_some());
                         if ui
-                            .add_enabled(has_trace,egui::Button::new("Chromatogram CSV…"))
+                            .add_enabled_ui(has_trace, |ui| super::widgets::icon_item(ui, super::icons::Icon::Export, "Chromatogram CSV…"))
+                            .inner
                             .on_hover_text("Export the active chromatogram to CSV")
                             .clicked()
                         {
@@ -100,7 +101,7 @@ pub fn update_data_selection_panel(app: &mut MzViewerApp, ctx: &Context) {
                             .is_some();
 
                         ui.add_enabled_ui(has_spectrum, |ui| {
-                            let btn = ui.button("Spectrum CSV…").on_hover_text(if has_spectrum {
+                            let btn = super::widgets::icon_item(ui, super::icons::Icon::Export, "Spectrum CSV…").on_hover_text(if has_spectrum {
                                 "Export the mass spectrum at the current retention time to CSV"
                             } else {
                                 "Double-click the chromatogram first to load a spectrum"
@@ -116,7 +117,7 @@ pub fn update_data_selection_panel(app: &mut MzViewerApp, ctx: &Context) {
                     });
                 }
                 ui.separator();
-                if ui.button("About Chromascope…").clicked() {
+                if super::widgets::icon_item(ui, super::icons::Icon::Info, "About Chromascope…").clicked() {
                     ctx.data_mut(|d| d.insert_temp(egui::Id::new("about_open"), true));
                     ui.close();
                 }

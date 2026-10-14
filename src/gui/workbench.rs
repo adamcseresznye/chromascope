@@ -224,10 +224,6 @@ pub fn configure_with(ctx: &Context, preference: egui::ThemePreference) {
             include_bytes!("../../assets/fonts/inter/Inter-Regular.ttf").as_slice(),
         ),
         (
-            "Inter Medium",
-            include_bytes!("../../assets/fonts/inter/Inter-Medium.ttf").as_slice(),
-        ),
-        (
             "Inter SemiBold",
             include_bytes!("../../assets/fonts/inter/Inter-SemiBold.ttf").as_slice(),
         ),

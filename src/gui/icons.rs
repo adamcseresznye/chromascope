@@ -14,6 +14,8 @@ pub(super) enum Icon {
     Warning,
     Chevron,
     Folder,
+    Export,
+    Info,
 }
 
 pub(super) fn paint(p: &Painter, rect: Rect, icon: Icon, color: Color32) {
@@ -63,6 +65,16 @@ pub(super) fn paint(p: &Painter, rect: Rect, icon: Icon, color: Color32) {
             p.circle_filled(pt(8.0, 11.7), 0.9 * k, color);
         }
         Icon::Chevron => line(&[(4.0, 6.0), (8.0, 10.0), (12.0, 6.0)]),
+        Icon::Export => {
+            line(&[(8.0, 10.0), (8.0, 2.0)]);
+            line(&[(4.5, 5.5), (8.0, 2.0), (11.5, 5.5)]);
+            line(&[(2.5, 10.0), (2.5, 13.5), (13.5, 13.5), (13.5, 10.0)]);
+        }
+        Icon::Info => {
+            p.circle_stroke(pt(8.0, 8.0), 6.2 * k, stroke);
+            line(&[(8.0, 7.2), (8.0, 11.2)]);
+            p.circle_filled(pt(8.0, 4.9), 0.9 * k, color);
+        }
         Icon::Folder => {
             line(&[(1.5, 4.0), (1.5, 13.0), (14.5, 13.0), (14.5, 5.5), (7.5, 5.5), (6.5, 3.5), (1.5, 3.5), (1.5, 4.0)]);
         }
