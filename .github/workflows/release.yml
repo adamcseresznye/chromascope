@@ -1,43 +1,261 @@
 name: Release
 
+# A release is published only when a version tag (v*) is pushed. Running the workflow by hand
+# (Actions > Release > Run workflow) builds every installer and keeps them as workflow artifacts
+# without creating a release, which is the way to test packaging changes.
 on:
   push:
     tags:
       - v*
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
-  create-release:
+  version:
+    name: Read version
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
     steps:
       - uses: actions/checkout@v4
-      - name: Create GitHub Release
-        uses: taiki-e/create-gh-release-action@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - id: v
+        run: |
+          V=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          if [[ "$GITHUB_REF" == refs/tags/v* && "$GITHUB_REF_NAME" != "v$V" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match the Cargo.toml version $V"
+            exit 1
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
 
-  upload-assets:
-    needs: create-release
+  linux:
+    name: Linux ${{ matrix.arch }}
+    needs: version
     strategy:
+      fail-fast: false
       matrix:
-        os:
-          - ubuntu-latest
-          - macos-latest
-          - windows-latest
-    runs-on: ${{ matrix.os }}
+        include:
+          - arch: x86_64
+            runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - arch: aarch64
+            runner: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Linux dependencies
-        if: matrix.os == 'ubuntu-latest'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Linux GUI dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libssl-dev
+          sudo apt-get install -y --no-install-recommends libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev
 
-      - name: Upload Rust Binary
-        uses: taiki-e/upload-rust-binary-action@v1
+      - uses: Swatinem/rust-cache@v2
         with:
-          bin: chromascope
-          tar: unix
-          zip: windows
+          key: ${{ matrix.target }}
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deb,cargo-generate-rpm
+
+      - uses: ./.github/actions/build-binaries
+        with:
+          target: ${{ matrix.target }}
+
+      - name: Package (tar.gz, deb, rpm, AppImage)
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.version.outputs.version }}
+          TARGET: ${{ matrix.target }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euxo pipefail
+          BIN="target/$TARGET/release"
+          NAME="chromascope-$VERSION-linux-$ARCH"
+          OUT=release-assets
+          mkdir -p "$OUT"
+          BINS="chromascope chromascope-cli chromascope-mcp chromascope-engine-mcp"
+
+          # Plain archive
+          mkdir -p "stage/$NAME"
+          for b in $BINS; do cp "$BIN/$b" "stage/$NAME/"; done
+          cp LICENSE README.md packaging/linux/chromascope.desktop packaging/icons/chromascope-512.png "stage/$NAME/"
+          tar -C stage -czf "$OUT/$NAME.tar.gz" "$NAME"
+
+          # Debian / Ubuntu and Fedora / openSUSE packages (assets are listed in Cargo.toml)
+          cargo deb --no-build --no-strip --target "$TARGET" --output "$OUT/$NAME.deb"
+          cargo generate-rpm --target "$TARGET" --arch "$ARCH" --output "$OUT/$NAME.rpm"
+
+          # AppImage (uses the system's GL, X11 and Wayland libraries)
+          mkdir -p appdir/usr/bin
+          for b in $BINS; do cp "$BIN/$b" appdir/usr/bin/; done
+          cp packaging/linux/chromascope.desktop appdir/
+          cp packaging/icons/chromascope-512.png appdir/chromascope.png
+          cp packaging/icons/chromascope-512.png appdir/.DirIcon
+          printf '%s\n' '#!/bin/sh' 'HERE="$(dirname "$(readlink -f "$0")")"' 'export PATH="$HERE/usr/bin:$PATH"' 'exec "$HERE/usr/bin/chromascope" "$@"' > appdir/AppRun
+          chmod +x appdir/AppRun
+          curl -fsSL -o appimagetool "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-$ARCH.AppImage"
+          chmod +x appimagetool
+          ARCH="$ARCH" APPIMAGE_EXTRACT_AND_RUN=1 ./appimagetool --no-appstream appdir "$OUT/$NAME.AppImage"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: assets-linux-${{ matrix.arch }}
+          path: release-assets/*
+          if-no-files-found: error
+
+  windows:
+    name: Windows ${{ matrix.arch }}
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            target: x86_64-pc-windows-msvc
+          - arch: arm64
+            target: aarch64-pc-windows-msvc
+          - arch: x86
+            target: i686-pc-windows-msvc
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - uses: ./.github/actions/build-binaries
+        with:
+          target: ${{ matrix.target }}
+
+      - name: Package (portable zip and MSI)
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          TARGET: ${{ matrix.target }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euxo pipefail
+          BIN="target/$TARGET/release"
+          NAME="chromascope-$VERSION-windows-$ARCH"
+          OUT=release-assets
+          mkdir -p "$OUT" bin "stage/$NAME"
+          for b in chromascope chromascope-cli chromascope-mcp chromascope-engine-mcp; do
+            cp "$BIN/$b.exe" bin/
+            cp "$BIN/$b.exe" "stage/$NAME/"
+          done
+          cp LICENSE README.md "stage/$NAME/"
+          (cd stage && 7z a -tzip "../$OUT/$NAME-portable.zip" "$NAME")
+
+          # MSI versions must be numeric (a.b.c); drop any pre-release suffix.
+          MSI_VERSION="${VERSION%%-*}"
+          dotnet tool install --global wix --version 5.0.2
+          export PATH="$PATH:$HOME/.dotnet/tools"
+          wix build -arch "$ARCH" \
+            -d Version="$MSI_VERSION" -d BinDir=bin -d IconFile=packaging/icons/chromascope.ico \
+            -o "$OUT/$NAME.msi" packaging/windows/chromascope.wxs
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: assets-windows-${{ matrix.arch }}
+          path: release-assets/*
+          if-no-files-found: error
+
+  macos:
+    name: macOS universal
+    needs: version
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: ./.github/actions/build-binaries
+        with:
+          target: aarch64-apple-darwin
+
+      - uses: ./.github/actions/build-binaries
+        with:
+          target: x86_64-apple-darwin
+
+      - name: Package (zip and dmg)
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euxo pipefail
+          NAME="chromascope-$VERSION-macos-universal"
+          OUT=release-assets
+          mkdir -p "$OUT" universal
+          BINS="chromascope chromascope-cli chromascope-mcp chromascope-engine-mcp"
+
+          # Merge the two architectures. lipo invalidates signatures and Apple silicon refuses
+          # unsigned code, so every result gets an ad-hoc signature. Without an Apple Developer
+          # ID the app is not notarised: users open it once via right-click > Open.
+          for b in $BINS; do
+            lipo -create "target/aarch64-apple-darwin/release/$b" "target/x86_64-apple-darwin/release/$b" -output "universal/$b"
+            codesign --force -s - "universal/$b"
+          done
+
+          # Archive with the command-line and MCP tools
+          mkdir -p "stage/$NAME"
+          cp universal/* LICENSE README.md "stage/$NAME/"
+          (cd stage && zip -qr "../$OUT/$NAME.zip" "$NAME")
+
+          # Disk image: the app bundle, the other tools and an Applications shortcut
+          MAC_VERSION="${VERSION%%-*}"
+          APP="stage/dmg/Chromascope.app"
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "stage/dmg/Command line tools"
+          cp universal/chromascope "$APP/Contents/MacOS/"
+          cp packaging/icons/chromascope.icns "$APP/Contents/Resources/"
+          sed "s/@VERSION@/$MAC_VERSION/g" packaging/macos/Info.plist > "$APP/Contents/Info.plist"
+          codesign --force --deep -s - "$APP"
+          cp universal/chromascope-cli universal/chromascope-mcp universal/chromascope-engine-mcp "stage/dmg/Command line tools/"
+          ln -s /Applications stage/dmg/Applications
+          hdiutil create -volname Chromascope -srcfolder stage/dmg -ov -format UDZO "$OUT/$NAME.dmg"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: assets-macos
+          path: release-assets/*
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: assets-*
+          merge-multiple: true
+          path: release-assets
+
+      - name: Checksums
+        working-directory: release-assets
+        run: sha256sum * > SHA256SUMS.txt
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+          generate_release_notes: true

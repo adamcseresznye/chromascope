@@ -1,0 +1,26 @@
+name: Build chromascope binaries
+description: Builds the desktop, CLI and both MCP executables in release mode for one Rust target.
+
+inputs:
+  target:
+    description: Rust target triple
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Desktop app (chromascope)
+      shell: bash
+      run: cargo build --locked --release --target "${{ inputs.target }}" --bin chromascope
+
+    - name: Command-line interface (chromascope-cli)
+      shell: bash
+      run: cargo build --locked --release --target "${{ inputs.target }}" --no-default-features --bin chromascope-cli
+
+    - name: Headless MCP server (chromascope-engine-mcp)
+      shell: bash
+      run: cargo build --locked --release --target "${{ inputs.target }}" --no-default-features --features mcp-headless --bin chromascope-engine-mcp
+
+    - name: Desktop MCP bridge (chromascope-mcp)
+      shell: bash
+      run: cargo build --locked --release --target "${{ inputs.target }}" --features mcp --bin chromascope-mcp

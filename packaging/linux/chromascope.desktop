@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Chromascope
+GenericName=Mass spectrometry viewer
+Comment=Inspect chromatograms and spectra, integrate peaks and quantify
+Exec=chromascope %F
+Icon=chromascope
+Terminal=false
+Categories=Science;Chemistry;DataVisualization;
+MimeType=application/x-mzml;
+StartupWMClass=chromascope

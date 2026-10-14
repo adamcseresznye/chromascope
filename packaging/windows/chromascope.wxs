@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  WiX v4/v5 source for the Chromascope installer.
+  Build (from the repository root):
+    wix build -arch x64 -d Version=0.3.0 -d BinDir=dist\bin -d IconFile=packaging\icons\chromascope.ico \
+      -o chromascope-x64.msi packaging\windows\chromascope.wxs
+  -arch is x64, x86 or arm64. BinDir holds the four .exe files.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="Chromascope" Manufacturer="Adam Cseresznye" Version="$(Version)"
+           UpgradeCode="6f4c2a1e-3b8d-4a57-9c0e-7d1b5a2e8f43" Scope="perMachine">
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Chromascope is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+    <Icon Id="AppIcon.ico" SourceFile="$(IconFile)" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon.ico" />
+
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="INSTALLFOLDER" Name="Chromascope" />
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+
+    <ComponentGroup Id="Executables" Directory="INSTALLFOLDER">
+      <Component Id="GuiExe">
+        <File Id="GuiExeFile" Source="$(BinDir)\chromascope.exe" KeyPath="yes">
+          <Shortcut Id="StartMenuShortcut" Name="Chromascope" Directory="ProgramMenuFolder"
+                    WorkingDirectory="INSTALLFOLDER" Icon="AppIcon.ico" Advertise="yes" />
+        </File>
+      </Component>
+      <Component Id="CliExe">
+        <File Source="$(BinDir)\chromascope-cli.exe" KeyPath="yes" />
+      </Component>
+      <Component Id="McpExe">
+        <File Source="$(BinDir)\chromascope-mcp.exe" KeyPath="yes" />
+      </Component>
+      <Component Id="EngineMcpExe">
+        <File Source="$(BinDir)\chromascope-engine-mcp.exe" KeyPath="yes" />
+      </Component>
+      <Component Id="PathEntry" Guid="*">
+        <!-- Puts the command-line and MCP executables on PATH so AI clients can start them by name. -->
+        <Environment Id="ChromascopePath" Name="PATH" Value="[INSTALLFOLDER]" Part="last"
+                     Action="set" System="yes" Permanent="no" />
+        <RegistryValue Root="HKLM" Key="Software\Chromascope" Name="InstallDir" Type="string"
+                       Value="[INSTALLFOLDER]" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <Feature Id="Main" Title="Chromascope" Level="1">
+      <ComponentGroupRef Id="Executables" />
+    </Feature>
+  </Package>
+</Wix>

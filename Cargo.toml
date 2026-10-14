@@ -40,6 +40,38 @@ path = "src/lib.rs"
 all-features = true
 targets = ["x86_64-unknown-linux-gnu"]
 
+# Debian/Ubuntu package, built by the release workflow with `cargo deb --no-build`.
+[package.metadata.deb]
+copyright = "Adam Cseresznye"
+license-file = ["LICENSE", "0"]
+extended-description = "Chromascope inspects LC-MS chromatograms and spectra, integrates peaks and quantifies with calibration curves. Includes the command-line interface and the MCP servers for AI clients."
+section = "science"
+priority = "optional"
+depends = "$auto"
+assets = [
+    ["target/release/chromascope", "usr/bin/", "755"],
+    ["target/release/chromascope-cli", "usr/bin/", "755"],
+    ["target/release/chromascope-mcp", "usr/bin/", "755"],
+    ["target/release/chromascope-engine-mcp", "usr/bin/", "755"],
+    ["packaging/linux/chromascope.desktop", "usr/share/applications/", "644"],
+    ["packaging/icons/chromascope-512.png", "usr/share/icons/hicolor/512x512/apps/chromascope.png", "644"],
+    ["README.md", "usr/share/doc/chromascope/README.md", "644"],
+]
+
+# RPM package, built by the release workflow with `cargo generate-rpm`.
+[package.metadata.generate-rpm]
+summary = "LC-MS chromatogram and spectrum viewer with quantification"
+assets = [
+    { source = "target/release/chromascope", dest = "/usr/bin/chromascope", mode = "755" },
+    { source = "target/release/chromascope-cli", dest = "/usr/bin/chromascope-cli", mode = "755" },
+    { source = "target/release/chromascope-mcp", dest = "/usr/bin/chromascope-mcp", mode = "755" },
+    { source = "target/release/chromascope-engine-mcp", dest = "/usr/bin/chromascope-engine-mcp", mode = "755" },
+    { source = "packaging/linux/chromascope.desktop", dest = "/usr/share/applications/chromascope.desktop", mode = "644" },
+    { source = "packaging/icons/chromascope-512.png", dest = "/usr/share/icons/hicolor/512x512/apps/chromascope.png", mode = "644" },
+    { source = "README.md", dest = "/usr/share/doc/chromascope/README.md", mode = "644", doc = true },
+    { source = "LICENSE", dest = "/usr/share/licenses/chromascope/LICENSE", mode = "644", license = true },
+]
+
 [dependencies]
 ctrlc = "3.5"
 uuid = { version = "1", features = ["v4", "serde"] }
