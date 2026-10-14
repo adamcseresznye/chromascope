@@ -4,7 +4,7 @@
 //! widget state (inactive, hovered, active, open) gets an explicit fill and
 //! stroke so the app no longer shows egui's default look.
 
-use eframe::egui::{epaint::Shadow, Color32, CornerRadius, Stroke, Visuals};
+use eframe::egui::{self, epaint::Shadow, Color32, CornerRadius, Stroke, Visuals};
 
 #[derive(Clone, Copy)]
 pub(super) struct Tokens {
@@ -115,6 +115,16 @@ fn shadow(offset_y: i8, blur: u8, alpha: u8) -> Shadow {
         spread: 0,
         color: Color32::from_black_alpha(alpha),
     }
+}
+
+/// Frame for the top toolbar and bottom status bar.
+pub(super) fn bar_frame(ctx: &egui::Context, vertical: i8) -> egui::Frame {
+    egui::Frame::side_top_panel(&ctx.style()).inner_margin(egui::Margin::symmetric(12, vertical))
+}
+
+/// Frame for the data, batch and inspector side panels.
+pub(super) fn side_frame(ctx: &egui::Context) -> egui::Frame {
+    egui::Frame::side_top_panel(&ctx.style()).inner_margin(egui::Margin::symmetric(12, 10))
 }
 
 pub(super) fn visuals(dark: bool) -> Visuals {

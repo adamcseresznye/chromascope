@@ -774,10 +774,11 @@ fn validate_batch(batch: &Batch) -> Result<(), String> {
 pub(super) fn show(app: &mut MzViewerApp, ctx: &egui::Context) {
     let mut q = std::mem::take(&mut app.quant);
     egui::SidePanel::left("quant_samples")
+        .frame(super::theme::side_frame(ctx))
         .default_width(225.0)
         .resizable(true)
         .show(ctx, |ui| {
-            ui.heading("Batch samples");
+            crate::gui::widgets::section_title(ui, "Batch samples");
             ui.small("Select the loaded runs to quantify.");
             if ui.button("Add samples…").clicked() {
                 if let Some(paths) = rfd::FileDialog::new().pick_files() {
@@ -881,7 +882,7 @@ pub(super) fn show(app: &mut MzViewerApp, ctx: &egui::Context) {
     egui::CentralPanel::default().show(ctx, |ui| {
         let mut destination = None;
         ui.horizontal(|ui| {
-            ui.heading("Quantification and QC");
+            crate::gui::widgets::section_title(ui, "Quantification and QC");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.small_button("Continue to Reports →").clicked() {
                     destination = Some(super::workflow::Destination::Reports);

@@ -153,7 +153,7 @@ pub fn activity(app: &mut MzViewerApp, ctx: &Context) {
         ui.separator();
         #[cfg(feature = "mcp")]
         if let Some(bridge) = &app.remote {
-            ui.heading("Connected MCP session");
+            crate::gui::widgets::section_title(ui, "Connected MCP session");
             ui.label(format!("{} completed requests", bridge.history.len()));
             ui.label(format!(
                 "Analytical changes: {} · Exports: {}",
@@ -311,7 +311,7 @@ fn trace_segments(app: &mut MzViewerApp, ui: &mut egui::Ui) {
 }
 
 pub fn status(app: &mut MzViewerApp, ctx: &Context) {
-    egui::TopBottomPanel::bottom("workbench_status").show(ctx, |ui| {
+    egui::TopBottomPanel::bottom("workbench_status").frame(super::theme::bar_frame(ctx, 4).fill(ctx.style().visuals.faint_bg_color)).show(ctx, |ui| {
         ui.horizontal_wrapped(|ui| {
             let loading = app.files.values().filter(|file| file.is_loading).count();
             if loading > 0 {
@@ -352,13 +352,14 @@ pub fn inspector(app: &mut MzViewerApp, ctx: &Context) {
         return;
     }
     egui::SidePanel::right("workbench_inspector")
+        .frame(super::theme::side_frame(ctx))
         .default_width(PANEL_WIDTH)
         .width_range(220.0..=380.0)
         .resizable(true)
         .show(ctx, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.heading("Trace settings");
+                    crate::gui::widgets::section_title(ui, "Trace settings");
                     if ui
                         .small_button("Hide")
                         .on_hover_text("Restore this pane with Inspector in the toolbar")

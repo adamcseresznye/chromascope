@@ -16,6 +16,11 @@ pub(super) enum Icon {
     Folder,
     Export,
     Info,
+    Reset,
+    ZoomIn,
+    ZoomOut,
+    Plus,
+    Close,
 }
 
 pub(super) fn paint(p: &Painter, rect: Rect, icon: Icon, color: Color32) {
@@ -74,6 +79,32 @@ pub(super) fn paint(p: &Painter, rect: Rect, icon: Icon, color: Color32) {
             p.circle_stroke(pt(8.0, 8.0), 6.2 * k, stroke);
             line(&[(8.0, 7.2), (8.0, 11.2)]);
             p.circle_filled(pt(8.0, 4.9), 0.9 * k, color);
+        }
+        Icon::Reset => {
+            let arc: Vec<(f32, f32)> = (0..=10)
+                .map(|i| {
+                    let a = (-40.0_f32 + i as f32 * 28.0).to_radians();
+                    (8.0 + 5.5 * a.cos(), 8.0 + 5.5 * a.sin())
+                })
+                .collect();
+            line(&arc);
+            line(&[(2.2, 2.8), (5.4, 3.2), (4.4, 6.2)]);
+        }
+        Icon::ZoomIn | Icon::ZoomOut => {
+            p.circle_stroke(pt(7.0, 7.0), 4.8 * k, stroke);
+            line(&[(10.6, 10.6), (14.0, 14.0)]);
+            line(&[(4.8, 7.0), (9.2, 7.0)]);
+            if icon == Icon::ZoomIn {
+                line(&[(7.0, 4.8), (7.0, 9.2)]);
+            }
+        }
+        Icon::Plus => {
+            line(&[(8.0, 3.0), (8.0, 13.0)]);
+            line(&[(3.0, 8.0), (13.0, 8.0)]);
+        }
+        Icon::Close => {
+            line(&[(4.0, 4.0), (12.0, 12.0)]);
+            line(&[(12.0, 4.0), (4.0, 12.0)]);
         }
         Icon::Folder => {
             line(&[(1.5, 4.0), (1.5, 13.0), (14.5, 13.0), (14.5, 5.5), (7.5, 5.5), (6.5, 3.5), (1.5, 3.5), (1.5, 4.0)]);

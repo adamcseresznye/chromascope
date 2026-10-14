@@ -625,7 +625,7 @@ pub(super) fn trace_row(
 }
 pub(super) fn inspector(app: &mut MzViewerApp, ui: &mut egui::Ui) {
     ui.separator();
-    ui.heading("Traces");
+    crate::gui::widgets::section_title(ui, "Traces");
     ui.small("Use the controls before each name to show/hide or delete a trace. Click its name to select it.");
     if let Some(id) = app.active_file_id {
         let rows = trace_keys(app, false)
@@ -637,7 +637,7 @@ pub(super) fn inspector(app: &mut MzViewerApp, ui: &mut egui::Ui) {
         }
     }
     ui.separator();
-    ui.heading(format!(
+    crate::gui::widgets::section_title(ui, format!(
         "Measurements ({})",
         app.workspace.measurements.len()
     ));

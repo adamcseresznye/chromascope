@@ -28,7 +28,7 @@ use mzdata::spectrum::ScanPolarity;
 /// - `&mut self`: A mutable reference to the current instance of the struct that contains the `plot_data`, `parsed_ms_data`, `user_input`, and other relevant fields.
 /// - `ctx: &Context`: A reference to the `egui::Context` instance, which is used to update the UI's visuals.
 pub fn update_data_selection_panel(app: &mut MzViewerApp, ctx: &Context) {
-    egui::TopBottomPanel::top("data_selection_panel").show(ctx, |ui| {
+    egui::TopBottomPanel::top("data_selection_panel").frame(super::theme::bar_frame(ctx, 6)).show(ctx, |ui| {
         ui.horizontal_wrapped(|ui| {
             ui.menu_button("File", |ui| {
                 if super::widgets::icon_item(ui, super::icons::Icon::Folder, "Open data…").on_hover_text("Open one or more data files").clicked() {
@@ -134,6 +134,15 @@ pub fn update_data_selection_panel(app: &mut MzViewerApp, ctx: &Context) {
                     if changed { app.workspace.view.focus_restore = None; }
                     ui.separator();
                 }
+                ui.label("Interface size");
+                let zoom = ctx.zoom_factor();
+                ui.horizontal(|ui| {
+                    for (factor, label) in [(0.9_f32, "90%"), (1.0, "100%"), (1.15, "115%"), (1.3, "130%")] {
+                        if super::widgets::segment(ui, (zoom - factor).abs() < 0.01, None, label).clicked() {
+                            ctx.set_zoom_factor(factor);
+                        }
+                    }
+                });
                 ui.label("Theme");
                 let preference = ctx.options(|o| o.theme_preference);
                 ui.horizontal(|ui| {
@@ -536,12 +545,13 @@ pub fn update_file_information_panel(app: &mut MzViewerApp, ctx: &egui::Context)
         return;
     }
     egui::SidePanel::left("file_information_panel")
+        .frame(super::theme::side_frame(ctx))
         .default_width(220.0)
         .width_range(180.0..=380.0)
         .resizable(true)
         .show(ctx, |ui| {
             ui.horizontal_wrapped(|ui| {
-                ui.heading("Data files");
+                crate::gui::widgets::section_title(ui, "Data files");
                 if ui.small_button("Hide").clicked() {
                     app.workspace.view.files = false;
                 }

@@ -283,7 +283,7 @@ fn table_pane(
     }
     ui.horizontal(|ui| {
         for f in Filter::ALL {
-            if ui.selectable_label(*filter == f, f.label()).clicked() {
+            if crate::gui::widgets::segment(ui, *filter == f, None, f.label()).clicked() {
                 *filter = f;
             }
         }

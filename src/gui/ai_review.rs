@@ -120,7 +120,7 @@ pub(super) fn poll(app: &mut MzViewerApp, ctx: &egui::Context) {
 pub(super) fn panel(app: &mut MzViewerApp, ui: &mut egui::Ui) {
     let revision = app.project.revision();
     let mut state = std::mem::take(&mut app.ai);
-    ui.heading("Review proposals");
+    crate::gui::widgets::section_title(ui, "Review proposals");
     ui.label("Observations do not change evidence. Suggestions retain original and proposed values. Approval applies a new engine review revision; rejection retains the suggestion without changing results.");
     if ui.button("Load MCP / saved review proposal…").clicked() {
         if let Some(path) = rfd::FileDialog::new()

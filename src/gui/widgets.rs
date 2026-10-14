@@ -214,3 +214,25 @@ pub(super) fn semibold_sized(ui: &egui::Ui, size: f32) -> egui::FontId {
         if installed { family } else { egui::FontFamily::Proportional },
     )
 }
+
+/// Section title: an accent tick followed by a SemiBold label.
+pub(super) fn section_title(ui: &mut egui::Ui, text: impl Into<String>) -> Response {
+    let t = tokens(ui);
+    ui.horizontal(|ui| {
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(3.0, 15.0), Sense::hover());
+        ui.painter().rect_filled(rect, CornerRadius::same(2), t.accent);
+        ui.add_space(2.0);
+        ui.label(egui::RichText::new(text).font(semibold_sized(ui, 15.0)))
+    })
+    .inner
+}
+
+/// Option button for `ui.selectable_value` style rows (not inside a combo box).
+pub(super) fn segment_value<T: PartialEq>(ui: &mut egui::Ui, current: &mut T, value: T, label: &str) -> Response {
+    let mut response = segment(ui, *current == value, None, label);
+    if response.clicked() && *current != value {
+        *current = value;
+        response.mark_changed();
+    }
+    response
+}

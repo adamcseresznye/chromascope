@@ -200,7 +200,7 @@ pub(super) fn show(app: &mut super::MzViewerApp, ctx: &egui::Context) {
 /// or clean. Criteria come only from the configured method and retained
 /// engine reports.
 fn release_review(app: &mut super::MzViewerApp, ctx: &egui::Context, ui: &mut egui::Ui) {
-    ui.heading("Final review and release");
+    crate::gui::widgets::section_title(ui, "Final review and release");
     ui.small("The report is the release artifact. Intermediate viewer CSV/SVG and batch CSV exports stay where they are for exploration; finish here.");
     let blockers = super::workflow::export_blockers(app);
     let warnings = super::workflow::export_warnings(app);

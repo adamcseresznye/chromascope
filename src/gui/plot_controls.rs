@@ -66,16 +66,13 @@ fn plot_inner(
             .id_salt(id.with("toolbar_scroll"))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    reset = ui
-                        .small_button("Reset view")
+                    reset = super::widgets::segment(ui, false, Some(super::icons::Icon::Reset), "Reset view")
                         .on_hover_text("Restore the automatic view (keyboard: Tab to focus, Enter to activate)")
                         .clicked();
-                    zoom_in = ui
-                        .small_button("Zoom +")
+                    zoom_in = super::widgets::segment(ui, false, Some(super::icons::Icon::ZoomIn), "Zoom +")
                         .on_hover_text("Zoom in on retention time")
                         .clicked();
-                    zoom_out = ui
-                        .small_button("Zoom −")
+                    zoom_out = super::widgets::segment(ui, false, Some(super::icons::Icon::ZoomOut), "Zoom −")
                         .on_hover_text("Zoom out on retention time")
                         .clicked();
                     ui.checkbox(&mut legend, "Legend")
