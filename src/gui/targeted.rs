@@ -503,6 +503,8 @@ fn analytes_section(state: &mut UiState, ui: &mut egui::Ui) {
                             ui.label(label).on_hover_text(hint);
                             ui.add(egui::DragValue::new(value).speed(0.1).range(0.0..=1e12));
                         }
+                        ui.checkbox(&mut a.cfg.extrapolate_standards, "Extrapolate end standards")
+                            .on_hover_text("standards define the range: back-calculate one that misses the fitted curve slightly instead of rejecting it");
                     });
                 });
             });

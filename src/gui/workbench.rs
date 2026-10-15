@@ -25,7 +25,7 @@ pub fn navigation(app: &mut MzViewerApp, ui: &mut egui::Ui) {
         (IDENTIFICATION, "Identification"),
         (UNTARGETED, "Untargeted analysis"),
         (STATISTICS, "Statistics"),
-        (REPORTS, "Reports"),
+        (REPORTS, "Audit package"),
         (ACTIVITY, "AI activity"),
     ]
     .into_iter()

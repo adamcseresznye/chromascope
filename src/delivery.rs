@@ -54,7 +54,7 @@ impl Default for Config {
 fn err(e: impl ToString) -> EngineError {
     EngineError::new("adapter_failure", e)
 }
-fn escape(s: &str) -> String {
+pub(crate) fn escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
@@ -90,123 +90,103 @@ pub fn report(root: &Path, config: &Config) -> Result<Value> {
         .iter()
         .map(|a| p.load_result(root, a.result_id))
         .collect::<Result<Vec<_>>>()?;
+    let review = review(root, &p);
     Ok(
-        json!({"delivery_schema_version":1,"status":"review_draft","config":config,"project":p,"source_verification":verification(&p),"software":{"chromascope":env!("CARGO_PKG_VERSION"),"cargo_lock_sha256":lock_hash()},"results":results,"limitations":["Review decisions are attributed, not authenticated scientific release approval.","Runtime/library versions are retained per result. Reprocessing requires those compatible runtimes."]}),
+        json!({"delivery_schema_version":1,"status":"review_draft","config":config,"project":p,"review":review,"source_verification":verification(&p),"software":{"chromascope":env!("CARGO_PKG_VERSION"),"cargo_lock_sha256":lock_hash()},"results":results,"limitations":["Review decisions are attributed, not authenticated scientific release approval.","Runtime/library versions are retained per result. Reprocessing requires those compatible runtimes."]}),
     )
 }
 fn lock_hash() -> String {
     use sha2::{Digest, Sha256};
     format!("{:x}", Sha256::digest(include_bytes!("../Cargo.lock")))
 }
+/// What the human-readable report is built from: the targeted batch the scientist was
+/// working on, its latest QC evaluation and the integrated peaks with their traces.
+/// Null when the project holds no saved workspace with a targeted batch.
+fn review(root: &Path, p: &Project) -> Value {
+    let Ok(Some(ws)) = p.load_workspace(root) else {
+        return Value::Null;
+    };
+    let t = &ws["quant"]["targeted"];
+    let history = t["history"].as_array().map(Vec::as_slice).unwrap_or(&[]);
+    let index = t["current_batch"].as_u64().unwrap_or(0) as usize;
+    let Some(batch) = history.get(index).or(history.last()) else {
+        return Value::Null;
+    };
+    let peaks: Vec<Value> = ws["quant"]["results"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
+        .iter()
+        .map(|m| {
+            let flags: Vec<&Value> = m["quality"]["checks"]
+                .as_array()
+                .map(Vec::as_slice)
+                .unwrap_or(&[])
+                .iter()
+                .map(|c| &c["flag"])
+                .filter(|f| f.is_string())
+                .collect();
+            json!({
+                "source": m["source"], "sample": m["sample"], "analyte": m["analyte"],
+                "status": m["status"], "peak": m["peak"],
+                "quality": {"tier": m["quality"]["tier"], "score": m["quality"]["score"], "flags": flags},
+                "trace": m["trace"],
+            })
+        })
+        .collect();
+    let qc = t["qc"]["reports"]
+        .as_array()
+        .and_then(|r| r.last())
+        .cloned()
+        .unwrap_or(Value::Null);
+    json!({"batch": batch, "qc": qc, "peaks": peaks})
+}
 pub fn html(value: &Value) -> Result<String> {
     let c: Config = serde_json::from_value(value["config"].clone()).map_err(err)?;
     validate(&c)?;
-    let mut h = format!("<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><title>{}</title><style>body{{font:16px system-ui;max-width:1100px;margin:40px auto;padding:20px}}pre{{white-space:pre-wrap;overflow-wrap:anywhere;background:#f4f5f6;padding:16px}}svg{{width:100%;height:auto}}details{{margin:12px 0}}</style><h1>{}</h1><p>Review draft. Missing evidence and unresolved decisions remain in the full machine-readable results.</p>",escape(&c.title),escape(&c.title));
-    for section in &c.sections {
-        let content = match section.as_str() {
-            "metadata" => {
-                json!({"project_id":value["project"]["id"],"revision":value["project"]["revision"],"sources":value["source_verification"],"sample_metadata":value["results"].as_array().map(Vec::as_slice).unwrap_or(&[]).iter().filter_map(|r| {
-                    ["/output/batch/request/samples","/output/report/config/samples","/output/report/table/samples","/output/report/study/samples","/request/operation/batch/samples"].iter().find_map(|pointer|r.pointer(pointer).map(|samples|json!({"result_id":r["result_id"],"pointer":pointer,"samples":samples})))
-                }).collect::<Vec<_>>()})
-            }
-            "methods" => {
-                json!({"methods":value["project"]["methods"],"requests":value["results"].as_array().unwrap_or(&vec![]).iter().map(|r| &r["request"]).collect::<Vec<_>>()})
-            }
-            "history" => value["project"].clone(),
-            "versions" => {
-                json!({"software":value["software"],"analytical_versions":value["results"].as_array().map(Vec::as_slice).unwrap_or(&[]).iter().map(|r|json!({"result_id":r["result_id"],"kernel_version":r["kernel_version"],"provenance":r.pointer("/output/report/provenance")})).collect::<Vec<_>>()})
-            }
-            "evidence" => value["results"].clone(),
-            _ => {
-                let rows = value["results"]
-                    .as_array()
-                    .map(Vec::as_slice)
-                    .unwrap_or(&[]);
-                let selected = rows
-                    .iter()
-                    .filter(|r| {
-                        let kind = r["output"]["kind"].as_str().unwrap_or("");
-                        match section.as_str() {
-                            "chromatograms" => matches!(
-                                kind,
-                                "chromatogram"
-                                    | "chromatographic_processing"
-                                    | "targeted_quantification"
-                                    | "feature_matrix"
-                            ),
-                            "spectra" => {
-                                kind.contains("spectr")
-                                    || matches!(kind, "feature_annotations" | "feature_matrix")
-                            }
-                            "calibration" | "quantification" => {
-                                matches!(kind, "targeted_quantification" | "quantification")
-                            }
-                            "qc" => kind == "qc_report",
-                            "annotations" => matches!(
-                                kind,
-                                "feature_annotations"
-                                    | "spectral_search"
-                                    | "formula_candidates"
-                                    | "isotope_analysis"
-                            ),
-                            "statistics" => kind == "statistics",
-                            _ => false,
-                        }
-                    })
-                    .collect::<Vec<_>>();
-                if selected.is_empty() {
-                    json!({"state":"not_available","reason":"No corresponding retained analysis"})
-                } else {
-                    json!(selected)
-                }
-            }
-        };
-        h.push_str(&format!(
-            "<h2>{}</h2><pre>{}</pre>",
-            escape(section),
-            escape(&serde_json::to_string_pretty(&content).map_err(err)?)
-        ));
-    }
-    if c.sections
-        .iter()
-        .any(|s| s == "evidence" || s == "chromatograms" || s == "spectra")
-    {
-        for row in value["results"]
-            .as_array()
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
-        {
-            let response: engine::Response = serde_json::from_value(row.clone()).map_err(err)?;
-            if let Output::Chromatogram {
-                points,
-                retention_time_unit,
-                intensity_unit,
-                ..
-            } = &response.output
+    let title = escape(&c.title);
+    let mut h = format!(
+        "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{title}</title><style>{}</style><h1>{title}</h1><p class=\"dim\">Analytical review report · generated by Chromascope {}</p>",
+        crate::report_html::STYLE,
+        env!("CARGO_PKG_VERSION")
+    );
+    match crate::report_html::body(&c.sections, value) {
+        Some(body) => h.push_str(&body),
+        None => {
+            h.push_str("<p>No targeted quantification is saved in this project, so there are no calibration or concentration tables to show.</p>");
+            for row in value["results"]
+                .as_array()
+                .map(Vec::as_slice)
+                .unwrap_or(&[])
             {
-                if !points.is_empty() {
-                    h.push_str(&svg(points, retention_time_unit, intensity_unit, &c)?);
+                let response: engine::Response =
+                    serde_json::from_value(row.clone()).map_err(err)?;
+                if let Output::Chromatogram {
+                    points,
+                    retention_time_unit,
+                    intensity_unit,
+                    ..
+                } = &response.output
+                {
+                    if !points.is_empty() {
+                        h.push_str(&svg(points, retention_time_unit, intensity_unit, &c)?);
+                    }
                 }
-            }
-            for (name, figure) in analytical_figures(&response, &c)? {
-                h.push_str(&format!(
-                    "<details><summary>{}: {}</summary>{}</details>",
-                    response.result_id.0,
-                    escape(&name),
-                    figure
-                ));
-            }
-            for (name, csv) in table(&response)? {
-                h.push_str(&format!(
-                    "<details><summary>{}: {}</summary><pre>{}</pre></details>",
-                    response.result_id.0,
-                    escape(name),
-                    escape(&csv)
-                ));
+                for (name, figure) in analytical_figures(&response, &c)? {
+                    h.push_str(&format!("<h3>{}</h3>{}", escape(&name), figure));
+                }
             }
         }
     }
-    h.push_str("</html>");
+    h.push_str("<footer><p>The full machine-readable evidence (report.json, project revisions, checksums, per-result figures and CSV tables) is stored alongside this report in the audit package.</p>");
+    for l in value["limitations"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
+    {
+        h.push_str(&format!("<p>{}</p>", escape(l.as_str().unwrap_or(""))));
+    }
+    h.push_str("</footer></html>");
     Ok(h)
 }
 fn write(root: &Path, name: &str, bytes: &[u8]) -> Result<()> {

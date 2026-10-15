@@ -603,6 +603,7 @@ mod tests {
             accuracy_tolerance_percent: 15.0,
             qc_cv_limit_percent: 15.0,
             blank_response_limit: 0.0,
+            extrapolate_standards: true,
         };
         for i in [3, 4, 0, 1, 2, 5, 4, 1] {
             set_fit_choice(&mut cfg, i);

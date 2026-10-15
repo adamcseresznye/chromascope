@@ -1228,7 +1228,7 @@ mod compact_header_tests {
                         "View",
                         "Data explorer",
                         "Quantification and QC",
-                        "Reports",
+                        "Audit package",
                         "AI activity",
                     ]
                     .into_iter()

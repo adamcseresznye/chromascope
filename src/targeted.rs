@@ -113,6 +113,10 @@ pub struct CalibrationConfig {
     pub accuracy_tolerance_percent: f64,
     pub qc_cv_limit_percent: f64,
     pub blank_response_limit: f64,
+    /// Back-calculate end standards that miss the fitted curve by extrapolating instead of
+    /// rejecting them. Off for configurations saved before this existed, so they replay unchanged.
+    #[serde(default)]
+    pub extrapolate_standards: bool,
 }
 #[cfg_attr(feature = "mcp-headless", derive(rmcp::schemars::JsonSchema))]
 #[cfg_attr(feature = "mcp-headless", schemars(crate = "rmcp::schemars"))]
@@ -246,6 +250,19 @@ impl Calibration {
                 a[1] + (b[1] - a[1]) * (x - a[0]) / (b[0] - a[0])
             }
         }
+    }
+    /// Back-calculates a standard. Standards define the range, so one that misses the fitted
+    /// curve by a hair at an end is extrapolated (up to twice the top level), not rejected.
+    pub fn inverse_standard(&self, y: f64, range: [f64; 2], extrapolate: bool) -> Result<f64> {
+        let r = self.inverse(y, range);
+        if extrapolate && matches!(&r, Err(e) if e.code == "outside_calibration_range") {
+            let mut wide = self.clone();
+            wide.range = [0.0, range[1] * 2.0];
+            if let Ok(x) = wide.inverse(y, wide.range) {
+                return Ok(x);
+            }
+        }
+        r
     }
     /// All distinct roots within the validated domain. Never chooses among multiple roots.
     pub fn inverse(&self, y: f64, range: [f64; 2]) -> Result<f64> {
@@ -497,7 +514,9 @@ pub fn fit(points: &[(String, f64, f64)], cfg: &CalibrationConfig) -> Result<Cal
     for ((sample, x, y), w) in points.iter().zip(&weights) {
         let fitted = model.response(*x);
         let residual = y - fitted;
-        let back = model.inverse(*y, cfg.range).ok();
+        let back = model
+            .inverse_standard(*y, cfg.range, cfg.extrapolate_standards)
+            .ok();
         let accuracy = back.filter(|_| *x > 0.0).map(|v| (v / x) * 100.0);
         let mut flags = Vec::new();
         if back.is_some_and(|x| (x == cfg.range[0] || x == cfg.range[1]) && model.response(x) != *y)
@@ -1094,7 +1113,12 @@ pub fn evaluate(
                         f.push("blank_contamination".into());
                     }
                 } else if let Some(m) = calibrations.get(&t.id) {
-                    match m.inverse(y, cfg.range) {
+                    let inverted = if s.role == Role::Standard {
+                        m.inverse_standard(y, cfg.range, cfg.extrapolate_standards)
+                    } else {
+                        m.inverse(y, cfg.range)
+                    };
+                    match inverted {
                         Ok(x) => {
                             injected = Some(x);
                             if (x == cfg.range[0] || x == cfg.range[1]) && m.response(x) != y {

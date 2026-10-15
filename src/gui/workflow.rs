@@ -67,7 +67,7 @@ const TITLES: [&str; 9] = [
     "Fit calibration models and calculate concentrations",
     "Review batch QC and validation results",
     "Review and approve final results",
-    "Export the report and supporting data",
+    "Optional: export an audit package",
 ];
 
 /// Switch the visible workspace, preserving project, dataset, analyte, and
@@ -342,16 +342,17 @@ pub(super) fn steps(app: &MzViewerApp) -> Vec<StepStatus> {
                 StepState::Todo
             },
             detail: if !has_project {
-                "Create a project first (Project menu) — the report exports project evidence".into()
+                "Create a project first (Project menu) — the audit package exports project evidence"
+                    .into()
             } else if has_destination && !destination_exists {
                 "Project and new output folder are set — ready to export".into()
             } else if destination_exists {
                 "That output folder already exists — choose a new folder name".into()
             } else {
-                "Choose a new output folder in Reports".into()
+                "Choose a new output folder in Audit package".into()
             },
             destination: Destination::Reports,
-            action: "Export report",
+            action: "Export audit package",
         },
     ]
 }
@@ -419,7 +420,9 @@ pub(super) fn export_warnings(app: &MzViewerApp) -> Vec<String> {
 pub(super) fn export_blockers(app: &MzViewerApp) -> Vec<String> {
     let mut blockers = Vec::new();
     if !app.project.has_project() {
-        blockers.push("No project is open — the report exports retained project evidence.".into());
+        blockers.push(
+            "No project is open — the audit package exports retained project evidence.".into(),
+        );
     }
     blockers
 }
@@ -515,7 +518,7 @@ mod tests {
         assert_eq!(list.last().unwrap().number, 9);
         assert_eq!(
             list.last().unwrap().title,
-            "Export the report and supporting data"
+            "Optional: export an audit package"
         );
         // An empty workspace blocks only the project-gated report export.
         assert_eq!(list.last().unwrap().state, StepState::Blocked);

@@ -163,6 +163,7 @@ fn analytical_workloads() {
         accuracy_tolerance_percent: 15.,
         qc_cv_limit_percent: 15.,
         blank_response_limit: 0.,
+        extrapolate_standards: false,
     };
     let standards = (1..=100)
         .map(|i| (i.to_string(), i as f64, 3. + 2. * i as f64))

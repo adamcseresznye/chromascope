@@ -44,6 +44,7 @@ impl AnalyteSetup {
                 accuracy_tolerance_percent: 15.0,
                 qc_cv_limit_percent: 15.0,
                 blank_response_limit: 0.0,
+                extrapolate_standards: true,
             },
             area_bounds: [1.0, 1e30],
         }

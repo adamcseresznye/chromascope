@@ -31,6 +31,7 @@ pub mod project;
 pub mod proposals;
 pub mod qc;
 pub mod quant;
+mod report_html;
 pub mod sample_sheet;
 mod source_validation;
 pub mod spectral;

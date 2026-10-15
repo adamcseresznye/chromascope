@@ -1429,26 +1429,6 @@ fn review_stage(q: &mut QuantState, ui: &mut egui::Ui) {
         } else {
             ui.colored_label(Tokens::of(ui).good, "● nothing needs review");
         }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let more = q.results.iter().any(worth_a_look);
-            let label = if unresolved > 0 {
-                "Next needing review ›"
-            } else {
-                "Next unreviewed peak ›"
-            };
-            if ui
-                .add_enabled(unresolved > 0 || more, egui::Button::new(label))
-                .on_hover_text(if unresolved > 0 {
-                    "Jump to the next peak that is flagged, missing or measured with older settings"
-                } else {
-                    "Nothing is flagged; jump to the next medium-confidence peak you have not reviewed"
-                })
-                .clicked()
-                && next_needing_review(q)
-            {
-                super::table::scroll_to_selected(ui.ctx(), "quant_result_matrix");
-            }
-        });
     });
     ui.add_space(4.0);
     let size = ui.available_size();
@@ -1639,6 +1619,7 @@ fn review(q: &mut QuantState, ui: &mut egui::Ui) {
     let mut apply = false;
     let mut reset = false;
     let mut accept = false;
+    let mut skip_next = false;
     egui::ScrollArea::vertical()
         .id_salt("quant_review_detail")
         .auto_shrink([false, false])
@@ -1838,6 +1819,10 @@ fn review(q: &mut QuantState, ui: &mut egui::Ui) {
                                 .fill(ui.visuals().selection.bg_fill),
                         )
                         .clicked();
+                    skip_next = ui
+                        .button("Next ›")
+                        .on_hover_text("Jump to the next peak that needs a look, without accepting this one")
+                        .clicked();
                 });
             });
             if draft_changed && r.peak.is_some() {
@@ -1855,6 +1840,9 @@ fn review(q: &mut QuantState, ui: &mut egui::Ui) {
         });
     if accept && q.results[i].status != Status::Manual {
         q.results[i].status = Status::Reviewed;
+    }
+    if skip_next && !reset && !apply && next_needing_review(q) {
+        super::table::scroll_to_selected(ui.ctx(), "quant_result_matrix");
     }
     if reset {
         q.results[i].peak = q.results[i].automatic.clone();

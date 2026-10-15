@@ -120,7 +120,7 @@ fn dashboard(
             report.acceptance.required_rules.join(", ")
         ));
     });
-    ui.label("Review reason (acknowledgement does not change analytical acceptance)");
+    ui.label("Note for the audit trail (acknowledging does not change the QC verdict)");
     ui.text_edit_singleline(reason);
     let mut review = None;
     ui.collapsing("Review queue", |ui| {
@@ -229,92 +229,277 @@ fn dashboard(
     });
     review
 }
+/// Plain-language name of a rule: who it applies to and what it checks.
+fn rule_title(rule: &qc::Rule) -> String {
+    use qc::Metric::*;
+    let who = match rule.role.as_deref() {
+        Some("standard") => "Standards",
+        Some("qc") => "QC samples",
+        Some("blank") => "Blanks",
+        Some("unknown") => "Unknowns",
+        _ => "All samples",
+    };
+    let what = match rule.metric {
+        MaximumAccuracyDeviation => "every result close to its nominal value".to_string(),
+        Blank => "response stays below the limit".to_string(),
+        ref other => format!("{other:?}"),
+    };
+    format!("{who} · {what} ({})", rule.target)
+}
+/// The pass/fail limits as a readable table; edits are written back to the study draft.
+fn limits_table(state: &mut State, ui: &mut egui::Ui) {
+    let Ok(mut study) = serde_json::from_str::<qc::Study>(&state.draft) else {
+        ui.weak(
+            "No limits yet. Run a batch with calibration first, or open a study under Advanced.",
+        );
+        return;
+    };
+    let mut changed = false;
+    egui::Grid::new("qc_limits")
+        .num_columns(4)
+        .spacing([14.0, 6.0])
+        .striped(true)
+        .show(ui, |ui| {
+            for label in ["Check", "Limit", "Min. samples", "Must pass"] {
+                ui.strong(label);
+            }
+            ui.end_row();
+            for rule in &mut study.rules {
+                ui.label(rule_title(rule));
+                ui.horizontal(|ui| {
+                    use qc::Metric::*;
+                    match rule.metric {
+                        MaximumAccuracyDeviation => {
+                            ui.label("±");
+                            changed |= ui
+                                .add(
+                                    egui::DragValue::new(&mut rule.upper)
+                                        .speed(0.1)
+                                        .suffix(" %"),
+                                )
+                                .changed();
+                        }
+                        Blank => {
+                            ui.label("at most");
+                            changed |= ui
+                                .add(egui::DragValue::new(&mut rule.upper).speed(0.1))
+                                .changed();
+                        }
+                        _ => {
+                            if rule.lower != -f64::MAX {
+                                changed |= ui
+                                    .add(egui::DragValue::new(&mut rule.lower).speed(0.1))
+                                    .changed();
+                                ui.label("to");
+                            }
+                            changed |= ui
+                                .add(egui::DragValue::new(&mut rule.upper).speed(0.1))
+                                .changed();
+                        }
+                    }
+                });
+                changed |= ui
+                    .add(egui::DragValue::new(&mut rule.minimum_n).range(1..=16384))
+                    .changed();
+                changed |= ui.checkbox(&mut rule.required, "").changed();
+                ui.end_row();
+            }
+        });
+    if changed {
+        state.draft = serde_json::to_string_pretty(&study).unwrap();
+    }
+}
 pub(super) fn panel(
     state: &mut State,
     batch: Option<&crate::targeted::BatchResult>,
     ui: &mut egui::Ui,
 ) {
-    ui.collapsing("Batch QC and method validation", |ui| {
-        ui.label("Assay-specific rules retain calculations, evidence and prior evaluations. Missing required evidence prevents a pass.");
-        ui.horizontal_wrapped(|ui| {
-            if ui.add_enabled(batch.is_some(),egui::Button::new("Configure from retained batch")).clicked() {
-                let batch=batch.unwrap();
-                match qc::targeted_study(batch,qc::method_rules(batch)) {Ok(mut study)=>{state.draft_evidence=study.targeted_evidence.take();state.draft=serde_json::to_string_pretty(&study).unwrap();},Err(e)=>state.message=e.to_string()}
-            }
-            if ui.button("Open study / report…").clicked() {
-                if let Some(path)=rfd::FileDialog::new().add_filter("JSON",&["json"]).pick_file() {
-                    let result=std::fs::read_to_string(path).map_err(|e|e.to_string()).and_then(|text| {
-                        if let Ok(reports)=serde_json::from_str::<Vec<qc::Report>>(&text) {
-                            if reports.is_empty() {return Err("QC history is empty".into());}
-                            for report in &reports {qc::verify(report).map_err(|e|e.to_string())?;}
-                            state.reports.extend(reports);state.selected=state.reports.len()-1;
-                        } else if let Ok(report)=serde_json::from_str::<qc::Report>(&text) {
-                            qc::verify(&report).map_err(|e|e.to_string())?;
-                            state.reports.push(report);state.selected=state.reports.len()-1;
-                        } else {
-                            let mut study:qc::Study=serde_json::from_str(&text).map_err(|e|e.to_string())?;
-                            state.draft_evidence=study.targeted_evidence.take();
-                            state.draft=serde_json::to_string_pretty(&study).unwrap();
-                        }
-                        Ok(())
-                    });
-                    if let Err(e)=result {state.message=e;}
+    if state.draft.is_empty() && state.message.is_empty() {
+        if let Some(batch) = batch {
+            match qc::targeted_study(batch, qc::method_rules(batch)) {
+                Ok(mut study) => {
+                    state.draft_evidence = study.targeted_evidence.take();
+                    state.draft = serde_json::to_string_pretty(&study).unwrap();
                 }
+                Err(e) => state.message = e.to_string(),
             }
-        });
-        ui.label("Study groups identify levels, runs, matrix lots and preparations. Rule fields: metric, target, group, role, batch, lower, upper, minimum_n, required, reference_group. Purpose: batch_qc or method_validation.");
-        ui.collapsing("Acceptance thresholds", |ui| {
-            if let Ok(mut study)=serde_json::from_str::<qc::Study>(&state.draft) {
-                let mut changed=false;
-                for rule in &mut study.rules {
-                    ui.push_id(&rule.id,|ui| {
-                        ui.label(format!("{} / {} / {:?}",rule.id,rule.target,rule.metric));
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label("Lower (inclusive)");changed|=ui.add(egui::DragValue::new(&mut rule.lower).speed(0.1)).changed();
-                            ui.label("Upper (inclusive)");changed|=ui.add(egui::DragValue::new(&mut rule.upper).speed(0.1)).changed();
-                            ui.label("Minimum n");changed|=ui.add(egui::DragValue::new(&mut rule.minimum_n).range(1..=16384)).changed();
-                            changed|=ui.checkbox(&mut rule.required,"Required for acceptance").changed();
-                        });
-                    });
-                }
-                if changed {state.draft=serde_json::to_string_pretty(&study).unwrap();}
-            } else {ui.label("Load or configure a study to edit its thresholds.");}
-        });
-        super::forms::typed::<qc::Study>(ui,"Study design, observations and acceptance rules",&mut state.draft);
-        ui.collapsing("Available calculations", |ui| {ui.label("accuracy, maximum_accuracy_deviation, precision, blank, carryover, internal_standard_cv, rt_drift, mass_error, order_slope, rt_drift_slope, mass_drift_slope, internal_standard_slope, missingness, calibration_acceptance, calibration_r2, calibration_rmse, calibration_accuracy_deviation, control_chart, recovery, matrix_factor, process_efficiency, selectivity, stability, dilution_integrity");});
-        ui.collapsing("Advanced study JSON", |ui| { egui::ScrollArea::vertical().id_salt("qc_draft_scroll").max_height(220.0).show(ui, |ui| {ui.add(egui::TextEdit::multiline(&mut state.draft).desired_rows(7).desired_width(ui.available_width()).code_editor());}); });
-        if ui.button("Evaluate and retain QC").clicked() {
-            let result=serde_json::from_str::<qc::Study>(&state.draft).map_err(|e|e.to_string()).and_then(|mut study| {
-                if study.targeted_evidence.is_none() {study.targeted_evidence=state.draft_evidence.clone();}
-                execute(if study.purpose=="method_validation" {crate::domain::Operation::ValidateMethod{study}} else {crate::domain::Operation::EvaluateQc{study}})
-            });
-            match result {Ok(report)=>{state.reports.push(report);state.selected=state.reports.len()-1;state.message="QC evaluation retained".into();},Err(e)=>state.message=e}
         }
-        ui.label(&state.message);
-        if state.reports.is_empty() {return;}
-        egui::ComboBox::from_id_salt("qc_history").selected_text(format!("QC evaluation {}",state.selected+1)).show_ui(ui, |ui| {
-            for i in 0..state.reports.len(){ui.selectable_value(&mut state.selected,i,format!("Evaluation {}",i+1));}
-        });
-        let report=&state.reports[state.selected];
-        ui.horizontal(|ui| {
-            if ui.button("Save QC history JSON…").clicked() {
-                if let Some(path)=rfd::FileDialog::new().save_file() {
-                    state.message=match serde_json::to_vec_pretty(&state.reports).map_err(|e|e.to_string()).and_then(|b|save(&path,&b).map_err(|e|e.to_string())) {Ok(())=>"QC history saved".into(),Err(e)=>e};
+    }
+    ui.label(
+        "Batch QC checks the whole run against pass/fail limits (for example standards and QC \
+         samples within ±15 % of their nominal value, blanks clean) and tells you whether the \
+         run is acceptable.",
+    );
+    ui.add_space(6.0);
+    crate::gui::widgets::section_title(ui, "1 · Pass/fail limits");
+    ui.small("Defaults come from your calibration settings. Adjust them if your method needs different limits.");
+    limits_table(state, ui);
+    if ui
+        .add_enabled(
+            batch.is_some(),
+            egui::Button::new("Reset limits to defaults"),
+        )
+        .clicked()
+    {
+        let batch = batch.unwrap();
+        match qc::targeted_study(batch, qc::method_rules(batch)) {
+            Ok(mut study) => {
+                state.draft_evidence = study.targeted_evidence.take();
+                state.draft = serde_json::to_string_pretty(&study).unwrap();
+                state.message.clear();
+            }
+            Err(e) => state.message = e.to_string(),
+        }
+    }
+    ui.add_space(8.0);
+    crate::gui::widgets::section_title(ui, "2 · Result");
+    if ui
+        .add_enabled(
+            !state.draft.is_empty(),
+            egui::Button::new(egui::RichText::new("Evaluate batch QC").strong())
+                .fill(ui.visuals().selection.bg_fill),
+        )
+        .clicked()
+    {
+        let result = serde_json::from_str::<qc::Study>(&state.draft)
+            .map_err(|e| e.to_string())
+            .and_then(|mut study| {
+                if study.targeted_evidence.is_none() {
+                    study.targeted_evidence = state.draft_evidence.clone();
+                }
+                execute(if study.purpose == "method_validation" {
+                    crate::domain::Operation::ValidateMethod { study }
+                } else {
+                    crate::domain::Operation::EvaluateQc { study }
+                })
+            });
+        match result {
+            Ok(report) => {
+                state.reports.push(report);
+                state.selected = state.reports.len() - 1;
+                state.message = "QC evaluation retained".into();
+            }
+            Err(e) => state.message = e,
+        }
+    }
+    if !state.message.is_empty() {
+        ui.small(&state.message);
+    }
+    if !state.reports.is_empty() {
+        if state.reports.len() > 1 {
+            egui::ComboBox::from_id_salt("qc_history")
+                .selected_text(format!("QC evaluation {}", state.selected + 1))
+                .show_ui(ui, |ui| {
+                    for i in 0..state.reports.len() {
+                        ui.selectable_value(
+                            &mut state.selected,
+                            i,
+                            format!("Evaluation {}", i + 1),
+                        );
+                    }
+                });
+        }
+        let report = &state.reports[state.selected];
+        if ui.button("Export QC CSV…").clicked() {
+            if let Some(path) = rfd::FileDialog::new().save_file() {
+                state.message = match qc::csv(report)
+                    .map(String::into_bytes)
+                    .map_err(|e| e.to_string())
+                    .and_then(|b| save(&path, &b).map_err(|e| e.to_string()))
+                {
+                    Ok(()) => "Export saved".into(),
+                    Err(e) => e,
+                };
+            }
+        }
+        if let Some((rule_id, acknowledged)) = dashboard(report, &mut state.reason, ui) {
+            let result = execute(crate::domain::Operation::ReviewQc {
+                report: Box::new(report.clone()),
+                expected_revision: report.reviews.len(),
+                rule_id,
+                reason: state.reason.clone(),
+                acknowledged,
+            });
+            match result {
+                Ok(next) => {
+                    state.reports.push(next);
+                    state.selected = state.reports.len() - 1;
+                    state.message = "Review revision retained".into();
+                }
+                Err(e) => state.message = e,
+            }
+        }
+    }
+    ui.add_space(8.0);
+    ui.collapsing("Advanced: study design, JSON, saved history", |ui| {
+        ui.small("Study groups identify levels, runs, matrix lots and preparations. Most users never need this.");
+        ui.horizontal_wrapped(|ui| {
+            if ui.button("Open study / report…").clicked() {
+                if let Some(path) = rfd::FileDialog::new().add_filter("JSON", &["json"]).pick_file() {
+                    let result = std::fs::read_to_string(path)
+                        .map_err(|e| e.to_string())
+                        .and_then(|text| {
+                            if let Ok(reports) = serde_json::from_str::<Vec<qc::Report>>(&text) {
+                                if reports.is_empty() {
+                                    return Err("QC history is empty".into());
+                                }
+                                for report in &reports {
+                                    qc::verify(report).map_err(|e| e.to_string())?;
+                                }
+                                state.reports.extend(reports);
+                                state.selected = state.reports.len() - 1;
+                            } else if let Ok(report) = serde_json::from_str::<qc::Report>(&text) {
+                                qc::verify(&report).map_err(|e| e.to_string())?;
+                                state.reports.push(report);
+                                state.selected = state.reports.len() - 1;
+                            } else {
+                                let mut study: qc::Study =
+                                    serde_json::from_str(&text).map_err(|e| e.to_string())?;
+                                state.draft_evidence = study.targeted_evidence.take();
+                                state.draft = serde_json::to_string_pretty(&study).unwrap();
+                            }
+                            Ok(())
+                        });
+                    if let Err(e) = result {
+                        state.message = e;
+                    }
                 }
             }
-            for (label,json) in [("Save QC evidence JSON…",true),("Export QC CSV…",false)] {
-                if ui.button(label).clicked() {
-                    if let Some(path)=rfd::FileDialog::new().save_file() {
-                        let bytes=if json {serde_json::to_vec_pretty(report).map_err(|e|e.to_string())} else {qc::csv(report).map(String::into_bytes).map_err(|e|e.to_string())};
-                        state.message=match bytes.and_then(|b|save(&path,&b).map_err(|e|e.to_string())) {Ok(())=>"Export saved".into(),Err(e)=>e};
+            if !state.reports.is_empty() {
+                if ui.button("Save QC history JSON…").clicked() {
+                    if let Some(path) = rfd::FileDialog::new().save_file() {
+                        state.message = match serde_json::to_vec_pretty(&state.reports)
+                            .map_err(|e| e.to_string())
+                            .and_then(|b| save(&path, &b).map_err(|e| e.to_string()))
+                        {
+                            Ok(()) => "QC history saved".into(),
+                            Err(e) => e,
+                        };
+                    }
+                }
+                if ui.button("Save QC evidence JSON…").clicked() {
+                    if let Some(path) = rfd::FileDialog::new().save_file() {
+                        let report = &state.reports[state.selected];
+                        state.message = match serde_json::to_vec_pretty(report)
+                            .map_err(|e| e.to_string())
+                            .and_then(|b| save(&path, &b).map_err(|e| e.to_string()))
+                        {
+                            Ok(()) => "Export saved".into(),
+                            Err(e) => e,
+                        };
                     }
                 }
             }
         });
-        if let Some((rule_id,acknowledged))=dashboard(report,&mut state.reason,ui) {
-            let result=execute(crate::domain::Operation::ReviewQc{report:Box::new(report.clone()),expected_revision:report.reviews.len(),rule_id,reason:state.reason.clone(),acknowledged});
-            match result {Ok(next)=>{state.reports.push(next);state.selected=state.reports.len()-1;state.message="Review revision retained".into();},Err(e)=>state.message=e}
-        }
+        super::forms::typed::<qc::Study>(ui, "Study design, observations and acceptance rules", &mut state.draft);
+        ui.collapsing("Available calculations", |ui| {
+            ui.label("accuracy, maximum_accuracy_deviation, precision, blank, carryover, internal_standard_cv, rt_drift, mass_error, order_slope, rt_drift_slope, mass_drift_slope, internal_standard_slope, missingness, calibration_acceptance, calibration_r2, calibration_rmse, calibration_accuracy_deviation, control_chart, recovery, matrix_factor, process_efficiency, selectivity, stability, dilution_integrity");
+        });
+        ui.collapsing("Advanced study JSON", |ui| {
+            egui::ScrollArea::vertical().id_salt("qc_draft_scroll").max_height(220.0).show(ui, |ui| {
+                ui.add(egui::TextEdit::multiline(&mut state.draft).desired_rows(7).desired_width(ui.available_width()).code_editor());
+            });
+        });
     });
 }
 #[cfg(test)]
@@ -404,13 +589,6 @@ mod tests {
         let ctx = egui::Context::default();
         ctx.style_mut(|s| s.animation_time = 0.0);
         let mut frames = vec![frame(&mut state, &batch, &ctx, vec![])];
-        click(
-            &mut state,
-            &batch,
-            &ctx,
-            "Batch QC and method validation",
-            &mut frames,
-        );
         // Independent method studies remain usable without a targeted run.
         let standalone = ctx.run(
             egui::RawInput {
@@ -424,19 +602,12 @@ mod tests {
                 egui::CentralPanel::default().show(ctx, |ui| panel(&mut state, None, ui));
             },
         );
-        assert!(super::super::test_render::text_center(
-            &standalone.shapes,
-            "Evaluate and retain QC"
-        )
-        .is_some());
-        frames.push(standalone);
-        click(
-            &mut state,
-            &batch,
-            &ctx,
-            "Evaluate and retain QC",
-            &mut frames,
+        assert!(
+            super::super::test_render::text_center(&standalone.shapes, "Evaluate batch QC")
+                .is_some()
         );
+        frames.push(standalone);
+        click(&mut state, &batch, &ctx, "Evaluate batch QC", &mut frames);
         assert_eq!(state.reports.len(), 1, "{}", state.message);
         assert_eq!(state.reports[0].status, qc::Status::Fail);
         let d = &state.reports[0].decisions[0];

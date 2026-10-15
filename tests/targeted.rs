@@ -24,6 +24,7 @@ fn config() -> CalibrationConfig {
         accuracy_tolerance_percent: 15.0,
         qc_cv_limit_percent: 15.0,
         blank_response_limit: 0.5,
+        extrapolate_standards: false,
     }
 }
 fn close(a: f64, b: f64) {

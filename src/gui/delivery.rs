@@ -77,133 +77,162 @@ pub(super) fn show(app: &mut super::MzViewerApp, ctx: &egui::Context) {
         }
     }
     let mut open = app.delivery.open;
-    super::workbench::analytical_panel(ctx, "Reports and exports", &mut open, |ui| {
+    super::workbench::analytical_panel(ctx, "Audit package (optional)", &mut open, |ui| {
         release_review(app, ctx, ui);
-        ui.separator();
+        ui.add_space(8.0);
         let s = &mut app.delivery;
-        ui.label(
-            "Open an engine project directory. Export retains all evidence and original history.",
-        );
-        ui.horizontal(|ui| {
-            ui.label("Project");
-            ui.text_edit_singleline(&mut s.project);
-            if ui.button("Browse").clicked() {
-                if let Some(p) = rfd::FileDialog::new().pick_folder() {
-                    s.project = p.display().to_string();
-                }
-            }
-        });
-        ui.label("New output directory (must not exist)");
-        ui.add(
-            egui::TextEdit::singleline(&mut s.destination)
-                .hint_text("e.g. C:/reports/review-01 — a new folder that does not exist yet"),
-        );
-        if !s.destination.is_empty() && std::path::Path::new(&s.destination).exists() {
-            ui.small("That output path already exists. Choose a new folder name.");
-        }
-        ui.label("Report title");
-        ui.add(
-            egui::TextEdit::singleline(&mut s.config.title)
-                .hint_text("Chromascope analytical review draft"),
-        );
-        ui.label("Include report sections");
-        ui.horizontal_wrapped(|ui| {
-            for section in crate::delivery::visible_sections() {
-                let mut enabled = s.config.sections.iter().any(|x| x == section);
-                if ui.checkbox(&mut enabled, section).changed() {
-                    s.config.sections.retain(|x| x != section);
-                    if enabled {
-                        s.config.sections.push(section.into());
-                    }
-                }
-            }
-        });
-        ui.horizontal(|ui| {
-            ui.label("SVG dimensions");
-            ui.add(egui::DragValue::new(&mut s.config.figure_width).range(320..=16384));
-            ui.add(egui::DragValue::new(&mut s.config.figure_height).range(240..=16384));
-        });
-        ui.checkbox(
-            &mut s.include_sources,
-            "Portable bundle with verified raw sources",
-        );
-        if ui
-            .add_enabled(
-                s.pending.is_none(),
-                egui::Button::new("Reopen project evidence / verify sources"),
-            )
-            .clicked()
-        {
-            let (tx, rx) = std::sync::mpsc::channel();
-            let root = std::path::PathBuf::from(&s.project);
-            let config = s.config.clone();
-            std::thread::spawn(move || {
-                let _ = tx.send(crate::delivery::report(&root, &config));
-            });
-            s.pending = Some(rx);
-            s.message = "Loading project evidence and verifying sources…".into();
-        }
-        egui::ScrollArea::vertical()
-            .max_height(300.0)
+        egui::CollapsingHeader::new("Package options and evidence")
+            .id_salt("report_options")
             .show(ui, |ui| {
-                ui.label(&s.message);
-                if let Some(evidence) = &s.evidence {
-                    ui.label(format!(
-                        "Project {} revision {}",
-                        evidence["project"]["id"], evidence["project"]["revision"]
-                    ));
-                    for result in evidence["results"]
-                        .as_array()
-                        .map(Vec::as_slice)
-                        .unwrap_or(&[])
-                    {
-                        let id = result["result_id"].as_str().unwrap_or("");
-                        egui::CollapsingHeader::new(format!(
-                            "{}: {}",
-                            id, result["output"]["kind"]
-                        ))
-                        .id_salt(id)
-                        .show(ui, |ui| {
-                            ui.label(serde_json::to_string_pretty(result).unwrap_or_default());
-                            if ui
-                                .add_enabled(
-                                    s.pending.is_none(),
-                                    egui::Button::new("Reprocess and compare retained evidence"),
-                                )
-                                .clicked()
-                            {
-                                match serde_json::from_value(result["result_id"].clone()) {
-                                    Ok(id) => {
-                                        let root = std::path::PathBuf::from(&s.project);
-                                        let (tx, rx) = std::sync::mpsc::channel();
-                                        std::thread::spawn(move || {
-                                            let _ = tx.send(crate::delivery::reprocess(&root, id));
-                                        });
-                                        s.pending = Some(rx);
-                                    }
-                                    Err(e) => s.message = e.to_string(),
-                                }
+                ui.label("Report title");
+                ui.add(
+                    egui::TextEdit::singleline(&mut s.config.title)
+                        .hint_text("Chromascope analytical review draft"),
+                );
+                ui.label("Include report sections");
+                ui.horizontal_wrapped(|ui| {
+                    for section in crate::delivery::visible_sections() {
+                        let mut enabled = s.config.sections.iter().any(|x| x == section);
+                        if ui.checkbox(&mut enabled, section).changed() {
+                            s.config.sections.retain(|x| x != section);
+                            if enabled {
+                                s.config.sections.push(section.into());
                             }
-                        });
+                        }
                     }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("SVG dimensions");
+                    ui.add(egui::DragValue::new(&mut s.config.figure_width).range(320..=16384));
+                    ui.label("×");
+                    ui.add(egui::DragValue::new(&mut s.config.figure_height).range(240..=16384));
+                });
+                ui.checkbox(
+                    &mut s.include_sources,
+                    "Portable bundle with verified raw sources",
+                )
+                .on_hover_text(
+                    "Copies the raw data files into the export so it can be re-verified elsewhere",
+                );
+                ui.add_space(4.0);
+                if ui
+                    .add_enabled(
+                        s.pending.is_none(),
+                        egui::Button::new("Reopen project evidence / verify sources"),
+                    )
+                    .clicked()
+                {
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    let root = std::path::PathBuf::from(&s.project);
+                    let config = s.config.clone();
+                    std::thread::spawn(move || {
+                        let _ = tx.send(crate::delivery::report(&root, &config));
+                    });
+                    s.pending = Some(rx);
+                    s.message = "Loading project evidence and verifying sources…".into();
                 }
+                egui::ScrollArea::vertical()
+                    .max_height(300.0)
+                    .show(ui, |ui| {
+                        ui.label(&s.message);
+                        if let Some(evidence) = &s.evidence {
+                            ui.label(format!(
+                                "Project {} revision {}",
+                                evidence["project"]["id"], evidence["project"]["revision"]
+                            ));
+                            for result in evidence["results"]
+                                .as_array()
+                                .map(Vec::as_slice)
+                                .unwrap_or(&[])
+                            {
+                                let id = result["result_id"].as_str().unwrap_or("");
+                                let kind = result["output"]["kind"].as_str().unwrap_or("result");
+                                egui::CollapsingHeader::new(format!(
+                                    "{} · {}",
+                                    kind.replace('_', " "),
+                                    id.get(..8).unwrap_or(id)
+                                ))
+                                .id_salt(id)
+                                .show(ui, |ui| {
+                                    ui.collapsing("Raw evidence", |ui| {
+                                        ui.label(
+                                            serde_json::to_string_pretty(result)
+                                                .unwrap_or_default(),
+                                        );
+                                    });
+                                    if ui
+                                        .add_enabled(
+                                            s.pending.is_none(),
+                                            egui::Button::new(
+                                                "Reprocess and compare retained evidence",
+                                            ),
+                                        )
+                                        .clicked()
+                                    {
+                                        match serde_json::from_value(result["result_id"].clone()) {
+                                            Ok(id) => {
+                                                let root = std::path::PathBuf::from(&s.project);
+                                                let (tx, rx) = std::sync::mpsc::channel();
+                                                std::thread::spawn(move || {
+                                                    let _ = tx.send(crate::delivery::reprocess(
+                                                        &root, id,
+                                                    ));
+                                                });
+                                                s.pending = Some(rx);
+                                            }
+                                            Err(e) => s.message = e.to_string(),
+                                        }
+                                    }
+                                });
+                            }
+                        }
+                    });
             });
     });
     app.delivery.open = open;
 }
 
-/// Final review-and-release: one visible finish for the analysis-to-report
-/// workflow. Viewer CSV/SVG and batch CSV remain available for intermediate
-/// use; this section is the release artifact. Exports are classified as
-/// blocked (missing preconditions), released with warnings (scientist
-/// acknowledgment required, warnings preserved in `review-warnings.json`),
-/// or clean. Criteria come only from the configured method and retained
-/// engine reports.
+/// Proposes a not-yet-existing report folder next to the project (`<name>-audit`, `-2`, …).
+fn suggest_destination(project: &str) -> String {
+    let path = std::path::Path::new(project);
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let name = name.trim_end_matches("_data").trim_end_matches("-project");
+    let parent = path.parent().unwrap_or(path);
+    let base = if name.is_empty() { "report" } else { name };
+    (1..100)
+        .map(|n| {
+            let folder = if n == 1 {
+                format!("{base}-audit")
+            } else {
+                format!("{base}-audit-{n}")
+            };
+            parent.join(folder)
+        })
+        .find(|p| !p.exists())
+        .unwrap_or_else(|| parent.join(format!("{base}-audit")))
+        .display()
+        .to_string()
+}
+
+/// Final review-and-release: one visible finish for the analysis-to-audit
+/// workflow, in three steps: check readiness, choose where to save, export.
+/// Exports are classified as blocked (missing preconditions), released with
+/// warnings (scientist acknowledgment required, warnings preserved in
+/// `review-warnings.json`), or clean. Criteria come only from the configured
+/// method and retained engine reports.
 fn release_review(app: &mut super::MzViewerApp, ctx: &egui::Context, ui: &mut egui::Ui) {
-    crate::gui::widgets::section_title(ui, "Final review and release");
-    ui.small("The report is the release artifact. Intermediate viewer CSV/SVG and batch CSV exports stay where they are for exploration; finish here.");
+    ui.small("Optional. Creates a new folder with a readable report (report.html: summary, calibration, concentrations, QC and peaks; print it to PDF) plus the machine-readable evidence needed to re-check results later (project history, checksums, JSON, CSV).");
+    ui.add_space(6.0);
+    if app.delivery.destination.is_empty() && !app.delivery.project.is_empty() {
+        app.delivery.destination = suggest_destination(&app.delivery.project);
+    }
     let blockers = super::workflow::export_blockers(app);
     let warnings = super::workflow::export_warnings(app);
+
+    crate::gui::widgets::section_title(ui, "1 · Check readiness");
     for blocker in &blockers {
         ui.colored_label(ui.visuals().error_fg_color, format!("Blocked — {blocker}"));
     }
@@ -211,33 +240,83 @@ fn release_review(app: &mut super::MzViewerApp, ctx: &egui::Context, ui: &mut eg
         ui.small("No open warnings: peaks resolved, calibration fitted, QC reviewed.");
     }
     for warning in &warnings {
-        ui.colored_label(ui.visuals().warn_fg_color, format!("Warning — {warning}"));
+        ui.colored_label(ui.visuals().warn_fg_color, format!("• {warning}"));
     }
     let mut chosen: Option<super::workflow::Destination> = None;
-    ui.horizontal_wrapped(|ui| {
-        ui.small("Resolve warnings where the evidence lives:");
-        if ui.small_button("Data explorer").clicked() {
-            chosen = Some(super::workflow::Destination::Data);
-        }
-        if ui.small_button("Quantification and QC").clicked() {
-            chosen = Some(super::workflow::Destination::Quant);
-        }
-        if ui.small_button("AI activity").clicked() {
-            chosen = Some(super::workflow::Destination::Activity);
-        }
-    });
-    // Readiness snapshot for the export gate below.
-    let (has_project, has_destination, destination_exists) = app.delivery.export_readiness();
-    let busy = app.delivery.busy();
+    if !warnings.is_empty() || !blockers.is_empty() {
+        ui.horizontal_wrapped(|ui| {
+            ui.small("Fix these in:");
+            if ui.small_button("Data explorer").clicked() {
+                chosen = Some(super::workflow::Destination::Data);
+            }
+            if ui.small_button("Quantification and QC").clicked() {
+                chosen = Some(super::workflow::Destination::Quant);
+            }
+            if ui.small_button("AI activity").clicked() {
+                chosen = Some(super::workflow::Destination::Activity);
+            }
+        });
+    }
     if !warnings.is_empty() && blockers.is_empty() {
         ui.checkbox(
             &mut app.delivery.accept_warnings,
             format!(
-                "I reviewed {} warning(s) above; export with warnings preserved in review-warnings.json",
+                "I reviewed {} warning(s); export anyway (saved in review-warnings.json)",
                 warnings.len()
             ),
         );
     }
+
+    ui.add_space(8.0);
+    crate::gui::widgets::section_title(ui, "2 · Choose where to save");
+    {
+        let s = &mut app.delivery;
+        ui.horizontal(|ui| {
+            ui.label("Project");
+            if s.project.is_empty() {
+                ui.weak("none open — open one from the Project menu");
+            } else {
+                ui.monospace(&s.project).on_hover_text(&s.project);
+            }
+            if ui.button("Change…").clicked() {
+                if let Some(p) = rfd::FileDialog::new().pick_folder() {
+                    s.project = p.display().to_string();
+                    s.destination = suggest_destination(&s.project);
+                }
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label("Save package to");
+            ui.add(
+                egui::TextEdit::singleline(&mut s.destination)
+                    .hint_text("a new folder that does not exist yet")
+                    .desired_width(ui.available_width() - 90.0),
+            );
+            if ui.button("Choose…").clicked() {
+                if let Some(parent) = rfd::FileDialog::new()
+                    .set_title("Choose the folder to create the package in")
+                    .pick_folder()
+                {
+                    let name = std::path::Path::new(&suggest_destination(&s.project))
+                        .file_name()
+                        .map(|n| n.to_owned())
+                        .unwrap_or_else(|| "report".into());
+                    s.destination = parent.join(name).display().to_string();
+                }
+            }
+        });
+        if !s.destination.is_empty() && std::path::Path::new(&s.destination).exists() {
+            ui.colored_label(
+                ui.visuals().warn_fg_color,
+                "That folder already exists. Pick a new name; exports never overwrite.",
+            );
+        }
+    }
+
+    ui.add_space(8.0);
+    crate::gui::widgets::section_title(ui, "3 · Export");
+    let (has_project, has_destination, destination_exists) = app.delivery.export_readiness();
+    let busy = app.delivery.busy();
     let ready = !busy
         && blockers.is_empty()
         && has_project
@@ -251,18 +330,18 @@ fn release_review(app: &mut super::MzViewerApp, ctx: &egui::Context, ui: &mut eg
     } else if !has_project {
         "Open a project first."
     } else if !has_destination {
-        "Choose a new output folder below."
+        "Choose a new output folder above."
     } else if destination_exists {
         "That output path already exists. Choose a new folder name."
     } else if !warnings.is_empty() && !app.delivery.accept_warnings {
-        "Acknowledge the warnings above to export with them preserved."
+        "Tick the warning acknowledgement in step 1 to export with them preserved."
     } else {
-        "Open a project, then choose a new output folder to export"
+        "Creates the package folder with all evidence and history"
     };
     if ui
         .add_enabled(
             ready,
-            egui::Button::new(egui::RichText::new("Export report and project").strong())
+            egui::Button::new(egui::RichText::new("Export audit package").strong())
                 .fill(ui.visuals().selection.bg_fill),
         )
         .on_hover_text(reason)
@@ -288,8 +367,11 @@ fn release_review(app: &mut super::MzViewerApp, ctx: &egui::Context, ui: &mut eg
             )
         };
     }
-    if !ready && (busy || !blockers.is_empty() || !warnings.is_empty()) {
+    if !ready {
         ui.small(reason);
+    }
+    if !app.delivery.message.is_empty() {
+        ui.small(&app.delivery.message);
     }
     if let Some(destination) = chosen {
         super::workflow::go(app, ctx, destination);
@@ -360,12 +442,10 @@ mod tests {
             ));
         }
         let shapes = &outputs.last().unwrap().shapes;
-        assert!(crate::gui::test_render::text_center(shapes, "calibration").is_some());
-        assert!(crate::gui::test_render::text_center(
-            shapes,
-            "Portable bundle with verified raw sources"
-        )
-        .is_some());
+        assert!(crate::gui::test_render::text_center(shapes, "Export audit package").is_some());
+        assert!(
+            crate::gui::test_render::text_center(shapes, "Package options and evidence").is_some()
+        );
         if std::env::var_os("CHROMASCOPE_DELIVERY_PREVIEW").is_some() {
             crate::gui::test_render::save(
                 &ctx,
