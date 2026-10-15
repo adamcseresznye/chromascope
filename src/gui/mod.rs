@@ -645,6 +645,15 @@ impl eframe::App for MzViewerApp {
         workspace::restore_loaded(self, ctx);
         self.poll_processing_result(ctx);
         self.process_pending_update();
+        // Two side panels leave too little room for plots in a narrow window: start with the
+        // trace-settings inspector collapsed (View > Trace settings brings it back).
+        let narrow_id = egui::Id::new("narrow_window_checked");
+        if !ctx.data(|d| d.get_temp::<bool>(narrow_id)).unwrap_or(false) {
+            ctx.data_mut(|d| d.insert_temp(narrow_id, true));
+            if ctx.content_rect().width() < 1100.0 {
+                self.workspace.view.inspector = false;
+            }
+        }
         panels::update_data_selection_panel(self, ctx);
         quant::poll(self, ctx);
         if workbench::advanced_active(self, ctx) {

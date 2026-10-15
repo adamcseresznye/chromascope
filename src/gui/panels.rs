@@ -772,7 +772,7 @@ pub fn update_central_panel(app: &mut MzViewerApp, ctx: &Context) {
 /// "More" menu in the spectrum header row (next to Previous/Next), mirroring the chromatogram
 /// toolbar: view actions and secondary actions live here instead of floating over the plot.
 fn spectrum_more_menu(app: &mut MzViewerApp, ui: &mut Ui, plot_id: egui::Id) {
-    use super::plot_controls::{set_legend, trigger};
+    use super::plot_controls::trigger;
     let has_spectrum = app
         .active_file_id
         .and_then(|id| app.files.get(&id))
@@ -794,19 +794,8 @@ fn spectrum_more_menu(app: &mut MzViewerApp, ui: &mut Ui, plot_id: egui::Id) {
                 ui.close();
             }
         }
-        // The legend only names the single "Mass Spectrum" series, so it is off by default.
-        let mut shown = ctx
-            .data(|d| d.get_temp::<bool>(plot_id.with("legend")))
-            .unwrap_or(false);
-        if ui.checkbox(&mut shown, "Legend").changed() {
-            set_legend(&ctx, plot_id, shown);
-        }
         ui.separator();
         if let Some(id) = app.active_file_id {
-            let count = app.files.get(&id).map_or(0, |f| f.data.bounds.scan_count);
-            if count > 0 {
-                super::workspace::scan_jump(app, ui, id, count);
-            }
             let points = app
                 .files
                 .get(&id)

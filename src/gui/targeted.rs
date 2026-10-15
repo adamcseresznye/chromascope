@@ -146,7 +146,7 @@ impl UiState {
             sample: row.sample.clone(),
             target: row.target.clone(),
             accepted: row.state != crate::targeted::State::Rejected,
-            reason: "Review selected concentration".into(),
+            reason: String::new(),
         })
     }
     pub(super) fn qc_panel(&mut self, ui: &mut egui::Ui) {
@@ -765,6 +765,16 @@ pub(super) fn panel(
         let current = state.current_batch;
         if let Some(batch) = state.history.get(current) {
             if let Some(row) = batch.results.get(state.selected) {
+                // The reason is optional in the interface; the audit trail still records one.
+                let reason = if state.reason.trim().is_empty() {
+                    if accepted {
+                        "Accepted in the results browser"
+                    } else {
+                        "Rejected in the results browser"
+                    }
+                } else {
+                    state.reason.as_str()
+                };
                 match t::review(
                     batch,
                     batch.reviews.len(),
@@ -772,7 +782,7 @@ pub(super) fn panel(
                     &row.target,
                     accepted,
                     "gui",
-                    &state.reason,
+                    reason,
                 ) {
                     Ok(next) => state.history[current] = next,
                     Err(e) => state.message = e.to_string(),

@@ -144,8 +144,13 @@ pub(super) fn nav_tab(ui: &mut egui::Ui, selected: bool, label: &str) -> Respons
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
-/// Accent-filled button for the main action of a view.
+/// Accent-filled button for the main action of a view. One per view.
 pub(super) fn primary_button(ui: &mut egui::Ui, label: &str) -> Response {
+    primary_button_enabled(ui, true, label)
+}
+
+/// Like [`primary_button`], but inert (and visibly dimmed) while `enabled` is false.
+pub(super) fn primary_button_enabled(ui: &mut egui::Ui, enabled: bool, label: &str) -> Response {
     let t = tokens(ui);
     ui.scope(|ui| {
         let w = &mut ui.visuals_mut().widgets;
@@ -157,7 +162,9 @@ pub(super) fn primary_button(ui: &mut egui::Ui, label: &str) -> Response {
             state.fg_stroke = Stroke::new(1.0_f32, t.on_accent);
         }
         let min = egui::vec2(0.0, ui.spacing().interact_size.y);
-        ui.add(egui::Button::new(egui::RichText::new(label).color(t.on_accent)).min_size(min))
+        let text = egui::RichText::new(label).color(t.on_accent);
+        let button = egui::Button::new(if enabled { text } else { text.weak() }).min_size(min);
+        ui.add_enabled(enabled, button)
     })
     .inner
 }
@@ -255,9 +262,13 @@ pub(super) fn semibold_sized(ui: &egui::Ui, size: f32) -> egui::FontId {
     )
 }
 
-/// Section title: an accent tick followed by a SemiBold label.
+/// Section title: an accent tick followed by a SemiBold label, with a little air above so a
+/// group of controls reads as separate from whatever precedes it.
 pub(super) fn section_title(ui: &mut egui::Ui, text: impl Into<String>) -> Response {
     let t = tokens(ui);
+    if ui.cursor().min.y > ui.max_rect().min.y + 1.0 {
+        ui.add_space(6.0);
+    }
     ui.horizontal(|ui| {
         let (rect, _) = ui.allocate_exact_size(egui::vec2(3.0, 15.0), Sense::hover());
         ui.painter()

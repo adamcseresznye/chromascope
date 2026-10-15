@@ -693,30 +693,6 @@ fn refresh_metadata(app: &mut MzViewerApp, id: usize, index: usize) {
         }
     }
 }
-/// Jump-to-scan control, shown in the spectrum context menu.
-pub(super) fn scan_jump(app: &mut MzViewerApp, ui: &mut egui::Ui, id: usize, count: usize) {
-    let scan = app
-        .files
-        .get(&id)
-        .and_then(|f| f.cache.mass_spectrum.as_ref())
-        .map(|s| s.index);
-    let edit_id = egui::Id::new(("scan_jump", id));
-    let mut number = ui
-        .ctx()
-        .data_mut(|d| *d.get_temp_mut_or(edit_id, scan.unwrap_or(0) + 1));
-    ui.horizontal(|ui| {
-        ui.add(
-            egui::DragValue::new(&mut number)
-                .range(1..=count)
-                .prefix("Scan "),
-        );
-        if ui.button("Go").clicked() {
-            load_scan(app, id, number.clamp(1, count) - 1);
-            ui.close();
-        }
-    });
-    ui.ctx().data_mut(|d| d.insert_temp(edit_id, number));
-}
 /// Acquisition metadata of the displayed scan, shown in the spectrum context menu.
 pub(super) fn acquisition_details(app: &mut MzViewerApp, ui: &mut egui::Ui) {
     if let Some((_, _, text)) = &app.workspace.metadata {

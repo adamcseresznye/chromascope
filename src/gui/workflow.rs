@@ -544,17 +544,17 @@ pub(super) fn status_chip(app: &MzViewerApp, ui: &mut egui::Ui) -> Option<Destin
     let project_ready = super::project_workbench::project_actions_ready(app);
     let label = match current.and_then(|n| list.get(n - 1)) {
         Some(step) => format!(
-            "Workflow · step {} of {REQUIRED_STEPS}: {} \u{25be}",
+            "Step {} of {REQUIRED_STEPS} · {} \u{25be}",
             step.number, step.title
         ),
-        None => "Workflow · analysis complete \u{25be}".to_string(),
+        None => "Analysis complete \u{25be}".to_string(),
     };
     let mut chosen: Option<Destination> = None;
     ui.menu_button(label, |ui| {
         chosen = popup(ui, &list, warnings.len(), project_ready);
     })
     .response
-    .on_hover_text("Where you are in the analysis, from project to report");
+    .on_hover_text("Workflow: where you are in the analysis, from project to report");
     chosen
 }
 

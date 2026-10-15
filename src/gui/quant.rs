@@ -854,7 +854,6 @@ pub(super) fn show(app: &mut MzViewerApp, ctx: &egui::Context) {
                 .filter(|(id, _)| q.selected_samples.contains(id))
                 .count();
             ui.small(format!("{selected} selected / {} loaded", app.files.len()));
-            ui.small("Areas are intensity × minutes. No concentration calibration is applied.");
         });
     q.batch_samples = app
         .files
@@ -880,24 +879,6 @@ pub(super) fn show(app: &mut MzViewerApp, ctx: &egui::Context) {
         }
     }
     egui::CentralPanel::default().show(ctx, |ui| {
-        let mut destination = None;
-        ui.horizontal(|ui| {
-            crate::gui::widgets::section_title(ui, "Quantification and QC");
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.small_button("Continue to Reports →").clicked() {
-                    destination = Some(super::workflow::Destination::Reports);
-                }
-                if ui.small_button("← Inspect data").clicked() {
-                    destination = Some(super::workflow::Destination::Data);
-                }
-            });
-        });
-        if let Some(destination) = destination {
-            // The live state was moved into `q`; restore it so workflow navigation sees the real batch.
-            app.quant = std::mem::take(&mut q);
-            super::workflow::go(app, ctx, destination);
-            q = std::mem::take(&mut app.quant);
-        }
         ui.add_space(4.0);
         let current = fresh(&q.method);
         let unresolved = q
@@ -949,13 +930,7 @@ pub(super) fn show(app: &mut MzViewerApp, ctx: &egui::Context) {
                 let mut start_run = false;
                 ui.horizontal_wrapped(|ui| {
                     ui.add_enabled_ui(q.rx.is_none(), |ui| {
-                        if ui
-                            .add_enabled(
-                                ready,
-                                egui::Button::new(egui::RichText::new("▶ Run batch").strong())
-                                    .fill(ui.visuals().selection.bg_fill)
-                                    .min_size(egui::vec2(110.0, 28.0)),
-                            )
+                        if super::widgets::primary_button_enabled(ui, ready, "Run batch")
                             .on_hover_text(
                                 "Select loaded samples and define a valid method to run the batch",
                             )
@@ -1508,7 +1483,7 @@ fn results_table(q: &mut QuantState, ui: &mut egui::Ui, body_height: f32) {
         &rows,
         selected,
         body_height,
-        &[110.0, 70.0, 110.0, 105.0, 90.0],
+        &[100.0, 70.0, 110.0, 105.0, 110.0],
     ) {
         select(q, i);
     }
@@ -1674,7 +1649,7 @@ fn review(q: &mut QuantState, ui: &mut egui::Ui) {
             let plot = super::plot_controls::plot(ui, ("quant_review", i))
                 .height(plot_height)
                 .x_axis_label("Retention time (min)")
-                .y_axis_label("Intensity (instrument units)")
+                .y_axis_label("Intensity (a.u.)")
                 .allow_boxed_zoom(false)
                 .allow_drag(false);
             let tk = Tokens::of(ui);

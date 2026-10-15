@@ -197,7 +197,7 @@ fn peak_pane(
         .strong(),
     );
     let tk = crate::gui::theme::Tokens::of(ui);
-    super::super::plot_controls::plot_x_only(ui, "browser_peak")
+    super::super::plot_controls::plot_x_only(ui, "browser_peak", true)
         .height(height)
         .x_axis_label("Time (min)")
         .y_axis_label("Intensity")
@@ -463,16 +463,23 @@ pub(super) fn show(state: &mut UiState, ui: &mut egui::Ui) -> Outcome {
     }
     // Toolbar: review the selected concentration, export, revisit.
     ui.horizontal_wrapped(|ui| {
-        ui.label("Review reason");
-        ui.add(egui::TextEdit::singleline(reason).desired_width(180.0));
         for (label, accepted) in [
             ("Accept concentration", true),
             ("Reject concentration", false),
         ] {
-            if ui.button(label).clicked() {
+            if ui
+                .button(label)
+                .on_hover_text("Applies to the selected row")
+                .clicked()
+            {
                 outcome.review = Some(accepted);
             }
         }
+        ui.add(
+            egui::TextEdit::singleline(reason)
+                .hint_text("Reason (optional)")
+                .desired_width(180.0),
+        );
         ui.menu_button("Export ▾", |ui| {
             if ui.button("Export concentrations CSV…").clicked() {
                 if let Some(path) = rfd::FileDialog::new()

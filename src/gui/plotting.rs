@@ -26,16 +26,14 @@ fn render_chromatogram(
         .map(|(id, p)| format!("chromatogram_{id}_{p:?}"))
         .unwrap_or_else(|| "chromatogram_overlay".into());
     let controls_top = ui.cursor().top();
-    let plot = super::plot_controls::plot_x_only(ui, id);
+    // A grid cell is already named by its title; only the overlay needs the legend.
+    let plot = super::plot_controls::plot_x_only(ui, id, key.is_none());
     let remaining_height = (height - (ui.cursor().top() - controls_top)).max(150.0);
     let mut plot = plot
         .width(ui.available_width())
         .height(remaining_height)
         .x_axis_label("Retention time (min)")
-        .y_axis_label(
-            "Intensity
-(instrument units)",
-        )
+        .y_axis_label("Intensity (a.u.)")
         .show_background(false)
         .show_grid([false, true])
         .allow_double_click_reset(false)
@@ -753,10 +751,7 @@ pub fn plot_mass_spectrum(app: &mut MzViewerApp, ui: &mut egui::Ui) -> egui::Res
                     .width(ui.available_width() * 0.99)
                     .height(ui.available_height())
                     .x_axis_label("m/z (Th)")
-                    .y_axis_label(
-                        "Intensity
-(instrument units)",
-                    )
+                    .y_axis_label("Intensity (a.u.)")
                     .show_background(false)
                     .show_grid([false, true])
                     .allow_drag([true, false])

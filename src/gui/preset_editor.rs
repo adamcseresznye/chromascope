@@ -553,7 +553,7 @@ pub(super) fn show(app: &mut MzViewerApp, ctx: &egui::Context) {
             if ui.button("Save").clicked(){editor.save(false);}
             if ui.button("Save As…").clicked(){editor.save(true);}
             if let Some(result)=super::examples::menu(ui) { match result {
-                Ok(path)=>{editor.error=None;editor.status=format!("Example saved to {}. Open extraction presets here; quantification methods in Quantification and QC → Edit method.",path.display());},
+                Ok(path)=>{editor.error=None;editor.status=format!("Example saved to {}. Open extraction presets here; quantification methods in Quantification and QC > Edit method.",path.display());},
                 Err(e)=>editor.error=Some(e),
             } }
             if ui.add_enabled(!app.async_state.is_processing && app.active_file_id.is_some(),egui::Button::new("Apply to viewer samples")).on_hover_text("Extract these traces across the viewer samples; use Quantification and QC for automated integration").clicked(){match editor.draft.text(){Ok(text)=>apply=Some(text),Err(e)=>editor.error=Some(e)}}

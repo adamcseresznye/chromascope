@@ -51,7 +51,7 @@ impl Tokens {
             border_strong: Color32::from_rgb(116, 128, 146),
             text: Color32::from_rgb(28, 37, 49),
             text_dim: Color32::from_rgb(75, 87, 104),
-            text_disabled: Color32::from_rgb(150, 160, 172),
+            text_disabled: Color32::from_rgb(120, 131, 146),
             accent: Color32::from_rgb(59, 91, 219),
             accent_hover: Color32::from_rgb(45, 74, 194),
             on_accent: Color32::WHITE,
@@ -79,7 +79,7 @@ impl Tokens {
             border_strong: Color32::from_rgb(110, 122, 138),
             text: Color32::from_rgb(231, 235, 241),
             text_dim: Color32::from_rgb(184, 196, 210),
-            text_disabled: Color32::from_rgb(110, 120, 133),
+            text_disabled: Color32::from_rgb(128, 139, 152),
             accent: Color32::from_rgb(122, 147, 240),
             accent_hover: Color32::from_rgb(146, 168, 246),
             on_accent: Color32::from_rgb(18, 24, 38),
@@ -202,11 +202,15 @@ mod tests {
             for surface in [t.panel, t.canvas, t.menu] {
                 assert!(contrast_ratio(t.text, surface) >= 7.0);
                 assert!(contrast_ratio(t.text_dim, surface) >= 4.5);
+                assert!(contrast_ratio(t.text_disabled, surface) >= 3.0);
                 for c in [t.good, t.info, t.warn, t.error, t.accent] {
                     assert!(contrast_ratio(c, surface) >= 3.0);
                 }
             }
             assert!(contrast_ratio(t.border_strong, t.canvas) >= 3.0);
+            for c in [t.role_standard, t.role_qc, t.role_blank, t.role_unknown] {
+                assert!(contrast_ratio(c, t.canvas) >= 3.0);
+            }
         }
     }
 

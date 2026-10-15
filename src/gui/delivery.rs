@@ -338,12 +338,7 @@ fn release_review(app: &mut super::MzViewerApp, ctx: &egui::Context, ui: &mut eg
     } else {
         "Creates the package folder with all evidence and history"
     };
-    if ui
-        .add_enabled(
-            ready,
-            egui::Button::new(egui::RichText::new("Export audit package").strong())
-                .fill(ui.visuals().selection.bg_fill),
-        )
+    if super::widgets::primary_button_enabled(ui, ready, "Export audit package")
         .on_hover_text(reason)
         .clicked()
     {

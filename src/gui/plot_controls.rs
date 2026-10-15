@@ -10,18 +10,19 @@ struct ExportJob(std::sync::Arc<std::sync::Mutex<ExportCompletion>>);
 pub(super) fn trigger(ctx: &egui::Context, plot_id: egui::Id, action: u8) {
     ctx.data_mut(|d| d.insert_temp(plot_id.with("action"), action));
 }
-pub(super) fn set_legend(ctx: &egui::Context, plot_id: egui::Id, shown: bool) {
-    ctx.data_mut(|d| d.insert_temp(plot_id.with("legend"), shown));
-}
 pub(super) fn plot(ui: &mut egui::Ui, source: impl std::hash::Hash) -> Plot<'static> {
     plot_inner(ui, source, true, true, false)
 }
 /// Like [`plot`] but the view only moves along x: the toolbar zoom/pan leave the y-range
 /// untouched, so intensity stays auto-fitted (chromatograms).
-pub(super) fn plot_x_only(ui: &mut egui::Ui, source: impl std::hash::Hash) -> Plot<'static> {
-    plot_inner(ui, source, true, true, true)
+pub(super) fn plot_x_only(
+    ui: &mut egui::Ui,
+    source: impl std::hash::Hash,
+    legend_default: bool,
+) -> Plot<'static> {
+    plot_inner(ui, source, true, legend_default, true)
 }
-/// Like [`plot_x_only`] but without the toolbar row; drive it with [`trigger`] / [`set_legend`].
+/// Like [`plot_x_only`] but without the toolbar row; drive it with [`trigger`].
 pub(super) fn plot_bare(ui: &mut egui::Ui, source: impl std::hash::Hash) -> Plot<'static> {
     plot_inner(ui, source, false, false, true)
 }
@@ -79,11 +80,11 @@ fn plot_inner(
                         .on_hover_text("Show or hide the trace legend");
                     ui.menu_button("More", |ui| {
                         left = ui
-                            .small_button("Pan ←")
+                            .small_button("Pan left")
                             .on_hover_text("Pan earlier in retention time")
                             .clicked();
                         right = ui
-                            .small_button("Pan →")
+                            .small_button("Pan right")
                             .on_hover_text("Pan later in retention time")
                             .clicked();
                         if memory.is_some()
@@ -349,7 +350,7 @@ mod toolbar_tests {
             }
             // Secondary actions wait in the overflow menu instead of wrapping
             // onto axes or annotations.
-            for label in ["Pan ←", "Copy view bounds", "Legend position"] {
+            for label in ["Pan left", "Copy view bounds", "Legend position"] {
                 assert!(
                     super::super::test_render::text_center(&output.shapes, label).is_none(),
                     "secondary control {label} must not crowd the plot row"
