@@ -762,7 +762,7 @@ pub fn plot_mass_spectrum(app: &mut MzViewerApp, ui: &mut egui::Ui) -> egui::Res
                         if name.is_empty() {
                             format!(
                                 "m/z = {}\nIntensity = {:.2e}",
-                                super::display::fmt_mz(value.x),
+                                super::settings::fmt_mz(value.x),
                                 value.y
                             )
                         // ← CHANGED
@@ -791,7 +791,7 @@ pub fn plot_mass_spectrum(app: &mut MzViewerApp, ui: &mut egui::Ui) -> egui::Res
                                         line_color
                                             .to_egui_for(plot_ui.ctx().style().visuals.dark_mode),
                                     )
-                                    .name(format!("m/z = {}", super::display::fmt_mz(m)))
+                                    .name(format!("m/z = {}", super::settings::fmt_mz(m)))
                             })
                             .collect();
 

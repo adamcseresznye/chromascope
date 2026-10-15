@@ -658,7 +658,7 @@ fn xic_controls(app: &mut MzViewerApp, ui: &mut egui::Ui) {
     ui.label("Target m/z");
     ui.add(
         egui::TextEdit::singleline(&mut app.user_input.mass.text)
-            .hint_text(format!("e.g. {}", super::display::fmt_mz(483.0)))
+            .hint_text(format!("e.g. {}", super::settings::fmt_mz(483.0)))
             .desired_width(f32::INFINITY),
     );
     ui.label("Tolerance");
@@ -679,8 +679,8 @@ fn xic_controls(app: &mut MzViewerApp, ui: &mut egui::Ui) {
     if app.user_input.mass.value > 0.0 && app.user_input.mass_tolerance.value > 0.0 {
         ui.small(format!(
             "Current extraction: {} m/z ± {}",
-            super::display::fmt_mz(app.user_input.mass.value),
-            super::display::fmt_tolerance(&crate::validation::MassTolerance {
+            super::settings::fmt_mz(app.user_input.mass.value),
+            super::settings::fmt_tolerance(&crate::validation::MassTolerance {
                 value: app.user_input.mass_tolerance.value,
                 unit: app.user_input.tolerance_unit,
             })

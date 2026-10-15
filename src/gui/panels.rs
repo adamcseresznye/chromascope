@@ -140,15 +140,16 @@ pub fn update_data_selection_panel(app: &mut MzViewerApp, ctx: &Context) {
                     for (factor, label) in [(0.9_f32, "90%"), (1.0, "100%"), (1.15, "115%"), (1.3, "130%")] {
                         if super::widgets::segment(ui, (zoom - factor).abs() < 0.01, None, label).clicked() {
                             ctx.set_zoom_factor(factor);
+                            super::settings::save(ctx);
                         }
                     }
                 });
                 ui.label("m/z decimals");
                 ui.horizontal(|ui| {
-                    let current = super::display::mz_decimals();
-                    for decimals in super::display::MZ_DECIMAL_CHOICES {
+                    let current = super::settings::mz_decimals();
+                    for decimals in super::settings::MZ_DECIMAL_CHOICES {
                         if super::widgets::segment(ui, current == decimals, None, &decimals.to_string()).clicked() {
-                            super::display::set_mz_decimals(decimals);
+                            super::settings::set_mz_decimals(ctx, decimals);
                         }
                     }
                 });
@@ -162,6 +163,7 @@ pub fn update_data_selection_panel(app: &mut MzViewerApp, ctx: &Context) {
                     ] {
                         if ui.selectable_label(preference == value, label).clicked() {
                             ctx.set_theme(value);
+                            super::settings::save(ctx);
                         }
                     }
                 });
@@ -946,8 +948,8 @@ pub fn add_range_options(app: &mut MzViewerApp, ui: &mut Ui) {
             ui.label(
                 egui::RichText::new(format!(
                     "{} \u{2013} {} m/z",
-                    super::display::fmt_mz(app.user_input.range_min.value),
-                    super::display::fmt_mz(app.user_input.range_max.value)
+                    super::settings::fmt_mz(app.user_input.range_min.value),
+                    super::settings::fmt_mz(app.user_input.range_max.value)
                 ))
                 .color(ui.visuals().hyperlink_color),
             );
@@ -1049,16 +1051,16 @@ fn format_filter_label(
             "MS{} {} {} [m/z {} - {}]",
             ms_level,
             polarity_label(polarity),
-            super::display::fmt_mz(*mz),
-            super::display::fmt_mz(*lo),
-            super::display::fmt_mz(*hi)
+            super::settings::fmt_mz(*mz),
+            super::settings::fmt_mz(*lo),
+            super::settings::fmt_mz(*hi)
         ),
         None => format!(
             "MS{} {} [m/z {} - {}]",
             ms_level,
             polarity_label(polarity),
-            super::display::fmt_mz(*lo),
-            super::display::fmt_mz(*hi)
+            super::settings::fmt_mz(*lo),
+            super::settings::fmt_mz(*hi)
         ),
     }
 }

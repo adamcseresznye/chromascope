@@ -269,8 +269,8 @@ pub(super) fn trace_name(params: &ProcessingParams) -> String {
         .map(|x| {
             format!(
                 " {} ± {}",
-                super::display::fmt_mz(x.mass()),
-                super::display::fmt_tolerance(&x.tolerance())
+                super::settings::fmt_mz(x.mass()),
+                super::settings::fmt_tolerance(&x.tolerance())
             )
         })
         .unwrap_or_default();
@@ -286,15 +286,15 @@ pub(super) fn trace_name(params: &ProcessingParams) -> String {
         params.smoothing,
         params
             .precursor_mz
-            .map(|m| format!(" · precursor {}", super::display::fmt_mz(m)))
+            .map(|m| format!(" · precursor {}", super::settings::fmt_mz(m)))
             .unwrap_or_default(),
         params
             .mz_range
             .map(|(a, b)| {
                 format!(
                     " · m/z {}–{}",
-                    super::display::fmt_mz(a),
-                    super::display::fmt_mz(b)
+                    super::settings::fmt_mz(a),
+                    super::settings::fmt_mz(b)
                 )
             })
             .unwrap_or_default()

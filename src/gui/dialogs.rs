@@ -350,8 +350,8 @@ pub fn render_range_window(app: &mut MzViewerApp, ctx: &egui::Context) {
                         ui.label(
                             egui::RichText::new(format!(
                                 "File range: {} \u{2013} {} m/z",
-                                super::display::fmt_mz(b.min_mz),
-                                super::display::fmt_mz(b.max_mz)
+                                super::settings::fmt_mz(b.min_mz),
+                                super::settings::fmt_mz(b.max_mz)
                             ))
                             .small()
                             .color(ui.visuals().weak_text_color()),

@@ -110,7 +110,6 @@ mod calibration_setup;
 mod concentration_view;
 mod delivery;
 mod dialogs;
-mod display;
 mod examples;
 mod forms;
 mod icons;
@@ -126,6 +125,7 @@ mod project_workbench;
 mod quant;
 #[cfg(feature = "mcp")]
 pub(crate) mod remote;
+mod settings;
 mod spectral;
 pub(crate) mod state;
 mod statistics;
@@ -158,8 +158,9 @@ impl MzViewerApp {
     /// - All other fields in `user_input` are set to their default values.
     /// - All other fields in the `MzViewerApp` struct are set to their default values.
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
-        workbench::configure_with(&_cc.egui_ctx, egui::ThemePreference::System);
-        display::load();
+        let saved = settings::load();
+        workbench::configure_with(&_cc.egui_ctx, saved.theme.into());
+        _cc.egui_ctx.set_zoom_factor(saved.zoom);
         Self {
             files: HashMap::new(),
             active_file_id: None,
