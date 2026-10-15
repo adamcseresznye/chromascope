@@ -75,6 +75,8 @@ pub enum Command {
         smoothing: u8,
         mass: Option<f64>,
         tolerance_ppm: Option<f64>,
+        #[serde(default)]
+        tolerance_mda: Option<f64>,
         mz_range: Option<[f64; 2]>,
         precursor_mz: Option<f64>,
         acquisition: Option<String>,
@@ -318,7 +320,11 @@ pub struct ExtractChromatogramArgs {
     pub ms_level: u8,
     pub smoothing: u8,
     pub mass: Option<f64>,
+    /// XIC tolerance in ppm. Give this or `tolerance_mda`, not both.
     pub tolerance_ppm: Option<f64>,
+    /// XIC tolerance in milli-daltons (mDa). Give this or `tolerance_ppm`, not both.
+    #[serde(default)]
+    pub tolerance_mda: Option<f64>,
     pub mz_range: Option<[f64; 2]>,
     pub precursor_mz: Option<f64>,
     pub acquisition: Option<String>,
@@ -529,7 +535,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Chromascope open_files operation. Retention time in minutes, m/z tolerance in ppm; bounded data pages up to 10000. Launch policy controls changes and exports."
+        description = "Chromascope open_files operation. Retention time in minutes, m/z tolerance in ppm (or mDa for XIC extraction); bounded data pages up to 10000. Launch policy controls changes and exports."
     )]
     async fn open_files(&self, Parameters(args): Parameters<OpenFilesArgs>) -> CallToolResult {
         let OpenFilesArgs { paths } = args;
@@ -537,7 +543,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Chromascope dataset_metadata operation. Retention time in minutes, m/z tolerance in ppm; bounded data pages up to 10000. Launch policy controls changes and exports."
+        description = "Chromascope dataset_metadata operation. Retention time in minutes, m/z tolerance in ppm (or mDa for XIC extraction); bounded data pages up to 10000. Launch policy controls changes and exports."
     )]
     async fn dataset_metadata(
         &self,
@@ -548,7 +554,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Chromascope scan_metadata operation. Retention time in minutes, m/z tolerance in ppm; bounded data pages up to 10000. Launch policy controls changes and exports."
+        description = "Chromascope scan_metadata operation. Retention time in minutes, m/z tolerance in ppm (or mDa for XIC extraction); bounded data pages up to 10000. Launch policy controls changes and exports."
     )]
     async fn scan_metadata(
         &self,
@@ -560,7 +566,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Chromascope select_dataset operation. Retention time in minutes, m/z tolerance in ppm; bounded data pages up to 10000. Launch policy controls changes and exports."
+        description = "Chromascope select_dataset operation. Retention time in minutes, m/z tolerance in ppm (or mDa for XIC extraction); bounded data pages up to 10000. Launch policy controls changes and exports."
     )]
     async fn select_dataset(
         &self,
@@ -571,7 +577,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Chromascope extract_chromatogram operation. Retention time in minutes, m/z tolerance in ppm; bounded data pages up to 10000. Launch policy controls changes and exports."
+        description = "Chromascope extract_chromatogram operation. Retention time in minutes, m/z tolerance in ppm (or mDa for XIC extraction); bounded data pages up to 10000. Launch policy controls changes and exports."
     )]
     async fn extract_chromatogram(
         &self,
@@ -585,6 +591,7 @@ impl McpServer {
             smoothing,
             mass,
             tolerance_ppm,
+            tolerance_mda,
             mz_range,
             precursor_mz,
             acquisition,
@@ -598,6 +605,7 @@ impl McpServer {
             smoothing,
             mass,
             tolerance_ppm,
+            tolerance_mda,
             mz_range,
             precursor_mz,
             acquisition,
@@ -607,7 +615,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Chromascope chromatogram_data operation. Retention time in minutes, m/z tolerance in ppm; bounded data pages up to 10000. Launch policy controls changes and exports."
+        description = "Chromascope chromatogram_data operation. Retention time in minutes, m/z tolerance in ppm (or mDa for XIC extraction); bounded data pages up to 10000. Launch policy controls changes and exports."
     )]
     async fn chromatogram_data(
         &self,
@@ -627,7 +635,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Chromascope spectrum operation. Retention time in minutes, m/z tolerance in ppm; bounded data pages up to 10000. Launch policy controls changes and exports."
+        description = "Chromascope spectrum operation. Retention time in minutes, m/z tolerance in ppm (or mDa for XIC extraction); bounded data pages up to 10000. Launch policy controls changes and exports."
     )]
     async fn spectrum(&self, Parameters(args): Parameters<SpectrumArgs>) -> CallToolResult {
         let SpectrumArgs {
@@ -650,7 +658,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Chromascope set_view operation. Retention time in minutes, m/z tolerance in ppm; bounded data pages up to 10000. Launch policy controls changes and exports."
+        description = "Chromascope set_view operation. Retention time in minutes, m/z tolerance in ppm (or mDa for XIC extraction); bounded data pages up to 10000. Launch policy controls changes and exports."
     )]
     async fn set_view(&self, Parameters(args): Parameters<SetViewArgs>) -> CallToolResult {
         let SetViewArgs {
@@ -667,7 +675,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Chromascope set_visibility operation. Retention time in minutes, m/z tolerance in ppm; bounded data pages up to 10000. Launch policy controls changes and exports."
+        description = "Chromascope set_visibility operation. Retention time in minutes, m/z tolerance in ppm (or mDa for XIC extraction); bounded data pages up to 10000. Launch policy controls changes and exports."
     )]
     async fn set_visibility(
         &self,
@@ -685,7 +693,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Chromascope integrate operation. Retention time in minutes, m/z tolerance in ppm; bounded data pages up to 10000. Launch policy controls changes and exports."
+        description = "Chromascope integrate operation. Retention time in minutes, m/z tolerance in ppm (or mDa for XIC extraction); bounded data pages up to 10000. Launch policy controls changes and exports."
     )]
     async fn integrate(&self, Parameters(args): Parameters<IntegrateArgs>) -> CallToolResult {
         let IntegrateArgs {
@@ -704,7 +712,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Chromascope export_csv operation. Retention time in minutes, m/z tolerance in ppm; bounded data pages up to 10000. Launch policy controls changes and exports."
+        description = "Chromascope export_csv operation. Retention time in minutes, m/z tolerance in ppm (or mDa for XIC extraction); bounded data pages up to 10000. Launch policy controls changes and exports."
     )]
     async fn export_csv(&self, Parameters(args): Parameters<ExportCsvArgs>) -> CallToolResult {
         let ExportCsvArgs {
@@ -721,7 +729,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Chromascope apply_preset operation. Retention time in minutes, m/z tolerance in ppm; bounded data pages up to 10000. Launch policy controls changes and exports."
+        description = "Chromascope apply_preset operation. Retention time in minutes, m/z tolerance in ppm (or mDa for XIC extraction); bounded data pages up to 10000. Launch policy controls changes and exports."
     )]
     async fn apply_preset(&self, Parameters(args): Parameters<ApplyPresetArgs>) -> CallToolResult {
         let ApplyPresetArgs { toml } = args;
@@ -729,7 +737,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Chromascope start_quantification operation. Retention time in minutes, m/z tolerance in ppm; bounded data pages up to 10000. Launch policy controls changes and exports."
+        description = "Chromascope start_quantification operation. Retention time in minutes, m/z tolerance in ppm (or mDa for XIC extraction); bounded data pages up to 10000. Launch policy controls changes and exports."
     )]
     async fn start_quantification(
         &self,
@@ -747,7 +755,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Chromascope review_quantification operation. Retention time in minutes, m/z tolerance in ppm; bounded data pages up to 10000. Launch policy controls changes and exports."
+        description = "Chromascope review_quantification operation. Retention time in minutes, m/z tolerance in ppm (or mDa for XIC extraction); bounded data pages up to 10000. Launch policy controls changes and exports."
     )]
     async fn review_quantification(
         &self,

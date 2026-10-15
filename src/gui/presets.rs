@@ -172,6 +172,24 @@ mod tests {
         assert!(parse(&text.replace("version = 1", "version = 2"), &bounds).is_err());
         assert!(parse(&format!("{text}\nunknown = 1"), &bounds).is_err());
     }
+    #[test]
+    fn preset_accepts_mda_and_old_presets_stay_ppm() {
+        use crate::validation::{MassTolerance, ToleranceUnit};
+        let bounds = crate::validation::DataBounds::unrestricted();
+        let ppm_text =
+            "version = 1\n[[traces]]\nname = 'Ion'\nacquisition = 'FS'\nmass = 483.0\nppm = 5.0";
+        let (_, traces) = parse(ppm_text, &bounds).unwrap();
+        assert_eq!(
+            traces[0].1.xic_params.unwrap().tolerance(),
+            MassTolerance::ppm(5.0)
+        );
+        let mda_text = ppm_text.replace("ppm = 5.0", "mda = 3.0");
+        let (_, traces) = parse(&mda_text, &bounds).unwrap();
+        let tolerance = traces[0].1.xic_params.unwrap().tolerance();
+        assert_eq!(tolerance.unit, ToleranceUnit::Mda);
+        assert_eq!(tolerance.value, 3.0);
+        assert!(parse(&ppm_text.replace("ppm = 5.0", "mda = 5000.0"), &bounds).is_err());
+    }
     fn batch_app() -> MzViewerApp {
         use super::super::state::{FileCache, FileDisplaySettings, OpenFile};
         let mut app = MzViewerApp::default();

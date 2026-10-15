@@ -143,6 +143,15 @@ pub fn update_data_selection_panel(app: &mut MzViewerApp, ctx: &Context) {
                         }
                     }
                 });
+                ui.label("m/z decimals");
+                ui.horizontal(|ui| {
+                    let current = super::display::mz_decimals();
+                    for decimals in super::display::MZ_DECIMAL_CHOICES {
+                        if super::widgets::segment(ui, current == decimals, None, &decimals.to_string()).clicked() {
+                            super::display::set_mz_decimals(decimals);
+                        }
+                    }
+                });
                 ui.label("Theme");
                 let preference = ctx.options(|o| o.theme_preference);
                 ui.horizontal(|ui| {
@@ -936,8 +945,9 @@ pub fn add_range_options(app: &mut MzViewerApp, ui: &mut Ui) {
             // Show current committed values as a read-only label
             ui.label(
                 egui::RichText::new(format!(
-                    "{:.0} \u{2013} {:.0} m/z",
-                    app.user_input.range_min.value, app.user_input.range_max.value
+                    "{} \u{2013} {} m/z",
+                    super::display::fmt_mz(app.user_input.range_min.value),
+                    super::display::fmt_mz(app.user_input.range_max.value)
                 ))
                 .color(ui.visuals().hyperlink_color),
             );
@@ -1036,19 +1046,19 @@ fn format_filter_label(
 ) -> String {
     match precursor {
         Some(mz) => format!(
-            "MS{} {} {:.4} [m/z {:.2} - {:.2}]",
+            "MS{} {} {} [m/z {} - {}]",
             ms_level,
             polarity_label(polarity),
-            mz,
-            lo,
-            hi
+            super::display::fmt_mz(*mz),
+            super::display::fmt_mz(*lo),
+            super::display::fmt_mz(*hi)
         ),
         None => format!(
-            "MS{} {} [m/z {:.2} - {:.2}]",
+            "MS{} {} [m/z {} - {}]",
             ms_level,
             polarity_label(polarity),
-            lo,
-            hi
+            super::display::fmt_mz(*lo),
+            super::display::fmt_mz(*hi)
         ),
     }
 }

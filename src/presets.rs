@@ -31,8 +31,12 @@ pub struct TraceSpec {
     #[serde(default = "xic")]
     pub kind: String,
     pub mass: Option<f64>,
+    /// Tolerance in ppm. Ignored when `mda` is set.
     #[serde(default = "ppm")]
     pub ppm: f64,
+    /// Tolerance in milli-daltons; when present it replaces `ppm`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mda: Option<f64>,
     #[serde(default)]
     pub smoothing: u8,
     #[serde(default = "positive")]
@@ -40,6 +44,26 @@ pub struct TraceSpec {
     pub ms_level: Option<u8>,
     pub precursor_mz: Option<f64>,
     pub mz_range: Option<[f64; 2]>,
+}
+impl TraceSpec {
+    /// The extraction tolerance with its unit (`mda` wins over `ppm`).
+    pub fn tolerance(&self) -> crate::validation::MassTolerance {
+        match self.mda {
+            Some(v) => crate::validation::MassTolerance::mda(v),
+            None => crate::validation::MassTolerance::ppm(self.ppm),
+        }
+    }
+
+    /// Stores a tolerance in whichever field its unit uses.
+    pub fn set_tolerance(&mut self, tolerance: crate::validation::MassTolerance) {
+        match tolerance.unit {
+            crate::validation::ToleranceUnit::Ppm => {
+                self.ppm = tolerance.value;
+                self.mda = None;
+            }
+            crate::validation::ToleranceUnit::Mda => self.mda = Some(tolerance.value),
+        }
+    }
 }
 fn xic() -> String {
     "XIC".into()
@@ -117,15 +141,17 @@ pub fn parse(
             return Err("mz_range must be an increasing pair of positive masses.".into());
         }
         if kind == PlotType::Xic && t.mz_range.is_some() {
-            return Err("Use mass and ppm for XIC; mz_range is for TIC/BPC.".into());
+            return Err(
+                "Use mass and a tolerance (ppm or mda) for XIC; mz_range is for TIC/BPC.".into(),
+            );
         }
         let xic_params = if kind == PlotType::Xic {
             Some(
-                crate::validation::XicParams::new(
+                crate::validation::XicParams::with_tolerance(
                     t.mass
                         .ok_or_else(|| format!("{}: XIC needs mass.", t.name))?,
                     polarity,
-                    t.ppm,
+                    t.tolerance(),
                     bounds,
                 )
                 .map_err(|e| e.to_string())?,

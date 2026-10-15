@@ -183,10 +183,10 @@ impl Session {
                     return Err("Invalid smoothing in session.".into());
                 }
                 if let Some(x) = trace.params.xic_params {
-                    crate::validation::XicParams::new(
+                    crate::validation::XicParams::with_tolerance(
                         x.mass(),
                         x.polarity(),
-                        x.mass_tolerance(),
+                        x.tolerance(),
                         &crate::validation::DataBounds::unrestricted(),
                     )
                     .map_err(|e| e.to_string())?;
@@ -266,7 +266,13 @@ pub(super) fn remember(app: &mut MzViewerApp, path: PathBuf) {
 pub(super) fn trace_name(params: &ProcessingParams) -> String {
     let target = params
         .xic_params
-        .map(|x| format!(" {:.4} ± {} ppm", x.mass(), x.mass_tolerance()))
+        .map(|x| {
+            format!(
+                " {} ± {}",
+                super::display::fmt_mz(x.mass()),
+                super::display::fmt_tolerance(&x.tolerance())
+            )
+        })
         .unwrap_or_default();
     let mode = params
         .acquisition
@@ -280,11 +286,17 @@ pub(super) fn trace_name(params: &ProcessingParams) -> String {
         params.smoothing,
         params
             .precursor_mz
-            .map(|m| format!(" · precursor {m:.4}"))
+            .map(|m| format!(" · precursor {}", super::display::fmt_mz(m)))
             .unwrap_or_default(),
         params
             .mz_range
-            .map(|(a, b)| format!(" · m/z {a:.2}–{b:.2}"))
+            .map(|(a, b)| {
+                format!(
+                    " · m/z {}–{}",
+                    super::display::fmt_mz(a),
+                    super::display::fmt_mz(b)
+                )
+            })
             .unwrap_or_default()
     )
 }
@@ -393,7 +405,8 @@ fn apply_trace(app: &mut MzViewerApp, id: FileId, t: Trace) {
     }
     if let Some(x) = p.xic_params {
         app.user_input.mass = super::state::ValidatedInput::new(x.mass());
-        app.user_input.mass_tolerance = super::state::ValidatedInput::new(x.mass_tolerance());
+        app.user_input.mass_tolerance = super::state::ValidatedInput::new(x.tolerance().value);
+        app.user_input.tolerance_unit = x.tolerance().unit;
     }
     app.user_input.line_color = t.color;
     if let Some(f) = app.files.get_mut(&id) {

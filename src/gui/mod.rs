@@ -110,6 +110,7 @@ mod calibration_setup;
 mod concentration_view;
 mod delivery;
 mod dialogs;
+mod display;
 mod examples;
 mod forms;
 mod icons;
@@ -158,6 +159,7 @@ impl MzViewerApp {
     /// - All other fields in the `MzViewerApp` struct are set to their default values.
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         workbench::configure_with(&_cc.egui_ctx, egui::ThemePreference::System);
+        display::load();
         Self {
             files: HashMap::new(),
             active_file_id: None,
@@ -558,10 +560,13 @@ impl MzViewerApp {
 
         // For XIC, validate and construct XicParams with file bounds
         let xic_params = if self.user_input.plot_type == PlotType::Xic {
-            Some(XicParams::new(
+            Some(XicParams::with_tolerance(
                 self.user_input.mass.value,
                 self.user_input.polarity,
-                self.user_input.mass_tolerance.value,
+                crate::validation::MassTolerance {
+                    value: self.user_input.mass_tolerance.value,
+                    unit: self.user_input.tolerance_unit,
+                },
                 &active_file.data.bounds,
             )?)
         } else {

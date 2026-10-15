@@ -4,6 +4,7 @@ use super::{
     state::MzViewerApp,
 };
 use crate::processing::AcquisitionMode;
+use crate::validation::{MassTolerance, ToleranceUnit};
 use std::path::PathBuf;
 
 #[derive(Clone)]
@@ -13,7 +14,9 @@ struct Row {
     kind: String,
     mass: String,
     precursor: String,
+    /// Tolerance value as typed, in `unit`.
     ppm: String,
+    unit: ToleranceUnit,
     smoothing: String,
     polarity: String,
     ms_level: String,
@@ -29,6 +32,7 @@ impl Default for Row {
             mass: String::new(),
             precursor: String::new(),
             ppm: "10".into(),
+            unit: ToleranceUnit::Ppm,
             smoothing: "0".into(),
             polarity: "positive".into(),
             ms_level: String::new(),
@@ -49,13 +53,15 @@ fn number(text: &str, label: &str) -> Result<f64, String> {
 }
 impl Row {
     fn from_spec(t: TraceSpec) -> Self {
+        let tolerance = t.tolerance();
         Self {
             name: t.name,
             acquisition: t.acquisition,
             kind: t.kind.to_uppercase(),
             mass: t.mass.map(|n| n.to_string()).unwrap_or_default(),
             precursor: t.precursor_mz.map(|n| n.to_string()).unwrap_or_default(),
-            ppm: t.ppm.to_string(),
+            ppm: tolerance.value.to_string(),
+            unit: tolerance.unit,
             smoothing: t.smoothing.to_string(),
             polarity: t.polarity,
             ms_level: t.ms_level.map(|n| n.to_string()).unwrap_or_default(),
@@ -84,18 +90,22 @@ impl Row {
             } else {
                 None
             };
-        let ppm = if self.kind == "XIC" {
+        let tolerance = if self.kind == "XIC" {
+            let unit = self.unit.label();
             let v: f64 = self
                 .ppm
                 .trim()
                 .parse()
-                .map_err(|_| "Enter a numeric ppm tolerance.")?;
+                .map_err(|_| format!("Enter a numeric {unit} tolerance."))?;
             if !v.is_finite() || !(0.0..=1000.0).contains(&v) {
-                return Err("Tolerance must be 0–1000 ppm.".into());
+                return Err(format!("Tolerance must be 0–1000 {unit}."));
             }
-            v
+            MassTolerance {
+                value: v,
+                unit: self.unit,
+            }
         } else {
-            10.0
+            MassTolerance::ppm(10.0)
         };
         let smoothing: u8 = self
             .smoothing
@@ -130,18 +140,21 @@ impl Row {
             }
             Some([a, b])
         };
-        Ok(TraceSpec {
+        let mut spec = TraceSpec {
             name: self.name.trim().into(),
             acquisition: self.acquisition,
             kind: self.kind.clone(),
             mass,
             precursor_mz,
-            ppm,
+            ppm: 10.0,
+            mda: None,
             smoothing,
             polarity: self.polarity.clone(),
             ms_level,
             mz_range,
-        })
+        };
+        spec.set_tolerance(tolerance);
+        Ok(spec)
     }
 }
 #[derive(Clone)]
@@ -405,7 +418,14 @@ fn pasted_rows(text: &str) -> Result<Vec<Row>, String> {
                     }
                 }
                 "precursor m/z" | "precursor_mz" => row.precursor = value.into(),
-                "ppm" | "tolerance (ppm)" => row.ppm = value.into(),
+                "ppm" | "tolerance (ppm)" => {
+                    row.ppm = value.into();
+                    row.unit = ToleranceUnit::Ppm;
+                }
+                "mda" | "tolerance (mda)" => {
+                    row.ppm = value.into();
+                    row.unit = ToleranceUnit::Mda;
+                }
                 "smoothing" => row.smoothing = value.into(),
                 "polarity" => {
                     row.polarity = value.to_lowercase();
@@ -503,7 +523,13 @@ fn analyte_rows(ui: &mut egui::Ui, rows: &mut [Row], dirty: &mut bool) -> Option
                     }
                     if row.kind == "XIC" {
                         *dirty |= labeled_cell(ui, "Target/product m/z", &mut row.mass, 120.0);
-                        *dirty |= labeled_cell(ui, "Tolerance (ppm)", &mut row.ppm, 90.0);
+                        *dirty |= labeled_cell(ui, "Tolerance", &mut row.ppm, 90.0);
+                        *dirty |= super::widgets::tolerance_unit_select(
+                            ui,
+                            ("tolerance_unit", i),
+                            &mut row.unit,
+                        )
+                        .changed();
                     } else {
                         *dirty |= labeled_cell(ui, "Range min", &mut row.range_min, 90.0);
                         *dirty |= labeled_cell(ui, "Range max", &mut row.range_max, 90.0);

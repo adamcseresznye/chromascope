@@ -1,5 +1,5 @@
 use crate::gui::state::{MzViewerApp, StateChange};
-use crate::validation::XicParams;
+use crate::validation::{MassTolerance, XicParams};
 use eframe::egui;
 use log::error;
 
@@ -118,8 +118,16 @@ pub fn render_xic_settings_window(app: &mut MzViewerApp, ctx: &egui::Context) {
                         .unwrap_or(app.user_input.mass_tolerance.value);
                     let valid = app.user_input.mass.sync_on_focus_lost(|m| {
                         let temp_bounds = crate::validation::DataBounds::unrestricted();
-                        XicParams::new(*m, app.user_input.polarity, pending_tolerance, &temp_bounds)
-                            .is_ok()
+                        XicParams::with_tolerance(
+                            *m,
+                            app.user_input.polarity,
+                            MassTolerance {
+                                value: pending_tolerance,
+                                unit: app.user_input.tolerance_unit,
+                            },
+                            &temp_bounds,
+                        )
+                        .is_ok()
                     });
                     match valid {
                         Ok(()) => {
@@ -134,22 +142,38 @@ pub fn render_xic_settings_window(app: &mut MzViewerApp, ctx: &egui::Context) {
                         _ => {}
                     }
                 };
-                ui.label("Mass tolerance (ppm):");
-                if ui
-                    .add(
-                        egui::TextEdit::singleline(&mut app.user_input.mass_tolerance.text)
-                            .hint_text("Enter mass tolerance in ppm"),
-                    )
-                    .lost_focus()
-                {
+                ui.label("Mass tolerance:");
+                let tolerance_response = ui
+                    .horizontal(|ui| {
+                        let response = ui.add(
+                            egui::TextEdit::singleline(&mut app.user_input.mass_tolerance.text)
+                                .hint_text("Enter mass tolerance"),
+                        );
+                        super::widgets::tolerance_unit_select(
+                            ui,
+                            "xic_tolerance_unit",
+                            &mut app.user_input.tolerance_unit,
+                        );
+                        response
+                    })
+                    .inner;
+                if tolerance_response.lost_focus() {
                     // Capture text before sync so we can report what the user typed.
                     let original_tol_text = app.user_input.mass_tolerance.text.clone();
                     let current_mass = app.user_input.mass.value;
                     // Validate: tolerance must be in range for XicParams
                     let valid = app.user_input.mass_tolerance.sync_on_focus_lost(|t| {
                         let temp_bounds = crate::validation::DataBounds::unrestricted();
-                        XicParams::new(current_mass, app.user_input.polarity, *t, &temp_bounds)
-                            .is_ok()
+                        XicParams::with_tolerance(
+                            current_mass,
+                            app.user_input.polarity,
+                            MassTolerance {
+                                value: *t,
+                                unit: app.user_input.tolerance_unit,
+                            },
+                            &temp_bounds,
+                        )
+                        .is_ok()
                     });
                     match valid {
                         Ok(()) => {
@@ -184,16 +208,32 @@ pub fn render_xic_settings_window(app: &mut MzViewerApp, ctx: &egui::Context) {
                         .unwrap_or(app.user_input.mass_tolerance.value);
                     let mass_valid = app.user_input.mass.sync_on_focus_lost(|m| {
                         let temp_bounds = crate::validation::DataBounds::unrestricted();
-                        XicParams::new(*m, app.user_input.polarity, pending_tolerance, &temp_bounds)
-                            .is_ok()
+                        XicParams::with_tolerance(
+                            *m,
+                            app.user_input.polarity,
+                            MassTolerance {
+                                value: pending_tolerance,
+                                unit: app.user_input.tolerance_unit,
+                            },
+                            &temp_bounds,
+                        )
+                        .is_ok()
                     });
 
                     // --- sync mass_tolerance ---
                     let current_mass = app.user_input.mass.value;
                     let tol_valid = app.user_input.mass_tolerance.sync_on_focus_lost(|t| {
                         let temp_bounds = crate::validation::DataBounds::unrestricted();
-                        XicParams::new(current_mass, app.user_input.polarity, *t, &temp_bounds)
-                            .is_ok()
+                        XicParams::with_tolerance(
+                            current_mass,
+                            app.user_input.polarity,
+                            MassTolerance {
+                                value: *t,
+                                unit: app.user_input.tolerance_unit,
+                            },
+                            &temp_bounds,
+                        )
+                        .is_ok()
                     });
 
                     match (mass_valid, tol_valid) {
@@ -309,8 +349,9 @@ pub fn render_range_window(app: &mut MzViewerApp, ctx: &egui::Context) {
                         ui.add_space(2.0);
                         ui.label(
                             egui::RichText::new(format!(
-                                "File range: {:.0} \u{2013} {:.0} m/z",
-                                b.min_mz, b.max_mz
+                                "File range: {} \u{2013} {} m/z",
+                                super::display::fmt_mz(b.min_mz),
+                                super::display::fmt_mz(b.max_mz)
                             ))
                             .small()
                             .color(ui.visuals().weak_text_color()),

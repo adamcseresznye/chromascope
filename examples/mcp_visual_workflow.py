@@ -18,6 +18,7 @@ def main():
     parser.add_argument("--file", required=True, type=Path)
     parser.add_argument("--mass", required=True, type=float)
     parser.add_argument("--ppm", default=10.0, type=float)
+    parser.add_argument("--mda", default=None, type=float, help="tolerance in mDa instead of ppm")
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
     source = args.file.resolve(strict=True)
@@ -84,7 +85,7 @@ def main():
         tool("dataset_metadata", dataset_id=dataset)
         extracted = tool("extract_chromatogram", dataset_id=dataset, kind="xic",
                          polarity="positive", ms_level=1, smoothing=0,
-                         mass=args.mass, tolerance_ppm=args.ppm,
+                         mass=args.mass, **({"tolerance_mda": args.mda} if args.mda is not None else {"tolerance_ppm": args.ppm}),
                          display=True)["structuredContent"]
         if extracted.get("display_conflict") or not extracted["displayed"]:
             raise RuntimeError("Local GUI changed during extraction; retry display")

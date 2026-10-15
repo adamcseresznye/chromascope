@@ -760,7 +760,11 @@ pub fn plot_mass_spectrum(app: &mut MzViewerApp, ui: &mut egui::Ui) -> egui::Res
                     .grid_spacing(egui::Rangef::new(12.0, 1800.0))
                     .label_formatter(|name, value| {
                         if name.is_empty() {
-                            format!("m/z = {:.4}\nIntensity = {:.2e}", value.x, value.y)
+                            format!(
+                                "m/z = {}\nIntensity = {:.2e}",
+                                super::display::fmt_mz(value.x),
+                                value.y
+                            )
                         // ← CHANGED
                         } else {
                             format!("{}\nIntensity = {:.2e}", name, value.y) // ← CHANGED
@@ -787,7 +791,7 @@ pub fn plot_mass_spectrum(app: &mut MzViewerApp, ui: &mut egui::Ui) -> egui::Res
                                         line_color
                                             .to_egui_for(plot_ui.ctx().style().visuals.dark_mode),
                                     )
-                                    .name(format!("m/z = {:.4}", m))
+                                    .name(format!("m/z = {}", super::display::fmt_mz(m)))
                             })
                             .collect();
 

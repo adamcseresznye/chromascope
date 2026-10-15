@@ -94,6 +94,91 @@ impl DataBounds {
     }
 }
 
+/// Unit of a mass tolerance. ppm is relative to the target m/z; mDa is an absolute
+/// half-width in milli-daltons (1 mDa = 0.001 Da).
+#[cfg_attr(feature = "mcp-headless", derive(rmcp::schemars::JsonSchema))]
+#[cfg_attr(feature = "mcp-headless", schemars(crate = "rmcp::schemars"))]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ToleranceUnit {
+    #[default]
+    Ppm,
+    Mda,
+}
+
+impl ToleranceUnit {
+    pub const ALL: [ToleranceUnit; 2] = [ToleranceUnit::Ppm, ToleranceUnit::Mda];
+
+    /// Text for labels and file headers.
+    pub fn label(self) -> &'static str {
+        match self {
+            ToleranceUnit::Ppm => "ppm",
+            ToleranceUnit::Mda => "mDa",
+        }
+    }
+
+    /// Parses `ppm` or `mDa` (any case); anything else is `None`.
+    pub fn parse(text: &str) -> Option<Self> {
+        match text.trim().to_ascii_lowercase().as_str() {
+            "ppm" => Some(ToleranceUnit::Ppm),
+            "mda" => Some(ToleranceUnit::Mda),
+            _ => None,
+        }
+    }
+
+    fn is_ppm(&self) -> bool {
+        *self == ToleranceUnit::Ppm
+    }
+}
+
+/// A mass tolerance: a half-width around the target m/z, in ppm or mDa.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MassTolerance {
+    pub value: f64,
+    pub unit: ToleranceUnit,
+}
+
+impl MassTolerance {
+    pub fn ppm(value: f64) -> Self {
+        Self {
+            value,
+            unit: ToleranceUnit::Ppm,
+        }
+    }
+
+    pub fn mda(value: f64) -> Self {
+        Self {
+            value,
+            unit: ToleranceUnit::Mda,
+        }
+    }
+
+    /// Between 0 and 1000 in either unit.
+    pub fn validate(&self) -> Result<()> {
+        if (0.0..=1000.0).contains(&self.value) {
+            Ok(())
+        } else {
+            Err(ChromascopeError::InvalidMassTolerance(self.value))
+        }
+    }
+
+    /// Half-width in daltons at the given m/z.
+    pub fn to_da(&self, mz: f64) -> f64 {
+        match self.unit {
+            ToleranceUnit::Ppm => mz * self.value / 1_000_000.0,
+            ToleranceUnit::Mda => self.value / 1000.0,
+        }
+    }
+
+    /// Equivalent ppm at the given m/z.
+    pub fn to_ppm(&self, mz: f64) -> f64 {
+        match self.unit {
+            ToleranceUnit::Ppm => self.value,
+            ToleranceUnit::Mda => self.value / 1000.0 / mz * 1_000_000.0,
+        }
+    }
+}
+
 /// Validated parameters for Extracted Ion Chromatogram (XIC) extraction.
 ///
 /// This type ensures that mass and mass tolerance values are within valid ranges
@@ -102,7 +187,7 @@ impl DataBounds {
 ///
 /// # Validation Rules
 /// - `mass`: Must be within the file's m/z range
-/// - `mass_tolerance`: Must be between 0.0 and 1000.0 ppm
+/// - `mass_tolerance`: Must be between 0.0 and 1000.0 (ppm or mDa)
 ///
 /// # Example
 /// ```
@@ -129,7 +214,11 @@ impl DataBounds {
 #[derive(serde::Serialize, Debug, Clone, Copy, PartialEq)]
 pub struct XicParams {
     mass: f64,
+    /// Tolerance value, in `tolerance_unit`.
     mass_tolerance: f64,
+    /// Omitted from serialised output when ppm, so ppm files are unchanged.
+    #[serde(skip_serializing_if = "ToleranceUnit::is_ppm")]
+    tolerance_unit: ToleranceUnit,
     #[cfg_attr(
         feature = "mcp-headless",
         schemars(with = "crate::processing::PolaritySchema")
@@ -147,14 +236,19 @@ impl<'de> serde::Deserialize<'de> for XicParams {
         struct Wire {
             mass: f64,
             mass_tolerance: f64,
+            #[serde(default)]
+            tolerance_unit: ToleranceUnit,
             #[serde(with = "crate::processing::polarity_serde")]
             polarity: ScanPolarity,
         }
         let w = Wire::deserialize(deserializer)?;
-        XicParams::new(
+        XicParams::with_tolerance(
             w.mass,
             w.polarity,
-            w.mass_tolerance,
+            MassTolerance {
+                value: w.mass_tolerance,
+                unit: w.tolerance_unit,
+            },
             &DataBounds::unrestricted(),
         )
         .map_err(serde::de::Error::custom)
@@ -189,17 +283,24 @@ impl XicParams {
         mass_tolerance: f64,
         bounds: &DataBounds,
     ) -> Result<Self> {
+        Self::with_tolerance(mass, polarity, MassTolerance::ppm(mass_tolerance), bounds)
+    }
+
+    /// Like [`XicParams::new`], with the tolerance in ppm or mDa.
+    pub fn with_tolerance(
+        mass: f64,
+        polarity: ScanPolarity,
+        tolerance: MassTolerance,
+        bounds: &DataBounds,
+    ) -> Result<Self> {
         // Validate against actual file data
         bounds.validate_mass(mass)?;
-
-        // Validate mass tolerance (still uses hard-coded range)
-        if !(0.0..=1000.0).contains(&mass_tolerance) {
-            return Err(ChromascopeError::InvalidMassTolerance(mass_tolerance));
-        }
+        tolerance.validate()?;
 
         Ok(Self {
             mass,
-            mass_tolerance,
+            mass_tolerance: tolerance.value,
+            tolerance_unit: tolerance.unit,
             polarity,
         })
     }
@@ -209,9 +310,17 @@ impl XicParams {
         self.mass
     }
 
-    /// Returns the mass tolerance in ppm
+    /// The tolerance as entered, with its unit.
+    pub fn tolerance(&self) -> MassTolerance {
+        MassTolerance {
+            value: self.mass_tolerance,
+            unit: self.tolerance_unit,
+        }
+    }
+
+    /// The tolerance expressed in ppm at the target mass (the entered value when it is ppm).
     pub fn mass_tolerance(&self) -> f64 {
-        self.mass_tolerance
+        self.tolerance().to_ppm(self.mass)
     }
 
     /// Returns the scan polarity
@@ -308,6 +417,59 @@ mod tests {
         // Test upper boundary (1000.0 ppm)
         let max_tol = XicParams::new(500.0, ScanPolarity::Positive, 1000.0, &bounds);
         assert!(max_tol.is_ok(), "1000.0 ppm tolerance should be valid");
+    }
+
+    #[test]
+    fn mda_and_ppm_convert_at_the_target_mass() {
+        // 5 mDa at m/z 500 is 10 ppm.
+        let mda = MassTolerance::mda(5.0);
+        assert!((mda.to_da(500.0) - 0.005).abs() < 1e-12);
+        assert!((mda.to_ppm(500.0) - 10.0).abs() < 1e-9);
+        let ppm = MassTolerance::ppm(10.0);
+        assert!((ppm.to_da(500.0) - 0.005).abs() < 1e-12);
+        assert_eq!(ppm.to_ppm(500.0), 10.0);
+    }
+
+    #[test]
+    fn mda_tolerance_keeps_its_unit_and_is_range_checked() {
+        let bounds = mock_bounds();
+        let p = XicParams::with_tolerance(
+            500.0,
+            ScanPolarity::Positive,
+            MassTolerance::mda(5.0),
+            &bounds,
+        )
+        .unwrap();
+        assert_eq!(p.tolerance(), MassTolerance::mda(5.0));
+        assert!((p.mass_tolerance() - 10.0).abs() < 1e-9);
+        for bad in [-1.0, 1000.5] {
+            assert!(XicParams::with_tolerance(
+                500.0,
+                ScanPolarity::Positive,
+                MassTolerance::mda(bad),
+                &bounds
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn ppm_params_serialise_as_before_and_mda_round_trips() {
+        let bounds = mock_bounds();
+        let ppm = XicParams::new(500.0, ScanPolarity::Positive, 10.0, &bounds).unwrap();
+        let text = serde_json::to_string(&ppm).unwrap();
+        assert!(!text.contains("tolerance_unit"), "{text}");
+        assert_eq!(serde_json::from_str::<XicParams>(&text).unwrap(), ppm);
+        let mda = XicParams::with_tolerance(
+            500.0,
+            ScanPolarity::Positive,
+            MassTolerance::mda(5.0),
+            &bounds,
+        )
+        .unwrap();
+        let text = serde_json::to_string(&mda).unwrap();
+        assert!(text.contains("\"tolerance_unit\":\"mda\""), "{text}");
+        assert_eq!(serde_json::from_str::<XicParams>(&text).unwrap(), mda);
     }
 
     #[test]

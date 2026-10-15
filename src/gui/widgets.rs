@@ -293,3 +293,25 @@ pub(super) fn segment_value<T: PartialEq>(
     }
     response
 }
+
+/// Compact ppm | mDa selector for a tolerance value; the number keeps its text, only its unit changes.
+pub(super) fn tolerance_unit_select(
+    ui: &mut egui::Ui,
+    id: impl std::hash::Hash,
+    unit: &mut crate::validation::ToleranceUnit,
+) -> Response {
+    let mut changed = false;
+    let mut response = egui::ComboBox::from_id_salt(id)
+        .width(64.0)
+        .selected_text(unit.label())
+        .show_ui(ui, |ui| {
+            for option in crate::validation::ToleranceUnit::ALL {
+                changed |= ui.selectable_value(unit, option, option.label()).changed();
+            }
+        })
+        .response;
+    if changed {
+        response.mark_changed();
+    }
+    response
+}

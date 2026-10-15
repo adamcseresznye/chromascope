@@ -322,11 +322,11 @@ pub fn process_chromatogram(
                 .as_ref()
                 .ok_or(ChromascopeError::MissingXicParams)?;
 
-            data.get_xic(
+            data.get_xic_with(
                 xic_params.mass(),
                 params.ms_level,
                 xic_params.polarity(),
-                xic_params.mass_tolerance(),
+                xic_params.tolerance(),
                 params.precursor_mz,
             )?
         }

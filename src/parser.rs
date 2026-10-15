@@ -1137,6 +1137,24 @@ impl MzData {
         mass_tolerance: f64,
         precursor_mz: Option<f64>,
     ) -> Result<ChromatogramData> {
+        self.get_xic_with(
+            mass,
+            ms_level,
+            polarity,
+            crate::validation::MassTolerance::ppm(mass_tolerance),
+            precursor_mz,
+        )
+    }
+
+    /// Like [`MzData::get_xic`], with the tolerance in ppm or mDa.
+    pub fn get_xic_with(
+        &mut self,
+        mass: f64,
+        ms_level: u8,
+        polarity: ScanPolarity,
+        tolerance: crate::validation::MassTolerance,
+        precursor_mz: Option<f64>,
+    ) -> Result<ChromatogramData> {
         info!(
             "Attempting to read XIC of {:?} at MS{} {:?}",
             self.file_name, ms_level, polarity
@@ -1145,9 +1163,7 @@ impl MzData {
         if !mass.is_finite() || mass <= 0.0 {
             return Err(ChromascopeError::InvalidMass(mass));
         }
-        if !(0.0..=1000.0).contains(&mass_tolerance) {
-            return Err(ChromascopeError::InvalidMassTolerance(mass_tolerance));
-        }
+        tolerance.validate()?;
 
         let control = self.job_control.clone();
         let acquisition_filter = self.acquisition_filter;
@@ -1181,7 +1197,7 @@ impl MzData {
             });
 
         // Decode one spectrum at a time.
-        let tol_da = mass * (mass_tolerance / 1_000_000.0);
+        let tol_da = tolerance.to_da(mass);
         let mut results: Vec<(f32, f32, usize)> = spectra
             .map(|spectrum| {
                 let spectrum_rt = spectrum
@@ -1225,7 +1241,17 @@ impl MzData {
                 })?;
                 let total_intensity: f32 = centroided
                     .peaks
-                    .all_peaks_for(mass, Tolerance::PPM(mass_tolerance))
+                    .all_peaks_for(
+                        mass,
+                        match tolerance.unit {
+                            crate::validation::ToleranceUnit::Ppm => {
+                                Tolerance::PPM(tolerance.value)
+                            }
+                            crate::validation::ToleranceUnit::Mda => {
+                                Tolerance::Da(tolerance.value / 1000.0)
+                            }
+                        },
+                    )
                     .iter()
                     .map(|p| p.intensity)
                     .sum();
@@ -1620,6 +1646,29 @@ mod tests {
                 result.retention_time[i]
             );
         }
+    }
+
+    /// A tolerance in mDa extracts the same trace as the ppm value that is equal at that m/z.
+    #[test]
+    fn test_xic_in_mda_matches_equivalent_ppm() {
+        let mut data = setup_test_parser();
+        let mass = 722.43;
+        let by_ppm = data
+            .get_xic(mass, 1, ScanPolarity::Positive, 50.0, None)
+            .unwrap();
+        let mda = mass * 50.0 / 1_000_000.0 * 1000.0;
+        let by_mda = data
+            .get_xic_with(
+                mass,
+                1,
+                ScanPolarity::Positive,
+                crate::validation::MassTolerance::mda(mda),
+                None,
+            )
+            .unwrap();
+        assert_eq!(by_ppm.retention_time, by_mda.retention_time);
+        assert_eq!(by_ppm.intensity, by_mda.intensity);
+        assert!(by_mda.intensity.iter().any(|v| *v > 0.0));
     }
 
     /// Parallel XIC result must be sorted by RT.

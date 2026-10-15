@@ -76,8 +76,9 @@ pub(super) fn show(app: &MzViewerApp, ctx: &Context) {
                         file.data.bounds.min_rt, file.data.bounds.max_rt
                     ));
                     ui.label(format!(
-                        "m/z range: {:.2}–{:.2}",
-                        file.data.bounds.min_mz, file.data.bounds.max_mz
+                        "m/z range: {}–{}",
+                        super::display::fmt_mz(file.data.bounds.min_mz),
+                        super::display::fmt_mz(file.data.bounds.max_mz)
                     ));
                     ui.separator();
                     ui.label("Source path");

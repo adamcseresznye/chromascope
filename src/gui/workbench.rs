@@ -658,20 +658,32 @@ fn xic_controls(app: &mut MzViewerApp, ui: &mut egui::Ui) {
     ui.label("Target m/z");
     ui.add(
         egui::TextEdit::singleline(&mut app.user_input.mass.text)
-            .hint_text("e.g. 483.0000")
+            .hint_text(format!("e.g. {}", super::display::fmt_mz(483.0)))
             .desired_width(f32::INFINITY),
     );
-    ui.label("Tolerance (ppm)");
-    ui.add(
-        egui::TextEdit::singleline(&mut app.user_input.mass_tolerance.text)
-            .hint_text("e.g. 10")
-            .desired_width(f32::INFINITY),
-    );
+    ui.label("Tolerance");
+    ui.horizontal(|ui| {
+        let unit_width = 96.0;
+        ui.add(
+            egui::TextEdit::singleline(&mut app.user_input.mass_tolerance.text)
+                .hint_text("e.g. 10")
+                .desired_width((ui.available_width() - unit_width).max(40.0)),
+        );
+        super::widgets::tolerance_unit_select(
+            ui,
+            "xic_tolerance_unit",
+            &mut app.user_input.tolerance_unit,
+        );
+    });
     ui.small("Tolerance is a ± half-width around the target m/z. The extraction window stays fixed to these values for reproducibility.");
     if app.user_input.mass.value > 0.0 && app.user_input.mass_tolerance.value > 0.0 {
         ui.small(format!(
-            "Current extraction: {:.4} m/z ± {:.1} ppm",
-            app.user_input.mass.value, app.user_input.mass_tolerance.value
+            "Current extraction: {} m/z ± {}",
+            super::display::fmt_mz(app.user_input.mass.value),
+            super::display::fmt_tolerance(&crate::validation::MassTolerance {
+                value: app.user_input.mass_tolerance.value,
+                unit: app.user_input.tolerance_unit,
+            })
         ));
     }
     if ui
@@ -695,8 +707,16 @@ fn xic_controls(app: &mut MzViewerApp, ui: &mut egui::Ui) {
             .map(|file| file.data.bounds)
             .unwrap_or_else(crate::validation::DataBounds::unrestricted);
         match parsed.map(|(mass, tolerance)| {
-            crate::validation::XicParams::new(mass, app.user_input.polarity, tolerance, &bounds)
-                .map(|_| (mass, tolerance))
+            crate::validation::XicParams::with_tolerance(
+                mass,
+                app.user_input.polarity,
+                crate::validation::MassTolerance {
+                    value: tolerance,
+                    unit: app.user_input.tolerance_unit,
+                },
+                &bounds,
+            )
+            .map(|_| (mass, tolerance))
         }) {
             Some(Ok((mass, tolerance))) => {
                 app.user_input.mass.value = mass;

@@ -65,6 +65,7 @@ pub fn new_analyte(n: usize) -> Analyte {
             kind: "XIC".into(),
             mass: Some(100.0),
             ppm: 10.0,
+            mda: None,
             smoothing: 0,
             polarity: "positive".into(),
             ms_level: None,

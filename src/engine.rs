@@ -162,10 +162,10 @@ pub fn validate_params(p: &ProcessingParams) -> crate::error::Result<()> {
     }
     if p.plot_type == crate::plotting_parameters::PlotType::Xic {
         let x = p.xic_params.as_ref().ok_or(E::MissingXicParams)?;
-        crate::validation::XicParams::new(
+        crate::validation::XicParams::with_tolerance(
             x.mass(),
             x.polarity(),
-            x.mass_tolerance(),
+            x.tolerance(),
             &DataBounds::unrestricted(),
         )?;
         if p.mz_range.is_some() || x.polarity() != p.polarity {

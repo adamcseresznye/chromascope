@@ -75,8 +75,11 @@ pub struct UserInput {
     pub polarity: ScanPolarity,
     /// The m/z value entered by the user — text for the TextEdit, value for processing.
     pub mass: ValidatedInput<f64>,
-    /// The mass tolerance in ppm — text for the TextEdit, value for processing.
+    /// The mass tolerance — text for the TextEdit, value for processing (in `tolerance_unit`).
     pub mass_tolerance: ValidatedInput<f64>,
+    /// Unit of `mass_tolerance`: ppm or mDa.
+    #[serde(default)]
+    pub tolerance_unit: crate::validation::ToleranceUnit,
     /// The color of the line to be used in the plot
     pub line_color: LineColor,
     /// The amount of smoothing to be applied to the plot
@@ -112,6 +115,7 @@ impl Default for UserInput {
             polarity: ScanPolarity::default(),
             mass: ValidatedInput::default(),
             mass_tolerance: ValidatedInput::default(),
+            tolerance_unit: crate::validation::ToleranceUnit::default(),
             line_color: LineColor::default(),
             smoothing: u8::default(),
             line_width: 2.0,

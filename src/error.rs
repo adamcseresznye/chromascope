@@ -20,8 +20,8 @@ pub enum ChromascopeError {
     #[error("Mass {mass:.2} is outside file range [{min:.2} - {max:.2}] m/z")]
     MassOutOfRange { mass: f64, min: f64, max: f64 },
 
-    /// Invalid mass tolerance provided (must be 0-1000 ppm)
-    #[error("Invalid mass tolerance {0} ppm - must be between 0 and 1000")]
+    /// Invalid mass tolerance provided (must be 0-1000, in ppm or mDa)
+    #[error("Invalid mass tolerance {0} - must be between 0 and 1000 (ppm or mDa)")]
     InvalidMassTolerance(f64),
 
     /// No chromatogram data available for plotting

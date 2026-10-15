@@ -55,6 +55,7 @@ fn extraction_parameters(
         smoothing,
         mass,
         tolerance_ppm,
+        tolerance_mda,
         mz_range,
         precursor_mz,
         acquisition,
@@ -80,16 +81,29 @@ fn extraction_parameters(
     };
     if mass.is_some_and(|v| !v.is_finite())
         || tolerance_ppm.is_some_and(|v| !v.is_finite())
+        || tolerance_mda.is_some_and(|v| !v.is_finite())
         || precursor_mz.is_some_and(|v| !v.is_finite() || v <= 0.0)
     {
         return Err("Mass and tolerance must be finite; precursor must be positive".into());
     }
-    if kind != PlotType::Xic && (mass.is_some() || tolerance_ppm.is_some()) {
-        return Err("Mass and ppm are XIC parameters; omit them for TIC/BPC".into());
+    if kind != PlotType::Xic
+        && (mass.is_some() || tolerance_ppm.is_some() || tolerance_mda.is_some())
+    {
+        return Err(
+            "Mass and tolerance (ppm or mDa) are XIC parameters; omit them for TIC/BPC".into(),
+        );
     }
     if kind == PlotType::Xic && mz_range.is_some() {
-        return Err("XIC uses mass and ppm; mz_range applies to TIC/BPC".into());
+        return Err("XIC uses mass and a tolerance; mz_range applies to TIC/BPC".into());
     }
+    let tolerance = match (tolerance_ppm, tolerance_mda) {
+        (Some(_), Some(_)) => {
+            return Err("Give tolerance_ppm or tolerance_mda, not both".into());
+        }
+        (Some(v), None) => Some(crate::validation::MassTolerance::ppm(v)),
+        (None, Some(v)) => Some(crate::validation::MassTolerance::mda(v)),
+        (None, None) => None,
+    };
     let acquisition = match acquisition.as_deref() {
         None => None,
         Some("FS") => Some(processing::AcquisitionMode::FS),
@@ -105,10 +119,10 @@ fn extraction_parameters(
         smoothing,
         xic_params: if kind == PlotType::Xic {
             Some(
-                XicParams::new(
+                XicParams::with_tolerance(
                     mass.ok_or("XIC requires mass")?,
                     polarity,
-                    tolerance_ppm.ok_or("XIC requires tolerance_ppm")?,
+                    tolerance.ok_or("XIC requires tolerance_ppm or tolerance_mda")?,
                     bounds,
                 )
                 .map_err(err)?,
@@ -944,7 +958,8 @@ impl MzViewerApp {
         }
         if let Some(x) = p.xic_params {
             self.user_input.mass = ValidatedInput::new(x.mass());
-            self.user_input.mass_tolerance = ValidatedInput::new(x.mass_tolerance());
+            self.user_input.mass_tolerance = ValidatedInput::new(x.tolerance().value);
+            self.user_input.tolerance_unit = x.tolerance().unit;
         }
         self.state_changed = StateChange::Unchanged;
     }
@@ -1078,11 +1093,44 @@ mod tests {
             smoothing: 0,
             mass: None,
             tolerance_ppm: None,
+            tolerance_mda: None,
             mz_range: None,
             precursor_mz: None,
             acquisition: None,
             display,
         }
+    }
+    #[test]
+    fn xic_tolerance_takes_ppm_or_mda_but_not_both() {
+        use crate::validation::MassTolerance;
+        let bounds = crate::validation::DataBounds::unrestricted();
+        let xic = |ppm: Option<f64>, mda: Option<f64>| Command::ExtractChromatogram {
+            dataset_id: 0,
+            kind: "xic".into(),
+            polarity: "positive".into(),
+            ms_level: 1,
+            smoothing: 0,
+            mass: Some(500.0),
+            tolerance_ppm: ppm,
+            tolerance_mda: mda,
+            mz_range: None,
+            precursor_mz: None,
+            acquisition: None,
+            display: false,
+        };
+        let tolerance = |ppm, mda| {
+            extraction_parameters(xic(ppm, mda), &bounds).map(|p| p.xic_params.unwrap().tolerance())
+        };
+        assert_eq!(tolerance(Some(10.0), None), Ok(MassTolerance::ppm(10.0)));
+        assert_eq!(tolerance(None, Some(5.0)), Ok(MassTolerance::mda(5.0)));
+        assert!(tolerance(Some(10.0), Some(5.0)).is_err());
+        assert!(tolerance(None, None).is_err());
+        assert!(tolerance(None, Some(2000.0)).is_err());
+        let mut tic = xic(None, Some(5.0));
+        if let Command::ExtractChromatogram { kind, .. } = &mut tic {
+            *kind = "tic".into();
+        }
+        assert!(extraction_parameters(tic, &bounds).is_err());
     }
     #[test]
     fn numerical_round_trip_and_read_only_ui_preservation() {

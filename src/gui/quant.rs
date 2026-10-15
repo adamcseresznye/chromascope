@@ -527,7 +527,7 @@ fn csv(results: &[Measurement], method: &Method) -> String {
     fn cell(s: &str) -> String {
         format!("\"{}\"", s.replace('"', "\"\""))
     }
-    let mut out = "sample,source,run,analyte,method_name,status,needs_recalculation,review_state,confidence_score,confidence_tier,confidence_flags,area_intensity_min,apex_rt_min,start_rt_min,end_rt_min,height,acquisition,ms_level,polarity,target_mz,ppm,precursor_mz,mz_range,baseline,area_source,algorithm,diagnostic,method_toml\n".to_owned();
+    let mut out = "sample,source,run,analyte,method_name,status,needs_recalculation,review_state,confidence_score,confidence_tier,confidence_flags,area_intensity_min,apex_rt_min,start_rt_min,end_rt_min,height,acquisition,ms_level,polarity,target_mz,ppm,mda,precursor_mz,mz_range,baseline,area_source,algorithm,diagnostic,method_toml\n".to_owned();
     let fresh = fresh(method);
     for r in results {
         let p = r.peak.as_ref();
@@ -576,7 +576,14 @@ fn csv(results: &[Measurement], method: &Method) -> String {
             r.params
                 .xic_params
                 .as_ref()
-                .map(|x| x.mass_tolerance().to_string())
+                .filter(|x| x.tolerance().unit == crate::validation::ToleranceUnit::Ppm)
+                .map(|x| x.tolerance().value.to_string())
+                .unwrap_or_default(),
+            r.params
+                .xic_params
+                .as_ref()
+                .filter(|x| x.tolerance().unit == crate::validation::ToleranceUnit::Mda)
+                .map(|x| x.tolerance().value.to_string())
                 .unwrap_or_default(),
             r.params
                 .precursor_mz
@@ -1218,7 +1225,7 @@ fn method_editor(
         let defaults = method_default(&*draft);
         egui::ScrollArea::both().max_height(230.0).show(ui,|ui| {
             egui::Grid::new("quant_method_table").striped(true).show(ui,|ui| {
-                for h in ["Analyte","Mode","Target m/z","Precursor m/z","ppm","Polarity","MS level","Expected RT","Window start","Window end","Integration",""] { crate::gui::widgets::strong(ui, h); } ui.end_row();
+                for h in ["Analyte","Mode","Target m/z","Precursor m/z","Tolerance","Polarity","MS level","Expected RT","Window start","Window end","Integration",""] { crate::gui::widgets::strong(ui, h); } ui.end_row();
                 for (i,a) in draft.analytes.iter_mut().enumerate() {
                         ui.add(egui::TextEdit::singleline(&mut a.extraction.name).desired_width(130.0).min_size(egui::vec2(130.0,28.0)));
                         egui::ComboBox::from_id_salt((i,"mode")).width(60.0).selected_text(format!("{:?}",a.extraction.acquisition)).show_ui(ui,|ui| {
@@ -1230,7 +1237,12 @@ fn method_editor(
                             if ui.checkbox(&mut use_precursor,"").changed() { a.extraction.precursor_mz=if use_precursor {Some(100.0)} else {None}; }
                             if let Some(m)=&mut a.extraction.precursor_mz { ui.add(egui::DragValue::new(m).speed(0.01).range(0.0001..=1e8)); }
                         });
-                        ui.add(egui::DragValue::new(&mut a.extraction.ppm).range(0.0..=1000.0));
+                        ui.horizontal(|ui| {
+                            let mut tolerance = a.extraction.tolerance();
+                            ui.add(egui::DragValue::new(&mut tolerance.value).range(0.0..=1000.0));
+                            crate::gui::widgets::tolerance_unit_select(ui, (i, "tolerance_unit"), &mut tolerance.unit);
+                            a.extraction.set_tolerance(tolerance);
+                        });
                         egui::ComboBox::from_id_salt((i,"polarity")).selected_text(&a.extraction.polarity).show_ui(ui,|ui| { for p in ["positive","negative"] { ui.selectable_value(&mut a.extraction.polarity,p.into(),p); } });
                         let mut level=a.extraction.ms_level.unwrap_or(if a.extraction.acquisition==processing::AcquisitionMode::MRM {2} else {1});
                         if ui.add(egui::DragValue::new(&mut level).range(1..=10)).changed() { a.extraction.ms_level=Some(level); }
