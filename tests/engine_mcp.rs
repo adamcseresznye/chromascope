@@ -314,7 +314,7 @@ async fn configured_project_report_export_protocol() {
     assert!(result["result"]["structuredContent"]["html"]
         .as_str()
         .unwrap()
-        .contains("not_available"));
+        .contains("No targeted quantification is saved"));
     drop(client);
     task.abort();
 }

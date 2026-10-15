@@ -53,6 +53,7 @@ pub fn navigation(app: &mut MzViewerApp, ui: &mut egui::Ui) {
         DATA
     };
     let ctx = ui.ctx().clone();
+    let mut workflow_goto = None;
     ui.horizontal_wrapped(|ui| {
         for (id, label) in &destinations {
             if super::widgets::nav_tab(ui, selected == *id, label).clicked() {
@@ -61,7 +62,7 @@ pub fn navigation(app: &mut MzViewerApp, ui: &mut egui::Ui) {
         }
         // Workflow progress sits at the far right of the navigation bar, next to the destinations it leads to.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            super::workflow::status_chip(app, &ctx, ui);
+            workflow_goto = super::workflow::status_chip(app, ui);
         });
     });
     ui.ctx().input(|input| {
@@ -89,6 +90,11 @@ pub fn navigation(app: &mut MzViewerApp, ui: &mut egui::Ui) {
         d.insert_temp(egui::Id::new("activity_open"), selected == ACTIVITY);
         d.insert_temp(egui::Id::new("central_workspaces"), true);
     });
+    // Applied last: the tab flags above are derived from the pre-click selection and would
+    // otherwise undo a jump chosen in the workflow menu.
+    if let Some(destination) = workflow_goto {
+        super::workflow::go(app, &ctx, destination);
+    }
 }
 
 /// Analytical content uses the full remaining viewport in the application.
