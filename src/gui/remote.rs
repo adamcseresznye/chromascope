@@ -18,8 +18,13 @@ pub(crate) struct PendingOperation {
     selection: Option<usize>,
     input: UserInput,
 }
+/// Runs of one imported input, and the temporary folder that keeps a converted run alive.
+type Imported = (
+    Vec<processing::LoadedRun>,
+    Option<std::sync::Arc<tempfile::TempDir>>,
+);
 enum BackgroundResult {
-    Opened(Vec<(std::path::PathBuf, Result<processing::LoadedRun, String>)>),
+    Opened(Vec<(std::path::PathBuf, Result<Imported, String>)>),
     Extracted {
         dataset_id: usize,
         display: bool,
@@ -94,6 +99,30 @@ fn engine_integration(points: &[[f64; 2]], start: f64, end: f64) -> Result<Value
     )
     .map_err(|e| e.message)?;
     serde_json::to_value(response.output).map_err(err)
+}
+/// Imports every path (converting vendor data with `msconvert` when needed), one after another.
+fn import_all(
+    paths: Vec<std::path::PathBuf>,
+    msconvert: Option<std::path::PathBuf>,
+) -> Vec<(std::path::PathBuf, Result<Imported, String>)> {
+    let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    paths
+        .into_iter()
+        .map(|path| {
+            let loaded = match processing::import_file_in_background(
+                path.clone(),
+                msconvert.clone(),
+                cancelled.clone(),
+                0,
+            ) {
+                processing::FileLoadingResult::Success {
+                    runs, workspace, ..
+                } => Ok((runs, workspace)),
+                processing::FileLoadingResult::Error { message, .. } => Err(message),
+            };
+            (path, loaded)
+        })
+        .collect()
 }
 fn extraction_parameters(
     command: Command,
@@ -419,28 +448,12 @@ impl MzViewerApp {
                 }
                 let paths = paths
                     .iter()
-                    .map(|p| b.policy.input(p))
+                    .map(|p| b.policy.source(p))
                     .collect::<Result<Vec<_>, _>>()?;
+                let executable = self.msconvert_path.clone();
                 std::thread::spawn(move || {
-                    let runs = paths
-                        .into_iter()
-                        .map(|path| {
-                            let mut data = MzData::new();
-                            let result = data
-                                .open_msfile(&path)
-                                .map(|data| processing::LoadedRun {
-                                    name: path.file_name().unwrap().to_string_lossy().into_owned(),
-                                    path: path.to_string_lossy().into_owned(),
-                                    bounds: data.bounds,
-                                    scan_filters: data.available_scan_filters.clone(),
-                                    chromatograms: data.available_chromatograms.clone(),
-                                    acquisitions: data.available_acquisitions.clone(),
-                                })
-                                .map_err(err);
-                            (path, result)
-                        })
-                        .collect();
-                    let _ = sender.send(Ok(BackgroundResult::Opened(runs)));
+                    let _ =
+                        sender.send(Ok(BackgroundResult::Opened(import_all(paths, executable))));
                     context.request_repaint();
                 });
             }
@@ -451,7 +464,9 @@ impl MzViewerApp {
             } => {
                 let dataset_id = &dataset_id.index();
                 let file = self.files.get(dataset_id).ok_or("Unknown dataset")?;
-                let path = b.policy.input(&file.path)?;
+                self.authorize_dataset(file, b)?;
+                // The reader opens the file the window reads (the converted run for vendor data).
+                let path = std::path::PathBuf::from(&file.path);
                 let bounds = file.data.bounds;
                 let params = extraction_parameters(command.clone(), &bounds)?;
                 let dataset_id = *dataset_id;
@@ -486,51 +501,7 @@ impl MzViewerApp {
         b: &mut GuiBridge,
     ) -> Result<CallToolResult, String> {
         let value = match result {
-            BackgroundResult::Opened(runs) => {
-                let mut outcomes = vec![];
-                for (path, result) in runs {
-                    match result.and_then(|run| {
-                        // A new GUI-owned reader; the worker's reader never crosses threads.
-                        let mut data = MzData::new();
-                        data.open_reader_only(&path).map_err(err)?;
-                        data.bounds = run.bounds;
-                        data.available_scan_filters = run.scan_filters;
-                        data.available_chromatograms = run.chromatograms;
-                        data.available_acquisitions = run.acquisitions;
-                        let id = self.next_file_id;
-                        self.next_file_id += 1;
-                        self.files.insert(
-                            id,
-                            OpenFile {
-                                id,
-                                name: run.name,
-                                path: run.path,
-                                data,
-                                display: FileDisplaySettings {
-                                    color: next_color_for_index(id),
-                                    visible: true,
-                                },
-                                cache: Default::default(),
-                                is_loading: false,
-                            },
-                        );
-                        Ok(id)
-                    }) {
-                        Ok(id) => {
-                            outcomes.push(json!({"path":path,"dataset_id":id,"success":true}))
-                        }
-                        Err(error) => {
-                            outcomes.push(json!({"path":path,"success":false,"error":error}))
-                        }
-                    }
-                }
-                self.invalid_file = if self.files.is_empty() {
-                    FileValidity::Invalid
-                } else {
-                    FileValidity::Valid
-                };
-                json!({"files":outcomes})
-            }
+            BackgroundResult::Opened(imported) => self.register_imports(imported),
             BackgroundResult::Extracted {
                 dataset_id,
                 display,
@@ -553,6 +524,75 @@ impl MzViewerApp {
         };
         Ok(CallToolResult::structured(value))
     }
+    /// Adds the imported runs to the window and reports one outcome per requested input.
+    fn register_imports(
+        &mut self,
+        imported: Vec<(std::path::PathBuf, Result<Imported, String>)>,
+    ) -> Value {
+        let mut outcomes = vec![];
+        for (path, result) in imported {
+            let registered = result.and_then(|(runs, workspace)| {
+                let mut datasets = vec![];
+                for run in runs {
+                    // A new window-owned reader; the worker's reader never crosses threads.
+                    let mut data = MzData::new();
+                    data.open_reader_only(&std::path::PathBuf::from(&run.path))
+                        .map_err(err)?;
+                    data.bounds = run.bounds;
+                    data.available_scan_filters = run.scan_filters;
+                    data.available_chromatograms = run.chromatograms;
+                    data.available_acquisitions = run.acquisitions;
+                    let id = self.next_file_id;
+                    self.next_file_id += 1;
+                    self.files.insert(
+                        id,
+                        OpenFile {
+                            id,
+                            name: run.name.clone(),
+                            path: run.path,
+                            data,
+                            display: FileDisplaySettings {
+                                color: next_color_for_index(id),
+                                visible: true,
+                            },
+                            cache: FileCache {
+                                // What the person chose; a converted run lives in a temporary
+                                // folder outside every root, so access is checked against this.
+                                source_path: Some(path.to_string_lossy().into_owned()),
+                                import_workspace: workspace.clone(),
+                                ..Default::default()
+                            },
+                            is_loading: false,
+                        },
+                    );
+                    datasets.push(json!({"dataset_id":id,"name":run.name}));
+                }
+                Ok(datasets)
+            });
+            match registered {
+                Ok(datasets) => outcomes.push(json!({
+                    "path":path,
+                    "dataset_id":datasets.first().map(|d| d["dataset_id"].clone()),
+                    "datasets":datasets,
+                    "vendor":!crate::import::is_mzml(&path),
+                    "success":true
+                })),
+                Err(error) => outcomes.push(json!({"path":path,"success":false,"error":error})),
+            }
+        }
+        self.invalid_file = if self.files.is_empty() {
+            FileValidity::Invalid
+        } else {
+            FileValidity::Valid
+        };
+        json!({"files":outcomes})
+    }
+    /// Whether the dataset's source lies inside an authorised root. A converted vendor run is
+    /// read from a temporary folder, so the file the person chose is what is checked.
+    fn authorize_dataset(&self, file: &OpenFile, b: &GuiBridge) -> Result<(), String> {
+        let source = file.cache.source_path.as_deref().unwrap_or(&file.path);
+        b.policy.source(source).map(|_| ())
+    }
     fn remote_validate(&self, c: &Command, b: &GuiBridge) -> Result<(), String> {
         let dataset = match c {
             Command::SelectTrace { dataset_id, .. } => Some(dataset_id.index()),
@@ -570,17 +610,16 @@ impl MzViewerApp {
         };
         if let Some(id) = dataset {
             let f = self.files.get(&id).ok_or("Unknown dataset")?;
-            b.policy.input(&f.path)?;
+            self.authorize_dataset(f, b)?;
         }
         if let Command::StartQuantification { dataset_ids, .. } = c {
             for id in dataset_ids {
-                b.policy
-                    .input(&self.files.get(&id.index()).ok_or("Unknown dataset")?.path)?;
+                self.authorize_dataset(self.files.get(&id.index()).ok_or("Unknown dataset")?, b)?;
             }
         }
         if matches!(c, Command::ApplyPreset { .. }) {
             for file in self.files.values() {
-                b.policy.input(&file.path)?;
+                self.authorize_dataset(file, b)?;
             }
         }
         let changes = matches!(
@@ -634,20 +673,32 @@ impl MzViewerApp {
         self.resolve_dataset_refs(&mut c, b)?;
         self.remote_validate(&c, b)?;
         let value = match c {
-            Command::ListMzmlFiles { directory } => {
+            Command::ListMzmlFiles {
+                directory,
+                include_vendor,
+            } => {
                 let directory = b.policy.directory(&directory)?;
                 let mut files = Vec::new();
+                let mut vendor = Vec::new();
                 for entry in std::fs::read_dir(&directory).map_err(err)? {
                     let path = entry.map_err(err)?.path();
-                    if crate::import::is_mzml(&path) && path.is_file() {
-                        files.push(b.policy.input(&path.to_string_lossy())?);
-                        if files.len() > 10000 {
-                            return Err("Directory contains more than 10000 mzML files; use a smaller authorized directory".into());
-                        }
+                    if crate::import::is_mzml(&path) {
+                        files.push(b.policy.source(&path.to_string_lossy())?);
+                    } else if include_vendor && crate::mcp::is_vendor_dataset(&path) {
+                        vendor.push(b.policy.source(&path.to_string_lossy())?);
+                    }
+                    if files.len() + vendor.len() > 10000 {
+                        return Err("Directory contains more than 10000 datasets; use a smaller authorized directory".into());
                     }
                 }
                 files.sort();
-                json!({"directory":directory,"files":files,"recursive":false})
+                vendor.sort();
+                let mut listing = json!({"directory":directory,"files":files,"recursive":false});
+                if include_vendor {
+                    listing["vendor_datasets"] = json!(vendor);
+                    listing["msconvert_configured"] = json!(self.msconvert_path.is_some());
+                }
+                listing
             }
             Command::SetDisplay {
                 compare_samples,
@@ -818,43 +869,10 @@ impl MzViewerApp {
                 }
                 let paths = paths
                     .iter()
-                    .map(|p| b.policy.input(p))
+                    .map(|p| b.policy.source(p))
                     .collect::<Result<Vec<_>, _>>()?;
-                let mut outcomes = vec![];
-                for path in paths {
-                    let mut data = MzData::new();
-                    match data.open_msfile(&path) {
-                        Ok(_) => {
-                            let id = self.next_file_id;
-                            self.next_file_id += 1;
-                            let name = path.file_name().unwrap().to_string_lossy().into_owned();
-                            self.files.insert(
-                                id,
-                                OpenFile {
-                                    id,
-                                    name,
-                                    path: path.to_string_lossy().into_owned(),
-                                    data,
-                                    display: FileDisplaySettings {
-                                        color: next_color_for_index(id),
-                                        visible: true,
-                                    },
-                                    cache: Default::default(),
-                                    is_loading: false,
-                                },
-                            );
-                            outcomes.push(json!({"dataset_id":id,"path":path,"success":true}));
-                        }
-                        Err(e) => outcomes
-                            .push(json!({"path":path,"success":false,"error":e.to_string()})),
-                    }
-                }
-                self.invalid_file = if self.files.is_empty() {
-                    FileValidity::Invalid
-                } else {
-                    FileValidity::Valid
-                };
-                json!({"files":outcomes})
+                let imported = import_all(paths, self.msconvert_path.clone());
+                self.register_imports(imported)
             }
             Command::DatasetMetadata { dataset_id } => {
                 let dataset_id = dataset_id.index();

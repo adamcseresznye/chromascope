@@ -47,6 +47,8 @@ impl DatasetRef {
 pub enum Command {
     ListMzmlFiles {
         directory: String,
+        #[serde(default)]
+        include_vendor: bool,
     },
     SetDisplay {
         compare_samples: Option<bool>,
@@ -191,6 +193,18 @@ impl Command {
         }
     }
 }
+/// Extensions of the vendor and interchange formats msconvert converts to mzML.
+pub const VENDOR_EXTENSIONS: &[&str] = &[
+    "raw", "d", "wiff", "wiff2", "lcd", "baf", "tdf", "tsf", "yep", "mzxml", "mz5", "cdf", "mgf",
+];
+/// Whether `path` is an existing file or directory with a vendor extension.
+pub fn is_vendor_dataset(path: &Path) -> bool {
+    path.exists()
+        && path
+            .extension()
+            .map(|e| e.to_string_lossy().to_lowercase())
+            .is_some_and(|e| VENDOR_EXTENSIONS.contains(&e.as_str()))
+}
 #[derive(Debug, Clone)]
 pub struct AccessPolicy {
     roots: Vec<PathBuf>,
@@ -240,6 +254,22 @@ impl AccessPolicy {
             return Err("Only mzML/mzML.gz files are accepted".into());
         }
         Ok(path)
+    }
+    /// Something the window can import: an mzML/mzML.gz file, or a vendor dataset (a file or a
+    /// directory such as `.d` or Waters `.raw`) that ProteoWizard's msconvert converts.
+    pub fn source(&self, path: &str) -> Result<PathBuf, String> {
+        let path = Path::new(path).canonicalize().map_err(|e| e.to_string())?;
+        if !self.roots.iter().any(|r| path.starts_with(r)) {
+            return Err("Path is outside authorized roots".into());
+        }
+        if crate::import::is_mzml(&path) || is_vendor_dataset(&path) {
+            Ok(path)
+        } else {
+            Err(format!(
+                "Only mzML/mzML.gz files and vendor datasets ({}) can be opened",
+                VENDOR_EXTENSIONS.join(", ")
+            ))
+        }
     }
     pub fn directory(&self, path: &str) -> Result<PathBuf, String> {
         let path = Path::new(path).canonicalize().map_err(|e| e.to_string())?;
@@ -663,7 +693,7 @@ pub struct ReviewQuantificationArgs {
 #[tool_router]
 impl McpServer {
     #[tool(
-        description = "List the mzML and mzML.gz files directly inside one directory, sorted by path (not recursive, at most 10000 files). Use it first to find what can be opened, then pass the returned paths to open_files. Read-only; the directory must lie inside an --allow-root.",
+        description = "List the mzML and mzML.gz files directly inside one directory, sorted by path (not recursive, at most 10000 files); with include_vendor=true also the vendor datasets (.raw, .d, .wiff and others) that open_files converts with msconvert. Use it first to find what can be opened, then pass the returned paths to open_files. Read-only; the directory must lie inside an --allow-root.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -676,6 +706,7 @@ impl McpServer {
     ) -> CallToolResult {
         self.dispatch(Command::ListMzmlFiles {
             directory: args.directory,
+            include_vendor: args.include_vendor,
         })
         .await
     }
@@ -847,7 +878,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Load 1 to 64 mzML or mzML.gz files into the live window and return a dataset_id per file. Use it before any other dataset tool; opening the same file twice creates a second dataset. Does not need --allow-changes, but every path must lie inside an --allow-root.",
+        description = "Load 1 to 64 datasets into the live window and return a dataset_id per file: mzML and mzML.gz directly, vendor data (.raw, .d, .wiff and others) after converting it with the msconvert the window has configured (a vendor run with several samples gives one dataset per sample). Use it before any other dataset tool; opening the same file twice creates a second dataset. Does not need --allow-changes, but every path must lie inside an --allow-root.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -1269,6 +1300,10 @@ pub struct ExportFigureArgs {
 #[serde(deny_unknown_fields)]
 pub struct ListMzmlFilesArgs {
     pub directory: String,
+    /// Also list vendor datasets (`.raw`, `.d`, `.wiff`, ...), which open_files converts with
+    /// msconvert.
+    #[serde(default)]
+    pub include_vendor: bool,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]

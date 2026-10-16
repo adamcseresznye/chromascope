@@ -539,3 +539,112 @@ fn stable_dataset_ids_name_the_same_data_after_a_restart() {
     one.finish();
     two.finish();
 }
+
+/// Compiles the fixture that stands in for ProteoWizard's msconvert.
+fn fake_msconvert(directory: &std::path::Path) -> PathBuf {
+    let executable = directory.join(if cfg!(windows) {
+        "msconvert.exe"
+    } else {
+        "msconvert"
+    });
+    let compiled = std::process::Command::new("rustc")
+        .args(["--edition=2021"])
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/fake_msconvert.rs"
+        ))
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .unwrap();
+    assert!(
+        compiled.status.success(),
+        "{}",
+        String::from_utf8_lossy(&compiled.stderr)
+    );
+    executable
+}
+
+#[test]
+fn vendor_data_opens_through_msconvert_and_stays_inside_the_roots() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut desktop = Desktop::start(vec![temp.path().to_owned()], true, false, false);
+    let vendor = temp.path().join("run one.raw");
+    std::fs::write(&vendor, b"vendor bytes").unwrap();
+    std::fs::write(temp.path().join("notes.txt"), b"not data").unwrap();
+    // Vendor datasets are listed on request only.
+    let plain = desktop.tool("list_mzml_files", json!({"directory":temp.path()}));
+    assert!(plain.get("vendor_datasets").is_none(), "{plain}");
+    let listed = desktop.tool(
+        "list_mzml_files",
+        json!({"directory":temp.path(),"include_vendor":true}),
+    );
+    assert_eq!(
+        listed["vendor_datasets"].as_array().unwrap().len(),
+        1,
+        "{listed}"
+    );
+    assert_eq!(
+        listed["msconvert_configured"],
+        desktop.app.msconvert_path.is_some()
+    );
+    // No converter configured: the file is refused with the reason, nothing is opened.
+    desktop.app.msconvert_path = None;
+    let refused = desktop.tool("open_files", json!({"paths":[vendor.clone()]}));
+    assert_eq!(refused["files"][0]["success"], false, "{refused}");
+    assert!(refused["files"][0]["error"]
+        .as_str()
+        .unwrap()
+        .contains("ProteoWizard"));
+    assert!(desktop.app.files.is_empty());
+    // With msconvert the run is converted; a two-sample file gives two datasets.
+    desktop.app.msconvert_path = Some(fake_msconvert(temp.path()));
+    let opened = desktop.tool("open_files", json!({"paths":[vendor.clone()]}));
+    let outcome = &opened["files"][0];
+    assert_eq!(outcome["success"], true, "{opened}");
+    assert_eq!(outcome["vendor"], true);
+    let datasets = outcome["datasets"].as_array().unwrap();
+    assert_eq!(datasets.len(), 2);
+    assert_eq!(datasets[1]["name"], "run one.raw / sample 2");
+    // The converted runs live in a temporary folder outside every root; access is judged by
+    // the file that was chosen, so every dataset tool still works on them.
+    let id = datasets[1]["dataset_id"].as_u64().unwrap();
+    let extracted = desktop.tool(
+        "extract_chromatogram",
+        json!({"dataset_id":id,"kind":"tic","polarity":"positive","ms_level":1,"smoothing":0,"display":true}),
+    );
+    assert!(
+        extracted["point_count"].as_u64().unwrap() > 10,
+        "{extracted}"
+    );
+    assert_eq!(extracted["displayed"], true);
+    let metadata = desktop.tool("dataset_metadata", json!({"dataset_id":id}));
+    let direct = desktop.open_fixture();
+    let expected = desktop.tool("dataset_metadata", json!({"dataset_id":direct}));
+    assert!(expected["scan_count"].as_u64().unwrap() > 0);
+    assert_eq!(
+        metadata["scan_count"], expected["scan_count"],
+        "the converted run is the fixture"
+    );
+    // Anything outside the roots, and anything that is not data, is refused before it is read.
+    let other = tempfile::tempdir().unwrap();
+    let outside = other.path().join("outside.raw");
+    std::fs::write(&outside, b"x").unwrap();
+    let error = desktop.tool_error("open_files", json!({"paths":[outside]}));
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("outside authorized roots"),
+        "{error}"
+    );
+    let error = desktop.tool_error(
+        "open_files",
+        json!({"paths":[temp.path().join("notes.txt")]}),
+    );
+    assert!(
+        error["message"].as_str().unwrap().contains("Only mzML"),
+        "{error}"
+    );
+    desktop.finish();
+}
