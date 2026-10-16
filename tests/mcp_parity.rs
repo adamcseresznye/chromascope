@@ -76,7 +76,7 @@ fn the_registry_is_well_formed() {
         );
         if action.experimental {
             assert!(
-                action.tools.is_empty() && !action.operations.is_empty(),
+                !action.operations.is_empty(),
                 "'{}' belongs to a workflow that is not in the default build: name the engine operations that do it",
                 action.name
             );

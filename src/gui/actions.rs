@@ -69,13 +69,14 @@ const fn hidden(
     name: &'static str,
     place: &'static str,
     labels: &'static [&'static str],
+    tools: &'static [&'static str],
     operations: &'static [&'static str],
 ) -> Action {
     Action {
         name,
         place,
         labels,
-        tools: &[],
+        tools,
         operations,
         experimental: true,
     }
@@ -659,6 +660,7 @@ pub const ACTIONS: &[Action] = &[
             "Prepare unknown or compound-class annotation",
             "Save full evidence history JSON (new file)",
         ],
+        &[],
         &[
             "inspect_spectra",
             "process_spectra",
@@ -698,6 +700,12 @@ pub const ACTIONS: &[Action] = &[
             "Retention-time tolerance (s)",
             "Typical peak width (s)",
         ],
+        &[
+            "start_untargeted",
+            "untargeted_status",
+            "cancel_untargeted",
+            "untargeted_features",
+        ],
         &["untargeted_batch", "export_feature_matrix"],
     ),
     hidden(
@@ -712,6 +720,7 @@ pub const ACTIONS: &[Action] = &[
             "Use retained spectral library JSON for identification",
             "Validate and retain competing hypothesis",
         ],
+        &[],
         &[
             "propose_feature_annotations",
             "add_feature_hypothesis",
@@ -743,6 +752,7 @@ pub const ACTIONS: &[Action] = &[
             "Use current feature matrix",
             "Use current targeted concentrations",
         ],
+        &[],
         &["analyze_statistics", "export_statistics"],
     ),
 ];
