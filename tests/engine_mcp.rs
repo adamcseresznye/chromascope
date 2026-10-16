@@ -332,25 +332,27 @@ fn experimental_workflows_are_hidden_and_rejected() {
         let listed = client.rpc("tools/list", json!({})).await;
         let tools = listed["result"]["tools"].as_array().unwrap();
         assert!(!tools.is_empty());
-        let hidden = [
-            "analyze_statistics",
-            "export_statistics",
+        // All 18 experimental operation names, plus the broader words they share.
+        let mut hidden: Vec<&str> = chromascope::domain::Operation::EXPERIMENTAL_NAMES.to_vec();
+        assert_eq!(hidden.len(), 18);
+        hidden.extend([
             "untargeted",
             "feature_annotation",
             "feature_matrix",
             "spectral_library",
-            "formula_candidates",
             "isotope",
-        ];
+        ]);
         for tool in tools {
             let text = tool.to_string();
-            for word in hidden {
+            for word in &hidden {
                 assert!(!text.contains(word), "{} still mentions {word}", tool["name"]);
             }
         }
         let capabilities = client.call("analysis_capabilities", json!({})).await;
         let text = capabilities["result"]["structuredContent"].to_string();
-        for word in hidden {
+        // The tool-level `annotations` hints are legitimate, so "annotation" is checked on the
+        // capabilities text only.
+        for word in hidden.iter().chain(&["annotation"]) {
             assert!(!text.contains(word), "capabilities still mention {word}");
         }
         let request = json!({"version":1,"operation_id":uuid::Uuid::new_v4().to_string(),"actor":"AI","operation":{"operation":"import_spectral_library","text":"","format":"msp","source":{"name":"n","version":"1","url":"u","license":"l"}}});

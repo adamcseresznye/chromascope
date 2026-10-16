@@ -467,7 +467,8 @@ fn engine_cli_identical_search_and_annotation() {
         config: SearchConfig::default(),
     };
     let req = request(op);
-    let expected = engine::execute(Path::new("-"), req.clone(), &JobControl::default()).unwrap();
+    let expected =
+        engine::execute_ungated(Path::new("-"), req.clone(), &JobControl::default()).unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_chromascope-cli"))
         .args(["run", "-"])
         .stdin(Stdio::piped())
@@ -488,7 +489,7 @@ fn engine_cli_identical_search_and_annotation() {
         (Output::SpectralSearch { report: a }, Output::SpectralSearch { report: b }) => {
             assert_eq!(a.candidates, b.candidates);
             verify_report(&a).unwrap();
-            let reviewed = engine::execute(
+            let reviewed = engine::execute_ungated(
                 Path::new("-"),
                 request(Operation::AnnotateSpectrum {
                     report: a,
@@ -506,7 +507,7 @@ fn engine_cli_identical_search_and_annotation() {
 #[test]
 fn native_scan_inspection_retains_isolation_and_rt() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("test_file/data_dependent_02.mzML");
-    let response = engine::execute(
+    let response = engine::execute_ungated(
         &path,
         request(Operation::InspectSpectra {
             indices: vec![0],
@@ -615,7 +616,7 @@ fn project_spectral_replay_and_immutable_history() {
     let raw = Path::new(env!("CARGO_MANIFEST_DIR")).join("test_file/data_dependent_02.mzML");
     let mut project = Project::create(&root).unwrap();
     let id = project.register(&raw).unwrap();
-    let response = engine::execute(
+    let response = engine::execute_ungated(
         Path::new("-"),
         request(Operation::SearchSpectralLibrary {
             query: Box::new(query()),
@@ -748,7 +749,7 @@ fn greedy_ambiguity_and_dense_pair_cap_are_explicit() {
 fn cli_candidate_export_is_create_new_and_preserves_confidence() {
     use std::io::Write;
     use std::process::{Command, Stdio};
-    let response = engine::execute(
+    let response = engine::execute_ungated(
         Path::new("-"),
         request(Operation::SearchSpectralLibrary {
             query: Box::new(query()),
@@ -795,7 +796,8 @@ fn json_annotation_roundtrip_and_linked_source_checks() {
     });
     let encoded = serde_json::to_vec(&req).unwrap();
     let decoded: Request = serde_json::from_slice(&encoded).unwrap();
-    let response = engine::execute(Path::new("-"), decoded, &JobControl::default()).unwrap();
+    let response =
+        engine::execute_ungated(Path::new("-"), decoded, &JobControl::default()).unwrap();
     let saved: engine::Response =
         serde_json::from_slice(&serde_json::to_vec(&response).unwrap()).unwrap();
     if let Output::SpectralSearch { report } = saved.output {
@@ -823,7 +825,7 @@ fn json_annotation_roundtrip_and_linked_source_checks() {
         precursor_mz: None,
         native_chromatogram: None,
     };
-    assert!(engine::execute(
+    assert!(engine::execute_ungated(
         &path,
         request(Operation::LinkedSpectralChromatogram {
             query: Box::new(query()),
@@ -838,7 +840,7 @@ fn json_annotation_roundtrip_and_linked_source_checks() {
         chromascope::project::source_identity(&path).unwrap().0,
     );
     let linked = process(original, vec![], Processing::default()).unwrap();
-    let response = engine::execute(
+    let response = engine::execute_ungated(
         &path,
         request(Operation::LinkedSpectralChromatogram {
             query: Box::new(linked),

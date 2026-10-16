@@ -191,7 +191,7 @@ fn cancellation_and_invalid_config_prevent_adapter_execution() {
     let mut c = c;
     c.samples.clear();
     assert_eq!(
-        engine::execute(Path::new("-"), request(c), &JobControl::default())
+        engine::execute_ungated(Path::new("-"), request(c), &JobControl::default())
             .err()
             .unwrap()
             .code,
@@ -222,7 +222,7 @@ fn openms_multisample_reference_positive_negative_cli_cache_and_project() {
         let req: Request =
             serde_json::from_slice(&std::fs::read(root.join("request.json")).unwrap()).unwrap();
         let control = JobControl::default();
-        let response = engine::execute(Path::new("-"), req.clone(), &control).unwrap();
+        let response = engine::execute_ungated(Path::new("-"), req.clone(), &control).unwrap();
         let report = match &response.output {
             Output::FeatureMatrix { report } => report,
             _ => panic!("Wrong output"),
@@ -342,7 +342,7 @@ fn openms_multisample_reference_positive_negative_cli_cache_and_project() {
         if !negative {
             let limited = JobControl::with_limits(100, 50_000_000_000).unwrap();
             assert_eq!(
-                engine::execute(Path::new("-"), req.clone(), &limited)
+                engine::execute_ungated(Path::new("-"), req.clone(), &limited)
                     .err()
                     .unwrap()
                     .code,
@@ -354,7 +354,7 @@ fn openms_multisample_reference_positive_negative_cli_cache_and_project() {
                 config.gap_fill = false;
             }
             let disabled =
-                engine::execute(Path::new("-"), disabled, &JobControl::default()).unwrap();
+                engine::execute_ungated(Path::new("-"), disabled, &JobControl::default()).unwrap();
             if let Output::FeatureMatrix { report } = &disabled.output {
                 assert_eq!(
                     report.features[5].cells[1].state,
@@ -373,7 +373,8 @@ fn openms_multisample_reference_positive_negative_cli_cache_and_project() {
             if let Operation::UntargetedBatch { config } = &mut shorter.operation {
                 config.samples[1].source = truncated.to_string_lossy().into();
             }
-            let shorter = engine::execute(Path::new("-"), shorter, &JobControl::default()).unwrap();
+            let shorter =
+                engine::execute_ungated(Path::new("-"), shorter, &JobControl::default()).unwrap();
             if let Output::FeatureMatrix { report } = &shorter.output {
                 assert_eq!(
                     report.features[7].cells[1].state,
@@ -391,7 +392,7 @@ fn openms_multisample_reference_positive_negative_cli_cache_and_project() {
                 config.cache_directory = cancel_cache.to_string_lossy().into();
             }
             let worker = std::thread::spawn(move || {
-                engine::execute(Path::new("-"), interrupted, &worker_control)
+                engine::execute_ungated(Path::new("-"), interrupted, &worker_control)
             });
             let start = std::time::Instant::now();
             loop {
@@ -443,11 +444,13 @@ fn openms_multisample_reference_positive_negative_cli_cache_and_project() {
                 .as_str()
                 .unwrap();
             std::fs::write(Path::new(checkpoint).join("features.json"), b"{}").unwrap();
-            assert!(engine::execute(Path::new("-"), req, &JobControl::default())
-                .err()
-                .unwrap()
-                .message
-                .contains("corrupt_cache"));
+            assert!(
+                engine::execute_ungated(Path::new("-"), req, &JobControl::default())
+                    .err()
+                    .unwrap()
+                    .message
+                    .contains("corrupt_cache")
+            );
         }
     }
 }

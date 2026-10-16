@@ -218,8 +218,13 @@ impl Operation {
     ];
 
     /// Reject hidden operations unless the `experimental` feature is enabled.
+    ///
+    /// The crate's own unit tests (`cfg(test)`) are exempt: they exercise the always-compiled
+    /// experimental code through the GUI and engine in the default build. Integration tests
+    /// link the library without `cfg(test)`, so `tests/experimental_gate.rs` and
+    /// `tests/engine_mcp.rs` still verify the gate itself.
     pub fn ensure_available(&self) -> Result<()> {
-        if !crate::EXPERIMENTAL && self.is_experimental() {
+        if !crate::EXPERIMENTAL && !cfg!(test) && self.is_experimental() {
             return Err(EngineError::new(
                 "experimental_unavailable",
                 "this operation belongs to an experimental workflow that is not enabled in this build",
@@ -263,4 +268,73 @@ pub type Result<T> = std::result::Result<T, EngineError>;
 pub enum DataState {
     Present,
     Missing,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Operation;
+
+    fn snake(name: &str) -> String {
+        let mut out = String::new();
+        for (i, c) in name.chars().enumerate() {
+            if c.is_ascii_uppercase() {
+                if i > 0 {
+                    out.push('_');
+                }
+                out.push(c.to_ascii_lowercase());
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    }
+
+    /// `is_experimental` and `EXPERIMENTAL_NAMES` are two hand-written lists of the same set;
+    /// read both from the source so they cannot drift apart unnoticed.
+    #[test]
+    fn is_experimental_agrees_with_experimental_names() {
+        let source = include_str!("domain.rs");
+        let body = &source[source.find("pub fn is_experimental").unwrap()..];
+        let body = &body[body.find("matches!(").unwrap()..];
+        let body = &body[..body.find("\n        )\n").unwrap()];
+        let mut from_match: Vec<String> = body
+            .split("Self::")
+            .skip(1)
+            .map(|v| snake(v.split(|c: char| !c.is_alphanumeric()).next().unwrap()))
+            .collect();
+        from_match.sort();
+        let mut names: Vec<String> = Operation::EXPERIMENTAL_NAMES
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        names.sort();
+        assert_eq!(names.len(), 18);
+        assert_eq!(from_match, names);
+
+        // Every listed name is a real serde tag of an Operation variant.
+        let enum_start = source.find("pub enum Operation {").unwrap();
+        let enum_body =
+            &source[enum_start..source[enum_start..].find("\n}\n").unwrap() + enum_start];
+        let variants: Vec<String> = enum_body
+            .lines()
+            .filter(|l| l.starts_with("    ") && !l.starts_with("     "))
+            .filter_map(|l| {
+                let word = l.trim().split(|c: char| !c.is_alphanumeric()).next()?;
+                word.chars()
+                    .next()?
+                    .is_ascii_uppercase()
+                    .then(|| snake(word))
+            })
+            .collect();
+        for name in Operation::EXPERIMENTAL_NAMES {
+            assert!(
+                variants.iter().any(|v| v == name),
+                "{name} is not an Operation variant"
+            );
+        }
+        assert!(
+            variants.len() > 18,
+            "non-experimental operations must remain"
+        );
+    }
 }

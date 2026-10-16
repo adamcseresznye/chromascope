@@ -174,7 +174,17 @@ pub fn validate_params(p: &ProcessingParams) -> crate::error::Result<()> {
     }
     Ok(())
 }
+/// Runs one typed request. Every route into the engine (CLI, MCP, reprocess, proposals) comes
+/// through here, so a project saved by an experimental build cannot run an experimental
+/// operation in a shipped build.
 pub fn execute(path: &Path, request: Request, control: &JobControl) -> Result<Response> {
+    request.operation.ensure_available()?;
+    execute_ungated(path, request, control)
+}
+/// [`execute`] without the experimental-workflow gate. Only for the tests that verify the hidden
+/// workflows themselves in the default build; product code must call [`execute`].
+#[doc(hidden)]
+pub fn execute_ungated(path: &Path, request: Request, control: &JobControl) -> Result<Response> {
     control.check()?;
     if request.version != 1 || request.actor.trim().is_empty() {
         return Err(EngineError::new(

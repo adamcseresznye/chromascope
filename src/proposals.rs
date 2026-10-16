@@ -137,6 +137,7 @@ pub fn prepare(
     evidence: Vec<String>,
     control: &JobControl,
 ) -> Result<Proposal> {
+    request.operation.ensure_available()?;
     if reason.trim().is_empty()
         || evidence.is_empty()
         || evidence.iter().any(|x| x.trim().is_empty())
@@ -183,6 +184,7 @@ pub fn resolve(
     reason: &str,
     control: &JobControl,
 ) -> Result<(Proposal, Option<Response>)> {
+    proposal.request.operation.ensure_available()?;
     if proposal.version != 1 || actor.trim().is_empty() || reason.trim().is_empty() {
         return Err(invalid("Version 1, review actor and reason are required"));
     }

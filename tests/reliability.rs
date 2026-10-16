@@ -450,7 +450,7 @@ fn untargeted_rejects_unknown_raw_time_units_before_native_processing() {
         cache_directory: temp.path().join("checkpoints").to_string_lossy().into(),
         ..Default::default()
     };
-    let error = engine::execute(
+    let error = engine::execute_ungated(
         Path::new("-"),
         request(Operation::UntargetedBatch { config }),
         &JobControl::default(),

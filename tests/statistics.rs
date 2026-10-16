@@ -257,7 +257,8 @@ fn engine_roundtrip_exports_and_request_integrity() {
         },
     };
     let response =
-        engine::execute(std::path::Path::new("-"), request, &JobControl::default()).unwrap();
+        engine::execute_ungated(std::path::Path::new("-"), request, &JobControl::default())
+            .unwrap();
     verify_response(&response).unwrap();
     let mut response: engine::Response =
         serde_json::from_slice(&serde_json::to_vec(&response).unwrap()).unwrap();
@@ -268,7 +269,7 @@ fn engine_roundtrip_exports_and_request_integrity() {
     let Output::Statistics { report } = response.output else {
         panic!()
     };
-    let export = engine::execute(
+    let export = engine::execute_ungated(
         std::path::Path::new("-"),
         Request {
             version: 1,
@@ -620,7 +621,7 @@ fn targeted_concentrations_source_links_and_metadata_design() {
     let temp = tempfile::tempdir().unwrap();
     let request = raw_request(temp.path());
     let source = std::path::PathBuf::from(&request.samples[0].source);
-    let response = engine::execute(
+    let response = engine::execute_ungated(
         &source,
         Request {
             version: 1,

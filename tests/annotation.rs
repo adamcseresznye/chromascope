@@ -359,7 +359,8 @@ fn engine_cli_review_and_no_overwrite_export() {
             expected_revision: 0,
         },
     };
-    let response = engine::execute(Path::new("-"), req.clone(), &JobControl::default()).unwrap();
+    let response =
+        engine::execute_ungated(Path::new("-"), req.clone(), &JobControl::default()).unwrap();
     let Output::FeatureAnnotations { ledger } = &response.output else {
         panic!()
     };
@@ -459,7 +460,7 @@ fn response_replay_rejects_changed_history_or_candidate() {
             expected_revision: 0,
         },
     };
-    let mut r = engine::execute(Path::new("-"), req, &JobControl::default()).unwrap();
+    let mut r = engine::execute_ungated(Path::new("-"), req, &JobControl::default()).unwrap();
     verify_response(&r).unwrap();
     if let Output::FeatureAnnotations { ledger } = &mut r.output {
         ledger.hypotheses[0].label = "invented structure".into();
@@ -570,7 +571,7 @@ fn project_annotations_preserve_history_and_require_registered_sources() {
             expected_revision: 0,
         },
     };
-    let response = engine::execute(Path::new("-"), req, &JobControl::default()).unwrap();
+    let response = engine::execute_ungated(Path::new("-"), req, &JobControl::default()).unwrap();
     project.add_result(&root, id, &response).unwrap();
     project.commit(&root, 0).unwrap();
     assert_eq!(Project::open(&root).unwrap().results.len(), 1);
@@ -589,7 +590,8 @@ fn project_annotations_preserve_history_and_require_registered_sources() {
             decision: Decision::Accept,
         },
     };
-    let reviewed = engine::execute(Path::new("-"), request, &JobControl::default()).unwrap();
+    let reviewed =
+        engine::execute_ungated(Path::new("-"), request, &JobControl::default()).unwrap();
     project.add_result(&root, id, &reviewed).unwrap();
     project.commit(&root, 1).unwrap();
     assert_eq!(Project::open(&root).unwrap().results.len(), 2);
@@ -608,7 +610,7 @@ fn project_annotations_preserve_history_and_require_registered_sources() {
         },
     };
     let mut table =
-        engine::execute(Path::new("-"), export_request, &JobControl::default()).unwrap();
+        engine::execute_ungated(Path::new("-"), export_request, &JobControl::default()).unwrap();
     verify_response(&table).unwrap();
     if let Output::FeatureAnnotationTable { csv } = &mut table.output {
         csv.push_str("fabricated");
