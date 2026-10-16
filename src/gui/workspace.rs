@@ -1635,6 +1635,63 @@ mod tests {
         assert_eq!(app.workspace.traces[&7].len(), 1);
     }
     #[test]
+    fn integration_window_overhanging_the_data_is_clamped() {
+        use super::super::interactivity::{clamp_window_to_data, compute_integration};
+        // Trace spans 1..3 min with an asymmetric shape so a flat edge extension would change
+        // the area: (1, 0) -> (2, 100) -> (3, 0).
+        let mut app = app_with_trace();
+        let trace = app.files[&7].cache.plot_data.clone().unwrap();
+        assert_eq!(clamp_window_to_data(&trace, -5.0, 2.5), Some((1.0, 2.5)));
+        assert_eq!(clamp_window_to_data(&trace, 2.0, 9.0), Some((2.0, 3.0)));
+        assert_eq!(clamp_window_to_data(&trace, 4.0, 9.0), None);
+        assert_eq!(clamp_window_to_data(&trace, f64::NAN, 2.0), None);
+        assert_eq!(clamp_window_to_data(&[], 0.0, 1.0), None);
+
+        let expected = crate::processing::integrate_peak(&trace, 1.0, 2.5).unwrap();
+
+        // "Integrate visible RT range": view bounds that overhang the data on one side only.
+        app.integration.start_rt = Some(-5.0);
+        app.integration.end_rt = Some(2.5);
+        compute_integration(&mut app);
+        assert_eq!(app.integration.result, Some(expected));
+        assert_eq!(app.integration.start_rt, Some(1.0));
+        assert_eq!(app.integration.end_rt, Some(2.5));
+        assert_eq!(app.integration.start_intensity, Some(0.0));
+
+        // A right-drag that starts beyond the trace and is dragged right to left.
+        app.integration = Default::default();
+        app.integration.start_rt = Some(2.5);
+        app.integration.end_rt = Some(-5.0);
+        compute_integration(&mut app);
+        assert_eq!(app.integration.result, Some(expected));
+
+        // Overhang on both sides equals the whole trace.
+        app.integration = Default::default();
+        app.integration.start_rt = Some(-100.0);
+        app.integration.end_rt = Some(100.0);
+        compute_integration(&mut app);
+        assert_eq!(
+            app.integration.result,
+            Some(crate::processing::integrate_peak(&trace, 1.0, 3.0).unwrap())
+        );
+
+        // Every recorded measurement lies inside the data.
+        assert_eq!(app.workspace.measurements.len(), 3);
+        for m in &app.workspace.measurements {
+            assert!(m.start >= 1.0 && m.end <= 3.0 && m.start < m.end);
+        }
+
+        // A window that does not touch the trace records nothing and reports an error.
+        app.error_message = None;
+        app.integration = Default::default();
+        app.integration.start_rt = Some(10.0);
+        app.integration.end_rt = Some(11.0);
+        compute_integration(&mut app);
+        assert_eq!(app.integration.result, None);
+        assert!(app.error_message.is_some());
+        assert_eq!(app.workspace.measurements.len(), 3);
+    }
+    #[test]
     fn integrations_keep_parameters_after_trace_edits_and_escape_csv() {
         let mut app = app_with_trace();
         app.integration.start_rt = Some(1.0);

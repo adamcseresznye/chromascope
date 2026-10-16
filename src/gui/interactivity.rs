@@ -92,52 +92,77 @@ pub fn handle_integration_drag(
     }
 }
 
+/// Clamps an RT window to the first/last point of the trace.
+///
+/// Outside the data `integrate_peak` would extend the edge intensity flat, which makes the area
+/// depend on how far the view overhangs the trace. The engine rejects such windows; the GUI
+/// narrows them instead, so "Integrate visible RT range" and edge drags stay well defined.
+/// Returns `None` when the window does not overlap the trace at all.
+pub fn clamp_window_to_data(data: &[[f64; 2]], start: f64, end: f64) -> Option<(f64, f64)> {
+    let first = data.first()?[0];
+    let last = data.last()?[0];
+    if !start.is_finite() || !end.is_finite() {
+        return None;
+    }
+    let (start, end) = (start.max(first), end.min(last));
+    (start < end).then_some((start, end))
+}
+
 /// Computes the trapezoidal area for the current start/end RT window.
+///
+/// The window is clamped to the trace first, and the stored start/end are the clamped values.
 pub fn compute_integration(app: &mut MzViewerApp) {
     let (start, end) = match (app.integration.start_rt, app.integration.end_rt) {
         (Some(s), Some(e)) => (s.min(e), s.max(e)),
         _ => return,
     };
-    app.integration.start_rt = Some(start);
-    app.integration.end_rt = Some(end);
 
     let active_id = match app.active_file_id {
         Some(id) => id,
         None => return,
     };
 
-    let area_result = app
+    let Some(data) = app
         .files
         .get(&active_id)
         .and_then(|f| f.cache.plot_data.as_deref())
-        .map(|data| crate::processing::integrate_peak(data, start, end));
+    else {
+        app.integration.start_rt = Some(start);
+        app.integration.end_rt = Some(end);
+        warn!("No cached plot data available for integration");
+        return;
+    };
+
+    let Some((start, end)) = clamp_window_to_data(data, start, end) else {
+        let (first, last) = (data[0][0], data[data.len() - 1][0]);
+        app.integration.result = None;
+        app.show_error_dialog(format!(
+            "Integration failed: the selected range does not overlap the trace ({first:.3}–{last:.3} min)"
+        ));
+        return;
+    };
+    app.integration.start_rt = Some(start);
+    app.integration.end_rt = Some(end);
+
+    let area_result = crate::processing::integrate_peak(data, start, end);
+    let boundary_intensities = (
+        crate::processing::interpolate_at(data, start),
+        crate::processing::interpolate_at(data, end),
+    );
 
     match area_result {
-        Some(Ok(area)) => {
+        Ok(area) => {
             app.integration.result = Some(area);
             // Cache the boundary intensities for the baseline chord rendering.
-            if let Some(active_id) = app.active_file_id {
-                if let Some(data) = app
-                    .files
-                    .get(&active_id)
-                    .and_then(|f| f.cache.plot_data.as_deref())
-                {
-                    app.integration.start_intensity =
-                        Some(crate::processing::interpolate_at(data, start));
-                    app.integration.end_intensity =
-                        Some(crate::processing::interpolate_at(data, end));
-                }
-            }
+            app.integration.start_intensity = Some(boundary_intensities.0);
+            app.integration.end_intensity = Some(boundary_intensities.1);
             super::workspace::record(app);
             info!("Peak area [{:.3}–{:.3} min] = {:.4e}", start, end, area);
         }
-        Some(Err(e)) => {
+        Err(e) => {
             error!("Integration failed: {}", e);
             app.show_error_dialog(format!("Integration failed: {}", e));
             app.integration.result = None;
-        }
-        None => {
-            warn!("No cached plot data available for integration");
         }
     }
 }
