@@ -24,6 +24,10 @@ pub fn is_mzml(path: &Path) -> bool {
 }
 
 pub(crate) fn settings_path() -> Option<PathBuf> {
+    // A portable install, or a test, can keep every user file in a folder of its own.
+    if let Some(directory) = std::env::var_os("CHROMASCOPE_CONFIG_DIR") {
+        return Some(PathBuf::from(directory).join("msconvert-path.txt"));
+    }
     let base = if cfg!(target_os = "windows") {
         std::env::var_os("APPDATA").map(PathBuf::from)
     } else if cfg!(target_os = "macos") {

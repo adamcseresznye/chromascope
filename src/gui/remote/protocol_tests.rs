@@ -37,6 +37,13 @@ impl Desktop {
     ) -> Self {
         let mut roots = vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))];
         roots.extend(extra);
+        // Keep a test window's recent files and settings out of the developer's own.
+        static CONFIG: std::sync::Once = std::sync::Once::new();
+        CONFIG.call_once(|| {
+            let directory = std::env::temp_dir().join("chromascope-test-config");
+            std::fs::create_dir_all(&directory).unwrap();
+            std::env::set_var("CHROMASCOPE_CONFIG_DIR", directory);
+        });
         let policy = AccessPolicy::new(roots, changes, exports)
             .unwrap()
             .with_project_writes(project_writes);
@@ -1043,4 +1050,157 @@ fn a_session_is_saved_and_restored_over_mcp() {
     for d in [desktop, other, guarded, victim] {
         d.finish();
     }
+}
+
+#[test]
+fn presets_are_listed_read_and_saved_over_mcp() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut desktop = Desktop::start(vec![temp.path().to_owned()], true, true, false);
+    let viewer = include_str!("../../../presets/example.toml");
+    let method = include_str!("../../../presets/quantification-example.toml");
+    std::fs::write(temp.path().join("traces.toml"), viewer).unwrap();
+    std::fs::write(temp.path().join("assay.toml"), method).unwrap();
+    std::fs::write(
+        temp.path().join("broken.toml"),
+        "version = 1
+[[traces]]
+ppm = -3",
+    )
+    .unwrap();
+    std::fs::write(temp.path().join("notes.txt"), "ignored").unwrap();
+    // The starter files, and a directory classified by what each file is.
+    let listed = desktop.tool("list_presets", json!({"directory":temp.path()}));
+    let sources: Vec<&str> = listed["examples"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["source"].as_str().unwrap())
+        .collect();
+    assert_eq!(sources, ["example:viewer", "example:quantification"]);
+    let files = listed["directory"]["files"].as_array().unwrap();
+    assert_eq!(files.len(), 3, "{listed}");
+    let kind_of = |name: &str| {
+        files
+            .iter()
+            .find(|f| f["path"].as_str().unwrap().ends_with(name))
+            .unwrap()["kind"]
+            .clone()
+    };
+    assert_eq!(kind_of("traces.toml"), "viewer_preset");
+    assert_eq!(kind_of("assay.toml"), "quantification_method");
+    assert_eq!(kind_of("broken.toml"), "unreadable");
+    // Reading returns the text and its meaning; the text is what apply_preset takes.
+    let example = desktop.tool("get_preset", json!({"source":"example:viewer"}));
+    assert_eq!(example["toml"], viewer);
+    assert_eq!(example["kind"], "viewer_preset");
+    assert!(!example["traces"].as_array().unwrap().is_empty());
+    let from_file = desktop.tool(
+        "get_preset",
+        json!({"source":temp.path().join("assay.toml")}),
+    );
+    assert_eq!(from_file["kind"], "quantification_method");
+    assert_eq!(from_file["analytes"][0]["name"], "Analyte A");
+    desktop.open_fixture();
+    desktop.tool("apply_preset", json!({"toml":example["toml"]}));
+    // Saving validates first and never replaces.
+    let target = temp.path().join("mine.toml");
+    let saved = desktop.tool("save_preset", json!({"path":target,"toml":viewer}));
+    assert_eq!(saved["traces"], example["traces"].as_array().unwrap().len());
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), viewer);
+    assert!(
+        desktop
+            .app
+            .presets
+            .editor
+            .recent()
+            .contains(&std::fs::canonicalize(&target).unwrap()),
+        "the preset editor's Recent presets lists it"
+    );
+    let listed = desktop.tool("list_presets", json!({}));
+    assert!(
+        listed["recent"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p.as_str().unwrap().ends_with("mine.toml")),
+        "{listed}"
+    );
+    let again = desktop.tool_error("save_preset", json!({"path":target,"toml":viewer}));
+    assert!(
+        again["message"]
+            .as_str()
+            .unwrap()
+            .contains("already exists"),
+        "{again}"
+    );
+    for (name, text, expect) in [
+        (
+            "bad.toml",
+            "version = 1
+[[traces]]
+name='x'
+acquisition='FS'
+mass=100.0
+ppm=-1.0",
+            "Not a valid viewer preset",
+        ),
+        ("method.toml", method, "Not a viewer preset"),
+        (
+            "garbage.toml",
+            "this is {not toml",
+            "Not a valid viewer preset",
+        ),
+    ] {
+        let error = desktop.tool_error(
+            "save_preset",
+            json!({"path":temp.path().join(name),"toml":text}),
+        );
+        assert!(
+            error["message"].as_str().unwrap().contains(expect),
+            "{name}: {error}"
+        );
+        assert!(
+            !temp.path().join(name).exists(),
+            "nothing is written for an invalid preset"
+        );
+    }
+    let wrong = desktop.tool_error(
+        "save_preset",
+        json!({"path":temp.path().join("p.json"),"toml":viewer}),
+    );
+    assert!(
+        wrong["message"].as_str().unwrap().contains(".toml"),
+        "{wrong}"
+    );
+    // Paths outside the roots and unknown sources are refused.
+    let elsewhere = tempfile::tempdir().unwrap();
+    std::fs::write(elsewhere.path().join("x.toml"), viewer).unwrap();
+    for source in [
+        json!(elsewhere.path().join("x.toml")),
+        json!("example:other"),
+    ] {
+        assert!(desktop.tool_error("get_preset", json!({"source":source}))["message"].is_string());
+    }
+    assert!(
+        desktop.tool_error("list_presets", json!({"directory":elsewhere.path()}))["message"]
+            .as_str()
+            .unwrap()
+            .contains("authorized")
+    );
+    // No --allow-exports, no file.
+    let mut read_only = Desktop::start(vec![temp.path().to_owned()], false, false, false);
+    let error = read_only.tool_error(
+        "save_preset",
+        json!({"path":temp.path().join("denied.toml"),"toml":viewer}),
+    );
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("--allow-exports"),
+        "{error}"
+    );
+    assert!(!temp.path().join("denied.toml").exists());
+    desktop.finish();
+    read_only.finish();
 }

@@ -172,6 +172,16 @@ pub enum Command {
         visible: bool,
     },
     Measurements {},
+    ListPresets {
+        directory: Option<String>,
+    },
+    GetPreset {
+        source: String,
+    },
+    SavePreset {
+        path: String,
+        toml: String,
+    },
     SaveSession {
         path: String,
     },
@@ -1355,6 +1365,49 @@ impl McpServer {
         .await
     }
     #[tool(
+        description = "List the extraction presets and starter files you can use: the starter viewer preset and quantification method shipped with the program, the presets the preset editor opened or saved recently (those inside an --allow-root), and with directory the .toml files in that folder, each checked and classified as a viewer preset, a quantification method or unreadable. Use it to find a preset before get_preset or apply_preset. Read-only.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn list_presets(&self, Parameters(args): Parameters<ListPresetsArgs>) -> CallToolResult {
+        self.dispatch(Command::ListPresets {
+            directory: args.directory,
+        })
+        .await
+    }
+    #[tool(
+        description = "Read one preset or starter file as TOML text together with what it means: for a viewer preset its traces (name, acquisition mode, m/z, tolerance, filters), layout and overlay; for a quantification method its analytes. The text is validated, so a valid reply can be passed straight to apply_preset (viewer preset) or start_quantification (method). Read-only; a path must be a .toml file inside an --allow-root.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn get_preset(&self, Parameters(args): Parameters<GetPresetArgs>) -> CallToolResult {
+        self.dispatch(Command::GetPreset {
+            source: args.source,
+        })
+        .await
+    }
+    #[tool(
+        description = "Save a viewer extraction preset, given as TOML text, as a new .toml file, the file the preset editor's Save writes; the text is validated first and nothing is written if it is not a valid viewer preset. Use it to keep a trace setup for the person to open in the preset editor. Requires --allow-exports; the path must be a new .toml file inside an --allow-root, and existing files are never overwritten.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn save_preset(&self, Parameters(args): Parameters<SavePresetArgs>) -> CallToolResult {
+        self.dispatch(Command::SavePreset {
+            path: args.path,
+            toml: args.toml,
+        })
+        .await
+    }
+    #[tool(
         description = "Save the viewer workspace (open datasets, current and retained traces, measurements, view settings) as a new .chromascope session file, the same file the Save viewer session command writes; the file is written complete or not at all. Use it to keep a state you can return to with load_session. Fails while an import or extraction is running. Requires --allow-exports; the path must be a new file inside an --allow-root, and existing files are never overwritten.",
         annotations(
             read_only_hint = false,
@@ -1509,6 +1562,28 @@ pub struct SetTraceVisibilityArgs {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct ListPresetsArgs {
+    /// A directory inside an --allow-root whose .toml files are checked and listed (not
+    /// recursive, at most 500 files).
+    pub directory: Option<String>,
+}
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GetPresetArgs {
+    /// `example:viewer` or `example:quantification` for the starter files shipped with the
+    /// program, or the path of a .toml file inside an --allow-root.
+    pub source: String,
+}
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SavePresetArgs {
+    /// New .toml file inside an --allow-root.
+    pub path: String,
+    /// The viewer preset as TOML text (see get_preset example:viewer).
+    pub toml: String,
+}
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SessionPathArgs {
     /// Path of the `.chromascope` session file.
     pub path: String,
@@ -1641,6 +1716,7 @@ mod tests {
         "retain_trace",
         "remove_trace",
         "set_trace_visibility",
+        "save_preset",
         "save_session",
         "load_session",
         "integrate",
@@ -1658,7 +1734,7 @@ mod tests {
     #[test]
     fn tool_descriptions_are_unique_nonempty_and_annotated() {
         let tools = McpServer::tool_router().list_all();
-        assert_eq!(tools.len(), 37, "37 typed tools; workbench is not listed");
+        assert_eq!(tools.len(), 40, "40 typed tools; workbench is not listed");
         assert!(
             tools.iter().all(|t| t.name != "workbench"),
             "workbench duplicated the typed tools and must not be listed"
@@ -1743,11 +1819,11 @@ mod tests {
             let discovered=rpc(&mut write,&mut read,json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}})).await;
             let listed=discovered["result"]["tools"].as_array().unwrap();
             let desktop=McpServer::tool_router().list_all();
-            assert_eq!(desktop.len(),37);
+            assert_eq!(desktop.len(),40);
             assert!(desktop.iter().all(|d|listed.iter().any(|t|t["name"]==d.name.as_ref())),"every viewer tool is listed");
             let engine=crate::engine_mcp::EngineMcp::new(vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))]).unwrap().tool_names();
             let visible=engine.iter().filter(|n|crate::EXPERIMENTAL||!matches!(n.as_str(),"start_untargeted"|"untargeted_status"|"cancel_untargeted"|"untargeted_features")).count();
-            assert_eq!(listed.len(),37+visible,"viewer tools plus the shared engine tools");
+            assert_eq!(listed.len(),40+visible,"viewer tools plus the shared engine tools");
             assert!(listed.iter().all(|t|t["name"]!="workbench"));
             assert!(listed.iter().all(|t|t["annotations"]["readOnlyHint"].is_boolean()&&t["annotations"]["destructiveHint"].is_boolean()),"every tool must carry both hints on the wire");
             let find=|name:&str|listed.iter().find(|t|t["name"]==name).unwrap();

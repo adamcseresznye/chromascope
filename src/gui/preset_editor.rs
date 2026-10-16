@@ -266,6 +266,16 @@ fn recent_path() -> Option<PathBuf> {
     crate::import::settings_path().map(|p| p.with_file_name("recent-presets.json"))
 }
 impl EditorState {
+    /// The presets opened or saved recently, newest first.
+    #[cfg(feature = "mcp")]
+    pub(super) fn recent(&self) -> &[PathBuf] {
+        &self.recent
+    }
+    /// Adds a preset saved from outside the editor to the Recent presets menu.
+    #[cfg(feature = "mcp")]
+    pub(super) fn remember_saved(&mut self, path: PathBuf) {
+        self.remember(path);
+    }
     fn remember(&mut self, path: PathBuf) {
         self.recent.retain(|p| p != &path);
         self.recent.insert(0, path);

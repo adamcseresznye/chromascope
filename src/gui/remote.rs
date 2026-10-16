@@ -940,6 +940,9 @@ impl MzViewerApp {
                 trace_index,
                 visible,
             } => ops::set_trace_visibility(self, dataset_id.index(), trace_index, visible)?,
+            Command::ListPresets { directory } => files::list_presets(self, b, directory)?,
+            Command::GetPreset { source } => files::get_preset(b, &source)?,
+            Command::SavePreset { path, toml } => files::save_preset(self, b, &path, &toml)?,
             Command::SaveSession { path } => files::save_session(self, ctx, b, &path)?,
             Command::LoadSession { .. } => {
                 return Err("load_session replies when the workspace is restored, so it cannot run inside a batch; call it on its own".into())
