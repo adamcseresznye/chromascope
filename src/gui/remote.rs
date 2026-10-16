@@ -595,7 +595,11 @@ impl MzViewerApp {
     ) -> Result<Option<std::sync::mpsc::Receiver<Result<BackgroundResult, String>>>, String> {
         if !matches!(
             command,
-            Command::OpenFiles { .. } | Command::ExtractChromatogram { .. }
+            Command::OpenFiles { .. }
+                | Command::ExtractChromatogram { .. }
+                | Command::BuildBundle { .. }
+                | Command::VerifyBundle { .. }
+                | Command::ReprocessResult { .. }
         ) {
             return Ok(None);
         }
@@ -648,6 +652,85 @@ impl MzViewerApp {
                             params,
                         })
                     })();
+                    let _ = sender.send(result);
+                    context.request_repaint();
+                });
+            }
+            Command::BuildBundle {
+                destination,
+                project,
+                include_sources,
+                acknowledge_warnings,
+                config,
+            } => {
+                let destination = b.policy.output(destination)?;
+                let root = projects::target_root(self, b, project.as_deref())?;
+                let config = config.clone().unwrap_or_default();
+                let warnings = super::workflow::export_warnings(self);
+                if !warnings.is_empty() && !acknowledge_warnings {
+                    return Err(format!(
+                        "{} warning(s) are open in the window: {}. Fix them, or repeat with acknowledge_warnings=true to export anyway; they are then saved in the bundle as review-warnings.json",
+                        warnings.len(),
+                        warnings.join("; ")
+                    ));
+                }
+                let include_sources = *include_sources;
+                std::thread::spawn(move || {
+                    let result = (|| {
+                        let mut summary =
+                            crate::delivery::export(&root, &destination, &config, include_sources)
+                                .map_err(|e| e.to_string())?;
+                        if !warnings.is_empty() {
+                            let text = serde_json::to_string_pretty(&warnings).map_err(err)?;
+                            crate::delivery::add_bundle_file(
+                                &destination,
+                                "review-warnings.json",
+                                text.as_bytes(),
+                            )
+                            .map_err(|e| e.to_string())?;
+                        }
+                        summary["warnings"] = json!(warnings);
+                        summary["files"] = json!(
+                            summary["files"].as_u64().unwrap_or(0)
+                                + u64::from(!warnings.is_empty())
+                        );
+                        Ok(BackgroundResult::Value(summary))
+                    })();
+                    let _ = sender.send(result);
+                    context.request_repaint();
+                });
+            }
+            Command::VerifyBundle { path } => {
+                let directory = b.policy.directory(path)?;
+                std::thread::spawn(move || {
+                    let result = crate::delivery::verify_bundle(&directory)
+                        .map(BackgroundResult::Value)
+                        .map_err(|e| e.to_string());
+                    let _ = sender.send(result);
+                    context.request_repaint();
+                });
+            }
+            Command::ReprocessResult {
+                result_id,
+                project,
+                include_response,
+            } => {
+                let id = uuid::Uuid::parse_str(result_id)
+                    .map(crate::domain::ResultId)
+                    .map_err(|e| format!("result_id is not a UUID: {e}"))?;
+                let root = projects::target_root(self, b, project.as_deref())?;
+                let include_response = *include_response;
+                std::thread::spawn(move || {
+                    let result = crate::delivery::reprocess(&root, id)
+                        .map(|mut value| {
+                            if !include_response {
+                                if let Some(map) = value.as_object_mut() {
+                                    map.remove("response");
+                                }
+                            }
+                            BackgroundResult::Value(value)
+                        })
+                        .map_err(|e| e.to_string());
                     let _ = sender.send(result);
                     context.request_repaint();
                 });
@@ -979,7 +1062,10 @@ impl MzViewerApp {
             Command::SaveBatch { path } => files::save_batch(self, b, &path)?,
             Command::LoadBatch { path } => files::load_batch(self, b, &path)?,
             Command::SaveSession { path } => files::save_session(self, ctx, b, &path)?,
-            Command::LoadSession { .. }
+            Command::BuildBundle { .. }
+            | Command::VerifyBundle { .. }
+            | Command::ReprocessResult { .. }
+            | Command::LoadSession { .. }
             | Command::CreateProject { .. }
             | Command::OpenProject { .. }
             | Command::SaveProject {}

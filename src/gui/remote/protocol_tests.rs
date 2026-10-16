@@ -1604,3 +1604,170 @@ fn a_project_is_created_saved_reopened_and_refreshed_over_mcp() {
         d.finish();
     }
 }
+
+#[test]
+fn bundles_are_built_verified_and_results_reprocessed_over_mcp() {
+    let temp = tempfile::tempdir().unwrap();
+    let batch = raw_request(temp.path());
+    let source = batch.samples[0].source.clone();
+    let mut desktop = Desktop::start(vec![temp.path().to_owned()], true, true, true);
+    // A calibration the window shows, kept in a project.
+    let started = desktop.tool(
+        "start_analysis",
+        json!({"path":source,"request":start_request(crate::domain::Operation::TargetedBatch{batch})}),
+    );
+    let job = started["job_id"].as_str().unwrap().to_owned();
+    wait_for_job(&mut desktop, &job);
+    desktop.pump_until(10, |d| d.app.quant.has_targeted_batch());
+    // Nothing to export before a project exists.
+    let none = desktop.tool_error(
+        "build_bundle",
+        json!({"destination":temp.path().join("early")}),
+    );
+    assert!(
+        none["message"]
+            .as_str()
+            .unwrap()
+            .contains("No project is open"),
+        "{none}"
+    );
+    let created = desktop.tool(
+        "create_project",
+        json!({"path":temp.path().join("study.json")}),
+    );
+    assert_eq!(created["revision"], 1, "{created}");
+    // The window has open warnings (the concentrations are not reviewed): the export stops.
+    let bundle = temp.path().join("audit");
+    let stopped = desktop.tool_error("build_bundle", json!({"destination":bundle}));
+    let message = stopped["message"].as_str().unwrap();
+    assert!(
+        message.contains("acknowledge_warnings=true") && message.contains("not yet reviewed"),
+        "{stopped}"
+    );
+    assert!(
+        !bundle.exists(),
+        "nothing is written before the warnings are acknowledged"
+    );
+    // Acknowledged, it is exported with the warnings in the bundle, and the bundle verifies.
+    let built = desktop.tool(
+        "build_bundle",
+        json!({"destination":bundle,"acknowledge_warnings":true}),
+    );
+    assert_eq!(built["revision"], 1, "{built}");
+    assert!(!built["warnings"].as_array().unwrap().is_empty());
+    for file in [
+        "report.html",
+        "report.json",
+        "checksums.json",
+        "review-warnings.json",
+    ] {
+        assert!(bundle.join(file).is_file(), "{file}");
+    }
+    let warnings: Vec<String> =
+        serde_json::from_slice(&std::fs::read(bundle.join("review-warnings.json")).unwrap())
+            .unwrap();
+    assert_eq!(warnings.len(), built["warnings"].as_array().unwrap().len());
+    let listed: std::collections::BTreeMap<String, String> =
+        serde_json::from_slice(&std::fs::read(bundle.join("checksums.json")).unwrap()).unwrap();
+    assert_eq!(listed.len() as u64, built["files"].as_u64().unwrap());
+    let verified = desktop.tool("verify_bundle", json!({"path":bundle}));
+    assert_eq!(verified["state"], "verified", "{verified}");
+    // A changed file is found; so is a file that was added.
+    let report = std::fs::read(bundle.join("report.json")).unwrap();
+    std::fs::write(bundle.join("report.json"), b"{}").unwrap();
+    assert!(
+        desktop.tool_error("verify_bundle", json!({"path":bundle}))["message"]
+            .as_str()
+            .unwrap()
+            .contains("differ")
+    );
+    std::fs::write(bundle.join("report.json"), report).unwrap();
+    assert_eq!(
+        desktop.tool("verify_bundle", json!({"path":bundle}))["state"],
+        "verified"
+    );
+    // Reprocess a retained result of the project: recomputed from its source, identical.
+    let inspected = desktop.tool(
+        "inspect_project",
+        json!({"directory":temp.path().join("study_data")}),
+    );
+    let result_id = inspected["results"][0]["result_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let again = desktop.tool("reprocess_result", json!({"result_id":result_id}));
+    assert_eq!(again["reproduced"], true, "{again}");
+    assert!(
+        again.get("response").is_none(),
+        "the response is left out unless asked for"
+    );
+    let full = desktop.tool("reprocess_result", json!({"result_id":result_id,"project":temp.path().join("study.json"),"include_response":true}));
+    assert!(full["response"]["output"].is_object());
+    // Refusals: an existing folder, a path outside the roots, a bad id, missing permissions.
+    let exists = desktop.tool_error(
+        "build_bundle",
+        json!({"destination":bundle,"acknowledge_warnings":true}),
+    );
+    assert!(
+        exists["message"]
+            .as_str()
+            .unwrap()
+            .contains("already exists"),
+        "{exists}"
+    );
+    let elsewhere = tempfile::tempdir().unwrap();
+    for (tool, arguments) in [
+        (
+            "build_bundle",
+            json!({"destination":elsewhere.path().join("x"),"acknowledge_warnings":true}),
+        ),
+        ("verify_bundle", json!({"path":elsewhere.path()})),
+        ("reprocess_result", json!({"result_id":"not-a-uuid"})),
+        (
+            "reprocess_result",
+            json!({"result_id":uuid::Uuid::new_v4().to_string()}),
+        ),
+    ] {
+        let error = desktop.tool_error(tool, arguments);
+        assert!(error["message"].is_string(), "{tool}: {error}");
+    }
+    assert!(!elsewhere.path().join("x").exists());
+    let mut guarded = Desktop::start(vec![temp.path().to_owned()], false, false, false);
+    let denied = guarded.tool_error(
+        "build_bundle",
+        json!({"destination":temp.path().join("denied"),"project":temp.path().join("study.json")}),
+    );
+    assert!(
+        denied["message"]
+            .as_str()
+            .unwrap()
+            .contains("--allow-exports"),
+        "{denied}"
+    );
+    // verify and reprocess only read, so they work without any permission flag.
+    assert_eq!(
+        guarded.tool("verify_bundle", json!({"path":bundle}))["state"],
+        "verified"
+    );
+    assert_eq!(
+        guarded.tool(
+            "reprocess_result",
+            json!({"result_id":result_id,"project":temp.path().join("study.json")})
+        )["reproduced"],
+        true
+    );
+    // With the raw sources, the bundle carries them and still verifies.
+    let portable = temp.path().join("portable");
+    let built = desktop.tool(
+        "build_bundle",
+        json!({"destination":portable,"acknowledge_warnings":true,"include_sources":true}),
+    );
+    assert_eq!(built["sources_included"], true, "{built}");
+    assert!(portable.join("sources").is_dir() && portable.join("source-map.json").is_file());
+    assert_eq!(
+        desktop.tool("verify_bundle", json!({"path":portable}))["state"],
+        "verified"
+    );
+    desktop.finish();
+    guarded.finish();
+}

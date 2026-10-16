@@ -182,6 +182,24 @@ pub enum Command {
         path: String,
         toml: String,
     },
+    BuildBundle {
+        destination: String,
+        project: Option<String>,
+        #[serde(default)]
+        include_sources: bool,
+        #[serde(default)]
+        acknowledge_warnings: bool,
+        config: Option<crate::delivery::Config>,
+    },
+    VerifyBundle {
+        path: String,
+    },
+    ReprocessResult {
+        result_id: String,
+        project: Option<String>,
+        #[serde(default)]
+        include_response: bool,
+    },
     CreateProject {
         path: String,
     },
@@ -1449,6 +1467,65 @@ impl McpServer {
         .await
     }
     #[tool(
+        description = "Build the audit package of a project in a new folder, as Export audit package does: a readable report.html, the machine-readable evidence (revisions, results, CSV, SVG) and checksums.json, optionally with the raw sources. Open warnings in the window (unresolved peaks, unreviewed results, failed QC) stop the export until acknowledge_warnings is true; they are then saved in the bundle as review-warnings.json. Runs in the background and replies when done. Requires --allow-exports; the destination must be a new folder inside an --allow-root, existing folders are never overwritten.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn build_bundle(&self, Parameters(args): Parameters<BuildBundleArgs>) -> CallToolResult {
+        let BuildBundleArgs {
+            destination,
+            project,
+            include_sources,
+            acknowledge_warnings,
+            config,
+        } = args;
+        self.dispatch(Command::BuildBundle {
+            destination,
+            project,
+            include_sources,
+            acknowledge_warnings,
+            config,
+        })
+        .await
+    }
+    #[tool(
+        description = "Check an audit package: every file listed in checksums.json is present and unchanged, and no file is missing or extra. Use it after build_bundle, or to check a bundle received from someone else. Read-only; the folder must lie inside an --allow-root.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn verify_bundle(
+        &self,
+        Parameters(args): Parameters<VerifyBundleArgs>,
+    ) -> CallToolResult {
+        self.dispatch(Command::VerifyBundle { path: args.path })
+            .await
+    }
+    #[tool(
+        description = "Recompute one retained result of a project from its verified source and compare it with the stored output, as Reprocess and compare retained evidence does; the reply says whether the result was reproduced exactly. Nothing in the project changes. Needs the same program version that produced the result. Read-only; the project and its datasets must lie inside an --allow-root.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn reprocess_result(
+        &self,
+        Parameters(args): Parameters<ReprocessResultArgs>,
+    ) -> CallToolResult {
+        self.dispatch(Command::ReprocessResult {
+            result_id: args.result_id,
+            project: args.project,
+            include_response: args.include_response,
+        })
+        .await
+    }
+    #[tool(
         description = "Create a project from the current workspace: a new project file and its _data folder, holding the open datasets (registered with their SHA-256), the Quantification and QC results, AI review proposals and the first revision, as the Create project command does. Use it to keep an analysis that open_project, inspect_project and build_bundle can return to. Fails while an import or analysis runs, and when a dataset of the workspace lies outside the --allow-roots. Requires --allow-project-writes; the path must be a new .json file inside an --allow-root.",
         annotations(
             read_only_hint = false,
@@ -1726,6 +1803,41 @@ pub struct SavePresetArgs {
 }
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct BuildBundleArgs {
+    /// New folder to create inside an --allow-root; it must not exist.
+    pub destination: String,
+    /// The project file or its `_data` folder; the open project when omitted.
+    pub project: Option<String>,
+    /// Also copy the raw source datasets (verified by checksum) into the bundle so it can be
+    /// checked elsewhere.
+    #[serde(default)]
+    pub include_sources: bool,
+    /// Export although the window shows open warnings (unresolved peaks, unreviewed results,
+    /// failed QC); they are saved in the bundle as review-warnings.json.
+    #[serde(default)]
+    pub acknowledge_warnings: bool,
+    /// Report title, sections and figure size; the defaults of the Audit package tab when omitted.
+    pub config: Option<crate::delivery::Config>,
+}
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VerifyBundleArgs {
+    /// The bundle folder inside an --allow-root.
+    pub path: String,
+}
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReprocessResultArgs {
+    /// UUID of a result of the project (see inspect_project).
+    pub result_id: String,
+    /// The project file or its `_data` folder; the open project when omitted.
+    pub project: Option<String>,
+    /// Include the recomputed response in the reply (large for big results).
+    #[serde(default)]
+    pub include_response: bool,
+}
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct CreateProjectArgs {
     /// New project file (.json) inside an --allow-root; the project's data goes in the
     /// `<name>_data` folder next to it.
@@ -1896,6 +2008,7 @@ mod tests {
         "remove_trace",
         "set_trace_visibility",
         "save_preset",
+        "build_bundle",
         "create_project",
         "open_project",
         "save_project",
@@ -1921,7 +2034,7 @@ mod tests {
     #[test]
     fn tool_descriptions_are_unique_nonempty_and_annotated() {
         let tools = McpServer::tool_router().list_all();
-        assert_eq!(tools.len(), 48, "48 typed tools; workbench is not listed");
+        assert_eq!(tools.len(), 51, "51 typed tools; workbench is not listed");
         assert!(
             tools.iter().all(|t| t.name != "workbench"),
             "workbench duplicated the typed tools and must not be listed"
@@ -1970,7 +2083,10 @@ mod tests {
             if !read_only && !matches!(&*tool.name, "open_files" | "batch") {
                 let flag = if matches!(&*tool.name, "create_project" | "save_project") {
                     "--allow-project-writes"
-                } else if tool.name.starts_with("export_") || tool.name.starts_with("save_") {
+                } else if tool.name.starts_with("export_")
+                    || tool.name.starts_with("save_")
+                    || tool.name == "build_bundle"
+                {
                     "--allow-exports"
                 } else {
                     "--allow-changes"
@@ -2009,11 +2125,11 @@ mod tests {
             let discovered=rpc(&mut write,&mut read,json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}})).await;
             let listed=discovered["result"]["tools"].as_array().unwrap();
             let desktop=McpServer::tool_router().list_all();
-            assert_eq!(desktop.len(),48);
+            assert_eq!(desktop.len(),51);
             assert!(desktop.iter().all(|d|listed.iter().any(|t|t["name"]==d.name.as_ref())),"every viewer tool is listed");
             let engine=crate::engine_mcp::EngineMcp::new(vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))]).unwrap().tool_names();
             let visible=engine.iter().filter(|n|crate::EXPERIMENTAL||!matches!(n.as_str(),"start_untargeted"|"untargeted_status"|"cancel_untargeted"|"untargeted_features")).count();
-            assert_eq!(listed.len(),48+visible,"viewer tools plus the shared engine tools");
+            assert_eq!(listed.len(),51+visible,"viewer tools plus the shared engine tools");
             assert!(listed.iter().all(|t|t["name"]!="workbench"));
             assert!(listed.iter().all(|t|t["annotations"]["readOnlyHint"].is_boolean()&&t["annotations"]["destructiveHint"].is_boolean()),"every tool must carry both hints on the wire");
             let find=|name:&str|listed.iter().find(|t|t["name"]==name).unwrap();

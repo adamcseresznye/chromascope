@@ -314,3 +314,51 @@ fn multi_segment_export_preserves_gaps_and_branch_identity() {
     assert!(!svg.contains("<circle"));
     assert!(svg.contains("raw &lt;source&gt;"));
 }
+
+#[test]
+fn a_file_added_after_the_export_stays_part_of_the_verified_bundle() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("project");
+    let mut p = Project::create(&root).unwrap();
+    let dataset = p.register(&fixture()).unwrap();
+    let response = engine::execute(
+        &fixture(),
+        request(Operation::Integrate {
+            points: vec![[0., 0.], [1., 10.], [2., 0.]],
+            start: Minutes(0.),
+            end: Minutes(2.),
+        }),
+        &JobControl::default(),
+    )
+    .unwrap();
+    p.add_result(&root, dataset, &response).unwrap();
+    p.commit(&root, 0).unwrap();
+    let bundle = temp.path().join("bundle");
+    delivery::export(&root, &bundle, &Config::default(), false).unwrap();
+    delivery::verify_bundle(&bundle).unwrap();
+    // A file that is only dropped into the folder is an extra file: the bundle no longer verifies.
+    fs::write(bundle.join("stray.json"), b"[]").unwrap();
+    assert!(delivery::verify_bundle(&bundle).is_err());
+    fs::remove_file(bundle.join("stray.json")).unwrap();
+    // The acknowledged review warnings are recorded in the checksums, so the bundle verifies.
+    delivery::add_bundle_file(&bundle, "review-warnings.json", br#"["1 peak unresolved"]"#)
+        .unwrap();
+    assert_eq!(
+        delivery::verify_bundle(&bundle).unwrap()["state"],
+        "verified"
+    );
+    let listed: std::collections::BTreeMap<String, String> =
+        serde_json::from_slice(&fs::read(bundle.join("checksums.json")).unwrap()).unwrap();
+    assert!(listed.contains_key("review-warnings.json"));
+    // A changed warning file is detected, an existing file is never replaced, and the name is
+    // a plain file name.
+    assert!(delivery::add_bundle_file(&bundle, "review-warnings.json", b"[]").is_err());
+    for bad in ["", "../outside.json", "folder/file.json", "checksums.json"] {
+        assert!(
+            delivery::add_bundle_file(&bundle, bad, b"x").is_err(),
+            "{bad}"
+        );
+    }
+    fs::write(bundle.join("review-warnings.json"), b"[]").unwrap();
+    assert!(delivery::verify_bundle(&bundle).is_err());
+}

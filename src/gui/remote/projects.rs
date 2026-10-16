@@ -49,8 +49,12 @@ pub(super) fn create(
     Ok(Wait::Project { before })
 }
 
-pub(super) fn open(app: &mut MzViewerApp, b: &GuiBridge, path: &str) -> Result<Wait, String> {
-    ready(app)?;
+/// The data folder of a project named by its file or its folder, inside a root, with every
+/// registered dataset that exists inside a root too. Nothing is opened or changed.
+pub(super) fn authorized_project_root(
+    b: &GuiBridge,
+    path: &str,
+) -> Result<std::path::PathBuf, String> {
     let given = std::path::Path::new(path);
     let root = if given.is_dir() {
         b.policy.directory(path)?
@@ -59,14 +63,38 @@ pub(super) fn open(app: &mut MzViewerApp, b: &GuiBridge, path: &str) -> Result<W
         b.policy
             .directory(&workbench::data_root(&file)?.to_string_lossy())?
     };
-    // Read the project first: every dataset it registers is opened by the window, so each one
-    // that exists must lie inside a root before anything is touched.
     let project = crate::project::Project::open(&root).map_err(|e| e.message)?;
     for source in &project.sources {
         if source.path.exists() {
             b.policy.source(&source.path.to_string_lossy())?;
         }
     }
+    Ok(root)
+}
+
+/// The project a bundle tool works on: the one named, or the open one.
+pub(super) fn target_root(
+    app: &MzViewerApp,
+    b: &GuiBridge,
+    project: Option<&str>,
+) -> Result<std::path::PathBuf, String> {
+    match project {
+        Some(path) => authorized_project_root(b, path),
+        None => {
+            let open = app
+                .project
+                .open_root()
+                .ok_or("No project is open; name one with the project argument")?;
+            authorized_project_root(b, &open.to_string_lossy())
+        }
+    }
+}
+
+pub(super) fn open(app: &mut MzViewerApp, b: &GuiBridge, path: &str) -> Result<Wait, String> {
+    ready(app)?;
+    // Every dataset the project registers is opened by the window, so each one must lie inside
+    // a root before anything is touched.
+    let root = authorized_project_root(b, path)?;
     let before = app.project.completions();
     workbench::begin_open(app, root);
     Ok(Wait::Project { before })

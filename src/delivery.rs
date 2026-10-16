@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use std::{collections::BTreeMap, fs, io::Write, path::Path};
 #[cfg_attr(feature = "mcp-headless", derive(rmcp::schemars::JsonSchema))]
 #[cfg_attr(feature = "mcp-headless", schemars(crate = "rmcp::schemars"))]
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub title: String,
@@ -585,6 +585,33 @@ pub fn export(
     Ok(
         json!({"directory":destination,"project_id":p.id,"revision":p.revision,"files":checksums.len(),"sources_included":include_sources}),
     )
+}
+/// Adds one file to an exported bundle and records it in `checksums.json`, so the bundle still
+/// verifies. Used for what is only known after the export, such as the review warnings a
+/// scientist acknowledged. An existing file is never replaced.
+pub fn add_bundle_file(bundle: &Path, name: &str, bytes: &[u8]) -> Result<()> {
+    if name.is_empty() || name.contains(['/', '\\']) || name == "checksums.json" {
+        return Err(EngineError::new(
+            "invalid_parameters",
+            "A bundle file name has no folders and is not checksums.json",
+        ));
+    }
+    write(bundle, name, bytes)?;
+    let list = bundle.join("checksums.json");
+    if list.exists() {
+        let mut checksums: BTreeMap<String, String> =
+            serde_json::from_slice(&fs::read(&list).map_err(err)?).map_err(err)?;
+        checksums.insert(
+            name.to_owned(),
+            crate::project::source_identity(&bundle.join(name))?.0,
+        );
+        crate::atomic_write::write_atomic(
+            &list,
+            serde_json::to_vec_pretty(&checksums).map_err(err)?,
+        )
+        .map_err(err)?;
+    }
+    Ok(())
 }
 fn copy_tree(source: &Path, destination: &Path) -> Result<()> {
     fs::create_dir(destination).map_err(err)?;
