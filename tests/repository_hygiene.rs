@@ -145,3 +145,43 @@ fn indexed_mzml_fixture_was_anonymised_without_moving_a_single_byte() {
     assert_eq!(location.len(), 70, "length of the original location");
     assert!(location.contains("anonymised"));
 }
+
+#[test]
+fn package_metadata_feeds_the_deb_and_rpm_packages() {
+    // cargo-deb and cargo-generate-rpm take the package synopsis, URL and licence from
+    // [package]; without them the packages ship with an empty description.
+    let manifest: toml::Value = read("Cargo.toml").parse().unwrap();
+    let package = &manifest["package"];
+    let text = |key: &str| {
+        package[key]
+            .as_str()
+            .unwrap_or_else(|| panic!("[package] {key} missing"))
+            .to_owned()
+    };
+    let description = text("description");
+    assert!(
+        (40..=200).contains(&description.len()),
+        "a one-line description: {description:?}"
+    );
+    assert!(!description.ends_with('.') && !description.contains('\n'));
+    assert_eq!(
+        text("repository"),
+        "https://github.com/adamcseresznye/chromascope"
+    );
+    assert!(text("homepage").starts_with("https://"));
+    assert_eq!(text("license"), "GPL-3.0-only");
+    assert_eq!(text("readme"), "README.md");
+    assert!(root().join("README.md").is_file());
+    let keywords = package["keywords"].as_array().unwrap();
+    assert!(
+        (1..=5).contains(&keywords.len()),
+        "crates.io allows at most five keywords"
+    );
+    assert!(!package["categories"].as_array().unwrap().is_empty());
+    // The Debian package adds its own long description on top of the synopsis.
+    assert!(
+        manifest["package"]["metadata"]["deb"]["extended-description"]
+            .as_str()
+            .is_some_and(|d| d.len() > description.len())
+    );
+}

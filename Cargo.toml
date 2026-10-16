@@ -5,6 +5,12 @@ default-run = "chromascope"
 authors = ["Adam Cseresznye"]
 edition = "2021"
 license = "GPL-3.0-only"
+description = "LC-MS chromatogram and spectrum viewer with peak integration, calibration-based quantification, QC and MCP servers for AI clients"
+repository = "https://github.com/adamcseresznye/chromascope"
+homepage = "https://github.com/adamcseresznye/chromascope"
+readme = "README.md"
+keywords = ["mass-spectrometry", "lc-ms", "chromatography", "mzml", "mcp"]
+categories = ["science", "visualization"]
 include = ["LICENSE", "**/*.rs", "src/adapters/*.py", "Cargo.toml", "assets/icon.png", "assets/fonts/**", "presets/**", "README.md", "THIRD_PARTY_LICENSES.txt", "docs/**", "examples/**"]
 rust-version = "1.88"
 
