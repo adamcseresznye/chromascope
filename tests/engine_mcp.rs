@@ -203,6 +203,56 @@ fn transport_validation_authorization_cancellation_and_read_only_policy() {
 }
 
 #[test]
+fn every_entry_point_authorizes_the_sample_sources_of_a_batch_the_same_way() {
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let allowed = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let anchor = allowed.path().join("anchor.mzML");
+        std::fs::write(&anchor, b"anchor").unwrap();
+        // Every sample file lives outside the one allowed root.
+        let batch = raw_request(elsewhere.path());
+        let request = Request {
+            version: 1,
+            operation_id: Default::default(),
+            actor: "integration-test AI client".into(),
+            operation: Operation::TargetedBatch { batch },
+        };
+        let (mut client, task) =
+            connect(EngineMcp::new(vec![allowed.path().to_owned()]).unwrap()).await;
+        for tool in ["start_analysis", "analytical_operation"] {
+            let reply = client
+                .call(tool, json!({"path": anchor, "request": request}))
+                .await;
+            assert_eq!(
+                reply["result"]["structuredContent"]["code"], "unauthorized",
+                "{tool} must refuse samples outside the allowed roots: {reply}"
+            );
+        }
+        // The same request with the samples inside the root is accepted by both.
+        let inside = Request {
+            operation: Operation::TargetedBatch {
+                batch: raw_request(allowed.path()),
+            },
+            ..request
+        };
+        let started = client
+            .call("start_analysis", json!({"path": anchor, "request": inside}))
+            .await;
+        assert_ne!(started["result"]["isError"], true, "{started}");
+        let direct = client
+            .call(
+                "analytical_operation",
+                json!({"path": anchor, "request": inside}),
+            )
+            .await;
+        assert_ne!(direct["result"]["isError"], true, "{direct}");
+        assert!(direct["result"]["structuredContent"]["output"].is_object());
+        drop(client);
+        task.await.unwrap();
+    });
+}
+
+#[test]
 fn preview_cannot_commit_and_stale_review_remains_failed_evidence() {
     tokio::runtime::Runtime::new().unwrap().block_on(async {
         use chromascope::chromatography::{Analysis,Trace,Config,Baseline,Correction};

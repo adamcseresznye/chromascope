@@ -1182,15 +1182,7 @@ impl EngineMcp {
             }
             let request: Request = serde_json::from_slice(&bytes)
                 .map_err(|e| EngineError::new("invalid_parameters", e))?;
-            request.operation.ensure_available()?;
-            if let crate::domain::Operation::TargetedBatch { batch } = &request.operation {
-                for sample in &batch.samples {
-                    self.authorize(&sample.source)?;
-                }
-            }
-            if let crate::domain::Operation::UntargetedBatch { config } = &request.operation {
-                self.authorize_features(config)?;
-            }
+            self.authorize_request(&request)?;
             let job = self
                 .scheduler
                 .submit(path, request, JobControl::default())?;
