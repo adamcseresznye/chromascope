@@ -7,8 +7,9 @@ use rmcp::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
-    sync::mpsc,
+    sync::{mpsc, Arc, Mutex},
 };
 use tokio::sync::oneshot;
 
@@ -145,6 +146,8 @@ pub struct AccessPolicy {
     roots: Vec<PathBuf>,
     pub allow_changes: bool,
     pub allow_exports: bool,
+    /// Creating and saving projects, committing analyses and resolving review proposals.
+    pub allow_project_writes: bool,
 }
 impl AccessPolicy {
     pub fn new(
@@ -166,7 +169,17 @@ impl AccessPolicy {
             roots,
             allow_changes,
             allow_exports,
+            allow_project_writes: false,
         })
+    }
+    /// Operator policy for project writes (`--allow-project-writes`); off by default.
+    pub fn with_project_writes(mut self, allow: bool) -> Self {
+        self.allow_project_writes = allow;
+        self
+    }
+    /// The canonical authorised roots.
+    pub fn roots(&self) -> &[PathBuf] {
+        &self.roots
     }
     pub fn input(&self, path: &str) -> Result<PathBuf, String> {
         let path = Path::new(path).canonicalize().map_err(|e| e.to_string())?;
@@ -210,9 +223,34 @@ pub struct Envelope {
     pub command: Command,
     pub reply: oneshot::Sender<CallToolResult>,
 }
+/// Messages from the server threads to the window that no client can send as a command: they
+/// are produced only by the server itself, so an AI cannot inject results or log entries.
+pub(crate) enum Internal {
+    /// A tool call served by the headless engine, for the AI activity log.
+    Activity(Value),
+    /// A finished analysis (the JSON of an `engine::Response`) to put in the Quantification tab.
+    Analysis {
+        job_id: String,
+        response: Box<Value>,
+    },
+}
+/// Whether an analysis started over MCP is visible in the window.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub(crate) enum Route {
+    /// Finished results will be placed in the window.
+    Waiting,
+    /// The result is in the window (`tab` says where).
+    Shown { tab: String },
+    /// The result stays an MCP job only (`reason` says why).
+    NotShown { reason: String },
+}
+pub(crate) type RouteMap = Arc<Mutex<HashMap<String, Route>>>;
 pub struct GuiBridge {
     pub(crate) pending: Option<crate::gui::remote::PendingOperation>,
     pub receiver: mpsc::Receiver<Envelope>,
+    pub(crate) internal: mpsc::Receiver<Internal>,
+    pub(crate) routed: RouteMap,
     pub policy: AccessPolicy,
     pub history: Vec<Value>,
     pub(crate) undo: Vec<(usize, usize, crate::gui::state::IntegrationState)>,
@@ -228,27 +266,45 @@ pub struct GuiBridge {
 #[derive(Clone)]
 pub struct McpServer {
     sender: mpsc::SyncSender<Envelope>,
+    internal: mpsc::Sender<Internal>,
     context: egui::Context,
     tool_router: ToolRouter<Self>,
+    /// The headless engine server, reused for every analysis, project and review tool.
+    engine: crate::engine_mcp::EngineMcp,
+    engine_tools: Arc<Vec<String>>,
+    routed: RouteMap,
+    policy: AccessPolicy,
 }
 impl McpServer {
-    pub fn new(context: egui::Context, policy: AccessPolicy) -> (Self, GuiBridge) {
+    pub fn new(context: egui::Context, policy: AccessPolicy) -> Result<(Self, GuiBridge), String> {
         let (sender, receiver) = mpsc::sync_channel(16);
-        (
+        let (internal, internal_receiver) = mpsc::channel();
+        let engine = crate::engine_mcp::EngineMcp::new(policy.roots().to_vec())
+            .map_err(|e| e.to_string())?
+            .with_project_writes(policy.allow_project_writes);
+        let routed = RouteMap::default();
+        Ok((
             Self {
                 sender,
+                internal,
                 context,
                 tool_router: Self::tool_router(),
+                engine_tools: Arc::new(engine.tool_names()),
+                engine,
+                routed: routed.clone(),
+                policy: policy.clone(),
             },
             GuiBridge {
                 pending: None,
                 receiver,
+                internal: internal_receiver,
+                routed,
                 policy,
                 history: vec![],
                 undo: vec![],
                 results: Default::default(),
             },
-        )
+        ))
     }
     pub(crate) async fn dispatch(&self, command: Command) -> CallToolResult {
         if let Command::Batch { commands } = command {
@@ -283,6 +339,149 @@ impl McpServer {
                 json!({"code":"gui_closed","message":"GUI closed before command completed"}),
             )
         })
+    }
+    fn set_route(&self, job_id: &str, route: Route) {
+        if let Ok(mut routes) = self.routed.lock() {
+            routes.insert(job_id.to_owned(), route);
+        }
+    }
+    fn route_of(&self, job_id: &str) -> Option<Route> {
+        self.routed.lock().ok()?.get(job_id).cloned()
+    }
+    fn tell_window(&self, event: Internal) -> bool {
+        let sent = self.internal.send(event).is_ok();
+        self.context.request_repaint();
+        sent
+    }
+    /// Shows a finished analysis in the window once the engine has produced it. Runs only when
+    /// the operator allowed changes: filling the Quantification tab replaces what the person
+    /// sees there, which is a change to the window.
+    fn watch_job(&self, job_id: String) {
+        if !self.policy.allow_changes {
+            self.set_route(
+                &job_id,
+                Route::NotShown {
+                    reason: "The result is kept as an MCP job only; showing it in the window needs --allow-changes".into(),
+                },
+            );
+            return;
+        }
+        self.set_route(&job_id, Route::Waiting);
+        let server = self.clone();
+        tokio::spawn(async move {
+            loop {
+                match server.engine.poll_job(&job_id) {
+                    crate::engine_mcp::JobPoll::Pending => {
+                        tokio::time::sleep(std::time::Duration::from_millis(25)).await
+                    }
+                    crate::engine_mcp::JobPoll::Done(response) => {
+                        if !server.tell_window(Internal::Analysis {
+                            job_id: job_id.clone(),
+                            response,
+                        }) {
+                            server.set_route(
+                                &job_id,
+                                Route::NotShown {
+                                    reason: "The window is closed".into(),
+                                },
+                            );
+                        }
+                        break;
+                    }
+                    crate::engine_mcp::JobPoll::Failed(error) => {
+                        server.set_route(
+                            &job_id,
+                            Route::NotShown {
+                                reason: format!("The job did not succeed: {}", error.message),
+                            },
+                        );
+                        break;
+                    }
+                    crate::engine_mcp::JobPoll::Unknown => break,
+                }
+            }
+        });
+    }
+    /// Serves one of the headless engine's tools, logs it in the AI activity view and ties the
+    /// analysis jobs to the window.
+    async fn call_engine_tool(
+        &self,
+        name: String,
+        request: CallToolRequestParams,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<CallToolResponse, rmcp::ErrorData> {
+        let parameters = request
+            .arguments
+            .clone()
+            .map(Value::Object)
+            .unwrap_or(Value::Null);
+        let job_id = request
+            .arguments
+            .as_ref()
+            .and_then(|a| a.get("job_id"))
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let result = self.engine.call_tool(request, context).await;
+        let Ok(CallToolResponse::Complete(mut reply)) = result else {
+            self.tell_window(Internal::Activity(activity_entry(
+                &name,
+                &parameters,
+                Err("protocol error"),
+            )));
+            return result;
+        };
+        let failed = reply.is_error == Some(true);
+        let message = reply
+            .structured_content
+            .as_ref()
+            .and_then(|v| v["message"].as_str())
+            .unwrap_or("The operation failed")
+            .to_owned();
+        self.tell_window(Internal::Activity(activity_entry(
+            &name,
+            &parameters,
+            if failed { Err(&message) } else { Ok(()) },
+        )));
+        if !failed {
+            let started = (name == "start_analysis")
+                .then_some(reply.structured_content.as_ref())
+                .flatten()
+                .and_then(|v| v["job_id"].as_str())
+                .map(str::to_owned);
+            if let Some(id) = &started {
+                self.watch_job(id.clone());
+            }
+            let window = started.or(job_id).filter(|_| {
+                matches!(
+                    name.as_str(),
+                    "start_analysis" | "analysis_status" | "cancel_analysis"
+                )
+            });
+            if let Some(route) = window.as_deref().and_then(|id| self.route_of(id)) {
+                if let Some(Value::Object(mut map)) = reply.structured_content.take() {
+                    map.insert("window".into(), json!(route));
+                    reply = CallToolResult::structured(Value::Object(map));
+                }
+            }
+        }
+        Ok(CallToolResponse::Complete(reply))
+    }
+}
+/// One AI activity entry; request payloads over 64 KiB are summarised so a large trace cannot
+/// fill the window's memory.
+fn activity_entry(tool: &str, parameters: &Value, outcome: Result<(), &str>) -> Value {
+    let text = parameters.to_string();
+    let parameters = if text.len() > 64 * 1024 {
+        use sha2::{Digest, Sha256};
+        json!({"truncated":true,"bytes":text.len(),"sha256":format!("{:x}",Sha256::digest(text.as_bytes()))})
+    } else {
+        parameters.clone()
+    };
+    match outcome {
+        Ok(()) => json!({"request":{"operation":tool,"parameters":parameters},"success":true}),
+        Err(error) => {
+            json!({"request":{"operation":tool,"parameters":parameters},"success":false,"error":error})
+        }
     }
 }
 
@@ -963,10 +1162,41 @@ impl McpServer {
 }
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for McpServer {
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> std::result::Result<CallToolResponse, rmcp::ErrorData> {
+        let name = request.name.to_string();
+        if self.engine_tools.contains(&name) {
+            return self.call_engine_tool(name, request, context).await;
+        }
+        let call = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+        self.tool_router.call(call).await
+    }
+    async fn list_tools(
+        &self,
+        request: Option<PaginatedRequestParams>,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> std::result::Result<ListToolsResult, rmcp::ErrorData> {
+        // The engine hides the experimental workflows in the default build; its list is
+        // already filtered and sorted. The desktop tools come first, then the engine's.
+        let mut listed = self.engine.list_tools(request, context).await?;
+        let mut tools = self.tool_router.list_all();
+        tools.append(&mut listed.tools);
+        listed.tools = tools;
+        Ok(listed)
+    }
+    fn get_tool(&self, name: &str) -> Option<Tool> {
+        self.tool_router
+            .get(name)
+            .cloned()
+            .or_else(|| self.engine.get_tool(name))
+    }
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("chromascope", env!("CARGO_PKG_VERSION")))
-            .with_instructions("Use the named tools; batch runs several of them in one call. Inspect datasets first (list_datasets, gui_state). Retrieve bounded numerical pages for quantitation; images aid visual review. Read-only unless explicitly enabled at launch. AI interpretations are external to measured results.")
+            .with_instructions("One server for everything the person sees in the window. Inspect datasets first (list_datasets, gui_state). Use the typed viewer tools to open data, extract and integrate; start_analysis runs calibration, quantification and QC on the shared engine and, when launched with --allow-changes, shows the finished result in the Quantification tab (analysis_status says whether it did). Retrieve bounded numerical pages for quantitation; images aid visual review. Read-only unless explicitly enabled at launch (--allow-changes, --allow-exports, --allow-project-writes). AI interpretations are external to measured results.")
     }
 }
 
@@ -1069,7 +1299,8 @@ mod tests {
                 false,
             )
             .unwrap(),
-        );
+        )
+        .unwrap();
         assert!(!bridge.policy.allow_changes);
         let router = McpServer::tool_router();
         let tools = router.list_all();
@@ -1174,7 +1405,7 @@ mod tests {
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
         tokio::runtime::Runtime::new().unwrap().block_on(async {
             let policy=AccessPolicy::new(vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))],false,false).unwrap();
-            let (server,_bridge)=McpServer::new(egui::Context::default(),policy);
+            let (server,_bridge)=McpServer::new(egui::Context::default(),policy).unwrap();
             let (client,transport)=tokio::io::duplex(65536);
             let task=tokio::spawn(async move {server.serve(transport).await.unwrap().waiting().await.unwrap();});
             let (read,mut write)=tokio::io::split(client);let mut read=BufReader::new(read);
@@ -1187,7 +1418,12 @@ mod tests {
             write.write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n").await.unwrap();
             let discovered=rpc(&mut write,&mut read,json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}})).await;
             let listed=discovered["result"]["tools"].as_array().unwrap();
-            assert_eq!(listed.len(),31);
+            let desktop=McpServer::tool_router().list_all();
+            assert_eq!(desktop.len(),31);
+            assert!(desktop.iter().all(|d|listed.iter().any(|t|t["name"]==d.name.as_ref())),"every viewer tool is listed");
+            let engine=crate::engine_mcp::EngineMcp::new(vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))]).unwrap().tool_names();
+            let visible=engine.iter().filter(|n|crate::EXPERIMENTAL||!matches!(n.as_str(),"start_untargeted"|"untargeted_status"|"cancel_untargeted"|"untargeted_features")).count();
+            assert_eq!(listed.len(),31+visible,"viewer tools plus the shared engine tools");
             assert!(listed.iter().all(|t|t["name"]!="workbench"));
             assert!(listed.iter().all(|t|t["annotations"]["readOnlyHint"].is_boolean()&&t["annotations"]["destructiveHint"].is_boolean()),"every tool must carry both hints on the wire");
             let find=|name:&str|listed.iter().find(|t|t["name"]==name).unwrap();

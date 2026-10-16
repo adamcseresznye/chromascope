@@ -44,6 +44,28 @@ fn page(offset: usize, limit: usize) -> Result<(), String> {
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
+/// Runs the shared engine's `integrate` operation on an extracted trace and returns its output
+/// (`kind`, `area`, `area_unit`, `algorithm`), the same value `start_analysis` produces.
+fn engine_integration(points: &[[f64; 2]], start: f64, end: f64) -> Result<Value, String> {
+    use crate::domain::{Minutes, Operation, Request};
+    let request = Request {
+        version: 1,
+        operation_id: Default::default(),
+        actor: "chromascope-mcp".into(),
+        operation: Operation::Integrate {
+            points: points.to_vec(),
+            start: Minutes(start),
+            end: Minutes(end),
+        },
+    };
+    let response = crate::engine::execute(
+        std::path::Path::new("-"),
+        request,
+        &crate::jobs::JobControl::default(),
+    )
+    .map_err(|e| e.message)?;
+    serde_json::to_value(response.output).map_err(err)
+}
 fn extraction_parameters(
     command: Command,
     bounds: &crate::validation::DataBounds,
@@ -146,6 +168,7 @@ impl MzViewerApp {
         let Some(mut bridge) = self.remote.take() else {
             return;
         };
+        self.drain_internal(&mut bridge);
         if let Some(pending) = bridge.pending.take() {
             let result = match pending.receiver.try_recv() {
                 Ok(result) => result,
@@ -194,6 +217,50 @@ impl MzViewerApp {
             ctx.request_repaint();
         }
         self.remote = Some(bridge);
+    }
+    /// Applies what the server threads tell the window: activity of the headless engine tools
+    /// and finished analyses. Neither can be sent by a client.
+    fn drain_internal(&mut self, bridge: &mut GuiBridge) {
+        use crate::mcp::{Internal, Route};
+        while let Ok(event) = bridge.internal.try_recv() {
+            match event {
+                Internal::Activity(mut entry) => {
+                    entry["sequence"] = json!(bridge.history.len());
+                    bridge.history.push(entry);
+                }
+                Internal::Analysis { job_id, response } => {
+                    let outcome = serde_json::from_value::<crate::engine::Response>(*response)
+                        .map_err(|e| e.to_string())
+                        .and_then(|response| {
+                            super::project_workbench::route_result(self, response)
+                        });
+                    let (route, entry) = match outcome {
+                        Ok(Some(tab)) => (
+                            Route::Shown { tab: tab.into() },
+                            json!({"request":{"operation":"show_analysis_result","parameters":{"job_id":job_id,"tab":tab}},"success":true}),
+                        ),
+                        Ok(None) => (
+                            Route::NotShown {
+                                reason: "This kind of result has no view in the window; read it with analysis_result".into(),
+                            },
+                            Value::Null,
+                        ),
+                        Err(error) => (
+                            Route::NotShown { reason: error.clone() },
+                            json!({"request":{"operation":"show_analysis_result","parameters":{"job_id":job_id}},"success":false,"error":error}),
+                        ),
+                    };
+                    if let Ok(mut routes) = bridge.routed.lock() {
+                        routes.insert(job_id, route);
+                    }
+                    if !entry.is_null() {
+                        let mut entry = entry;
+                        entry["sequence"] = json!(bridge.history.len());
+                        bridge.history.push(entry);
+                    }
+                }
+            }
+        }
     }
     fn reply_remote(
         result: Result<CallToolResult, String>,
@@ -799,13 +866,12 @@ impl MzViewerApp {
                     .results
                     .get(&dataset_id)
                     .ok_or("Extract a chromatogram first")?;
-                if start_minutes < points.first().ok_or("Empty chromatogram")?[0]
-                    || end_minutes > points.last().unwrap()[0]
-                {
-                    return Err("Integration bounds outside extracted trace".into());
-                }
-                let area =
-                    processing::integrate_peak(points, start_minutes, end_minutes).map_err(err)?;
+                // One integration path: the shared engine's `integrate` operation, with its
+                // bounds check, algorithm and result shape. The window only adds its own fields.
+                let integration = engine_integration(points, start_minutes, end_minutes)?;
+                let area = integration["area"]
+                    .as_f64()
+                    .ok_or("The engine returned no area")?;
                 if apply {
                     let f = self.files.get(&dataset_id).ok_or("Unknown dataset")?;
                     if f.cache.last_processing_params.as_ref() != Some(params)
@@ -835,7 +901,14 @@ impl MzViewerApp {
                         area,
                     });
                 }
-                json!({"area":area,"area_unit":"intensity*minutes","baseline":"straight chord","start_minutes":start_minutes,"end_minutes":end_minutes,"parameters":params,"applied":apply,"review_status":"unreviewed"})
+                let mut result = integration;
+                result["baseline"] = json!("straight chord");
+                result["start_minutes"] = json!(start_minutes);
+                result["end_minutes"] = json!(end_minutes);
+                result["parameters"] = json!(params);
+                result["applied"] = json!(apply);
+                result["review_status"] = json!("unreviewed");
+                result
             }
             Command::UndoIntegration {} => {
                 let (id, len, previous) = b.undo.last().ok_or("No MCP integration to undo")?;
@@ -1060,6 +1133,8 @@ impl MzViewerApp {
 }
 
 #[cfg(test)]
+mod protocol_tests;
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::mcp::{AccessPolicy, McpServer};
@@ -1067,7 +1142,7 @@ mod tests {
         let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let policy = AccessPolicy::new(vec![root], changes, true).unwrap();
         let ctx = egui::Context::default();
-        let (_, bridge) = McpServer::new(ctx.clone(), policy);
+        let (_, bridge) = McpServer::new(ctx.clone(), policy).unwrap();
         (MzViewerApp::default(), bridge, ctx)
     }
     fn open(app: &mut MzViewerApp, b: &mut GuiBridge, ctx: &egui::Context) {
@@ -1296,7 +1371,7 @@ mod tests {
     fn queue_applies_on_owner_thread_and_records_errors() {
         let (mut app, b, ctx) = setup(false);
         let policy = b.policy.clone();
-        let (server, bridge) = McpServer::new(ctx.clone(), policy);
+        let (server, bridge) = McpServer::new(ctx.clone(), policy).unwrap();
         app.attach_mcp(bridge);
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let call = runtime.spawn(async move { server.dispatch(Command::GuiState {}).await });
@@ -1330,7 +1405,7 @@ mod tests {
     #[test]
     fn asynchronous_loading_extraction_and_display_conflict() {
         let (mut app, b, ctx) = setup(true);
-        let (server, bridge) = McpServer::new(ctx.clone(), b.policy);
+        let (server, bridge) = McpServer::new(ctx.clone(), b.policy).unwrap();
         app.attach_mcp(bridge);
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))

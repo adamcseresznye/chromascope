@@ -12,11 +12,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut roots = vec![];
     let mut changes = false;
     let mut exports = false;
+    let mut project_writes = false;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--help" | "-h" => {
-                eprintln!("Usage: chromascope-mcp --allow-root DIRECTORY [--allow-root DIRECTORY ...] [--allow-changes] [--allow-exports]\nHosts a live Chromascope GUI and local MCP stdio server. Roots must exist. Changes and exports are disabled by default. Logs go to stderr.");
+                eprintln!("Usage: chromascope-mcp --allow-root DIRECTORY [--allow-root DIRECTORY ...] [--allow-changes] [--allow-exports] [--allow-project-writes]\nHosts a live Chromascope window and local MCP stdio server with every viewer, quantification, QC and project tool. Roots must exist. Changes, exports and project writes are disabled by default. Logs go to stderr.");
                 return Ok(());
             }
             "--allow-root" => roots.push(PathBuf::from(
@@ -24,10 +25,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             )),
             "--allow-changes" => changes = true,
             "--allow-exports" => exports = true,
+            "--allow-project-writes" => project_writes = true,
             _ => return Err(format!("Unknown option: {arg}").into()),
         }
     }
-    let policy = AccessPolicy::new(roots, changes, exports)?;
+    let policy = AccessPolicy::new(roots, changes, exports)?.with_project_writes(project_writes);
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([1280.0, 820.0]),
         ..Default::default()
@@ -37,7 +39,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         options,
         Box::new(move |cc| {
             let mut app = MzViewerApp::new(cc);
-            let (server, bridge) = McpServer::new(cc.egui_ctx.clone(), policy);
+            let (server, bridge) =
+                McpServer::new(cc.egui_ctx.clone(), policy).map_err(|e| e.to_string())?;
             app.attach_mcp(bridge);
             let context = cc.egui_ctx.clone();
             std::thread::spawn(move || {

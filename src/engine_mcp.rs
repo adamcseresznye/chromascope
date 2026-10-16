@@ -275,6 +275,15 @@ pub struct AuditArgs {
     pub offset: usize,
     pub limit: usize,
 }
+/// State of a retained analysis job as seen by [`EngineMcp::poll_job`].
+#[derive(Debug)]
+pub enum JobPoll {
+    Unknown,
+    Pending,
+    /// The finished response, as the JSON `analysis_result` pages.
+    Done(Box<serde_json::Value>),
+    Failed(EngineError),
+}
 struct FeatureJob {
     handle: crate::jobs::JobHandle,
     result: Option<crate::domain::Result<crate::engine::Response>>,
@@ -321,6 +330,40 @@ impl EngineMcp {
     pub fn with_project_writes(mut self, enabled: bool) -> Self {
         self.project_writes = enabled;
         self
+    }
+    /// Names of every tool this server routes, including the experimental ones it refuses
+    /// to serve in the default build.
+    pub fn tool_names(&self) -> Vec<String> {
+        self.tool_router
+            .list_all()
+            .into_iter()
+            .map(|tool| tool.name.to_string())
+            .collect()
+    }
+    /// Non-blocking look at a retained job, used by the desktop server to put finished
+    /// results into the open window.
+    pub fn poll_job(&self, id: &str) -> JobPoll {
+        let Ok(mut jobs) = self.feature_jobs.lock() else {
+            return JobPoll::Failed(EngineError::new("adapter_failure", "Job table poisoned"));
+        };
+        let Some(job) = jobs.get_mut(id) else {
+            return JobPoll::Unknown;
+        };
+        if job.result.is_none() {
+            job.result = job.handle.try_result();
+        }
+        match &job.result {
+            None => JobPoll::Pending,
+            Some(Err(error)) => JobPoll::Failed(error.clone()),
+            Some(Ok(response)) => match serde_json::to_value(response) {
+                Ok(value) => JobPoll::Done(Box::new(value)),
+                Err(error) => JobPoll::Failed(EngineError::new("adapter_failure", error)),
+            },
+        }
+    }
+    /// The attributed session history, as recorded by `session_audit`.
+    pub fn audit_entries(&self) -> Vec<serde_json::Value> {
+        self.audit.lock().map(|a| a.clone()).unwrap_or_default()
     }
     fn record(&self, tool: &str, parameters: serde_json::Value, outcome: serde_json::Value) {
         let mut audit = self.audit.lock().unwrap_or_else(|e| e.into_inner());
@@ -999,7 +1042,12 @@ impl EngineMcp {
         feature_reply(result)
     }
     #[tool(
-        description = "Start an untargeted_batch version-1 engine request asynchronously. pyOpenMS 3.5.0 required locally. Every mzML source and checkpoint path must be within allowed roots. Returns a job_id for progress, cancellation and feature paging; completed sample checkpoints permit restart."
+        description = "Start an untargeted_batch version-1 engine request asynchronously. pyOpenMS 3.5.0 required locally. Every mzML source and checkpoint path must be within allowed roots. Returns a job_id for progress, cancellation and feature paging; completed sample checkpoints permit restart.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn start_untargeted(&self, Parameters(args): Parameters<AnalysisArgs>) -> CallToolResult {
         let result = (|| {
@@ -1045,7 +1093,12 @@ impl EngineMcp {
         feature_reply(result)
     }
     #[tool(
-        description = "Read untargeted job state, completed sample phases and matrix summary. Failure/cancellation stays explicit; poll feature pages after success."
+        description = "Read untargeted job state, completed sample phases and matrix summary. Failure/cancellation stays explicit; poll feature pages after success.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn untargeted_status(
         &self,
@@ -1079,7 +1132,12 @@ impl EngineMcp {
         feature_reply(result)
     }
     #[tool(
-        description = "Cancel an untargeted job. The local OpenMS process is terminated and completed source-hashed sample checkpoints remain resumable."
+        description = "Cancel an untargeted job. The local OpenMS process is terminated and completed source-hashed sample checkpoints remain resumable.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn cancel_untargeted(
         &self,
@@ -1099,7 +1157,12 @@ impl EngineMcp {
         feature_reply(result)
     }
     #[tool(
-        description = "Page a completed untargeted feature matrix, 1-100 rows per request. include_evidence returns linked EIC/apex spectra/MS2; false retains metadata, values, states and grouping without large arrays. Never changes retained results."
+        description = "Page a completed untargeted feature matrix, 1-100 rows per request. include_evidence returns linked EIC/apex spectra/MS2; false retains metadata, values, states and grouping without large arrays. Never changes retained results.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn untargeted_features(
         &self,
@@ -1167,7 +1230,12 @@ impl EngineMcp {
         feature_reply(result)
     }
     #[tool(
-        description = "Execute evaluate_qc (study), validate_method (explicit method_validation study), evaluate_targeted_qc (verified batch/rules), review_qc (report/expected_revision/rule_id/reason/acknowledged) or export_qc (report; CSV). QC decisions retain evidence/calculation/threshold/reason and required missing evidence is indeterminate. Also execute targeted_batch (sample sheet, targets, calibration), review_targeted (batch, expected_revision, sample, target, accepted, reason), export_targeted (batch; CSV) and shared engine metadata, spectrum, extract, integrate, quantify, process_chromatograms (traces/config), revise_chromatogram (analysis/expected_revision/correction/preview) or export_chromatographic_peaks (analyses; returns CSV text). Chromatography supports SG, AsLS/chord/quantile baselines, batch peaks, manual/reference bounds, accept and restore revisions. Missing intensity is null. Paths must be within allowed roots. Version 1 request matches CLI JSON; results preserve signal stages, units and history. Preview is never committed. No project writes or GUI changes."
+        description = "Execute evaluate_qc (study), validate_method (explicit method_validation study), evaluate_targeted_qc (verified batch/rules), review_qc (report/expected_revision/rule_id/reason/acknowledged) or export_qc (report; CSV). QC decisions retain evidence/calculation/threshold/reason and required missing evidence is indeterminate. Also execute targeted_batch (sample sheet, targets, calibration), review_targeted (batch, expected_revision, sample, target, accepted, reason), export_targeted (batch; CSV) and shared engine metadata, spectrum, extract, integrate, quantify, process_chromatograms (traces/config), revise_chromatogram (analysis/expected_revision/correction/preview) or export_chromatographic_peaks (analyses; returns CSV text). Chromatography supports SG, AsLS/chord/quantile baselines, batch peaks, manual/reference bounds, accept and restore revisions. Missing intensity is null. Paths must be within allowed roots. Version 1 request matches CLI JSON; results preserve signal stages, units and history. Preview is never committed. No project writes or GUI changes.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn analytical_operation(
         &self,

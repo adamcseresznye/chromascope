@@ -8,6 +8,9 @@
 /// to users when built with `--features experimental`.
 pub const EXPERIMENTAL: bool = cfg!(feature = "experimental");
 
+// Lets code shared with the integration tests (`include!`d fixtures) name the crate the same way.
+extern crate self as chromascope;
+
 pub mod annotation;
 pub mod atomic_write;
 pub mod chromatography;

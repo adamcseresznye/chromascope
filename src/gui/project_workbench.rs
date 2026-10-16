@@ -296,7 +296,9 @@ pub(super) fn poll(app: &mut MzViewerApp, ctx: &egui::Context) {
                             );
                         }
                         for response in results {
-                            route_result(app, response);
+                            // A result with no view of its own, or one the tab refuses, stays
+                            // in the project; opening must not fail because of it.
+                            let _ = route_result(app, response);
                         }
                         app.ai.merge_project_reviews(&project.review_proposals);
                         state.message = format!("Project saved (revision {})", project.revision);
@@ -511,27 +513,44 @@ impl State {
     }
 }
 
-fn route_result(app: &mut MzViewerApp, response: crate::engine::Response) {
+/// Puts a finished engine result where the person looks for it. Returns the name of the tab it
+/// went to, or `None` for results that have no view of their own.
+pub(super) fn route_result(
+    app: &mut MzViewerApp,
+    response: crate::engine::Response,
+) -> Result<Option<&'static str>, String> {
     use crate::engine::Output;
     match &response.output {
         Output::TargetedQuantification { batch } => {
-            let _ = app.quant.retain_targeted(*batch.clone());
+            app.quant.retain_targeted(*batch.clone())?;
+            Ok(Some("Quantification"))
         }
         Output::QcReport { report } => {
-            let _ = app.quant.retain_qc(*report.clone());
+            app.quant.retain_qc(*report.clone())?;
+            Ok(Some("Quantification"))
         }
         Output::FeatureAnnotations { ledger } => {
-            let _ = app.untargeted.retain_annotations(*ledger.clone());
+            app.untargeted.retain_annotations(*ledger.clone())?;
+            Ok(Some("Untargeted analysis"))
         }
-        Output::FeatureMatrix { .. } => app.untargeted.retain(response),
-        Output::Statistics { .. } => app.statistics.retain(response),
+        Output::FeatureMatrix { .. } => {
+            app.untargeted.retain(response);
+            Ok(Some("Untargeted analysis"))
+        }
+        Output::Statistics { .. } => {
+            app.statistics.retain(response);
+            Ok(Some("Statistics"))
+        }
         Output::SpectralProcessing { .. }
         | Output::SpectralLibrary { .. }
         | Output::SpectralSearch { .. }
         | Output::FormulaCandidates { .. }
         | Output::IsotopeAnalysis { .. }
-        | Output::SpectralComparison { .. } => app.spectral.retain(response),
-        _ => {}
+        | Output::SpectralComparison { .. } => {
+            app.spectral.retain(response);
+            Ok(Some("Identification"))
+        }
+        _ => Ok(None),
     }
 }
 
