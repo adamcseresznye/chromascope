@@ -72,6 +72,18 @@ fn every_release_package_carries_the_licence_notices() {
     assert!(wxs.contains(r"$(LicenseDir)\LICENSE"));
     assert!(wxs.contains(r"$(LicenseDir)\THIRD_PARTY_LICENSES.txt"));
 
+    // WIX0367: a component with an auto-generated GUID may hold only one file. The MSI build
+    // (found by a local dry run) failed when both licence files shared a component.
+    for component in wxs.split("<Component ").skip(1) {
+        let component = &component[..component.find("</Component>").unwrap()];
+        if !component.contains("Guid=") {
+            assert!(
+                component.matches("<File ").count() <= 1,
+                "component with auto GUID holds several files: {component}"
+            );
+        }
+    }
+
     let cargo = read("Cargo.toml");
     let deb = &cargo[cargo.find("[package.metadata.deb]").unwrap()..];
     let deb = &deb[..deb.find("[package.metadata.generate-rpm]").unwrap()];

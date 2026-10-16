@@ -36,9 +36,11 @@
       <Component Id="EngineMcpExe">
         <File Source="$(BinDir)\chromascope-engine-mcp.exe" KeyPath="yes" />
       </Component>
-      <Component Id="LicenseFiles">
-        <File Id="LicenseFile" Source="$(LicenseDir)\LICENSE" KeyPath="yes" />
-        <File Id="ThirdPartyLicensesFile" Source="$(LicenseDir)\THIRD_PARTY_LICENSES.txt" />
+      <Component Id="LicenseFile">
+        <File Source="$(LicenseDir)\LICENSE" KeyPath="yes" />
+      </Component>
+      <Component Id="ThirdPartyLicensesFile">
+        <File Source="$(LicenseDir)\THIRD_PARTY_LICENSES.txt" KeyPath="yes" />
       </Component>
       <Component Id="PathEntry" Guid="*">
         <!-- Puts the command-line and MCP executables on PATH so AI clients can start them by name. -->
