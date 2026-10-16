@@ -411,7 +411,12 @@ pub struct ReviewQuantificationArgs {
 #[tool_router]
 impl McpServer {
     #[tool(
-        description = "List mzML/mzML.gz files directly inside an explicitly authorized directory, sorted by path. No recursive traversal; pass returned paths to open_files in batches of up to 64."
+        description = "List the mzML and mzML.gz files directly inside one directory, sorted by path (not recursive, at most 10000 files). Use it first to find what can be opened, then pass the returned paths to open_files. Read-only; the directory must lie inside an --allow-root.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn list_mzml_files(
         &self,
@@ -423,7 +428,12 @@ impl McpServer {
         .await
     }
     #[tool(
-        description = "Change supported GUI display settings. Intensity scale: individual/shared_highest/shared_custom; positive custom maximum. Line width 0.5..10; color from the GUI palette. compare_samples displays multiple datasets."
+        description = "Change how traces are drawn: compare_samples, intensity scale (individual, shared_highest or shared_custom with a positive intensity_maximum), line width 0.5..10 and the active dataset's line colour. Presentation only; measured values are unchanged. Requires --allow-changes.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn set_display(&self, Parameters(args): Parameters<SetDisplayArgs>) -> CallToolResult {
         self.dispatch(Command::SetDisplay {
@@ -436,7 +446,12 @@ impl McpServer {
         .await
     }
     #[tool(
-        description = "Select a retained chromatogram trace by its current index from gui_state, restoring its original extraction parameters and full-resolution data."
+        description = "Re-activate a retained chromatogram trace of a dataset by its index from gui_state, restoring its original extraction parameters and full-resolution data. Use it to return to an earlier extraction without repeating it. Requires --allow-changes.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn select_trace(&self, Parameters(args): Parameters<SelectTraceArgs>) -> CallToolResult {
         self.dispatch(Command::SelectTrace {
@@ -447,7 +462,12 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Page acquisition scan metadata, including native scan IDs, retention times in minutes, MS level, polarity, precursor ions, isolation windows, activation and scan windows. Limit 1..1000."
+        description = "Page through scan metadata of one dataset: native scan IDs, retention times in minutes, MS level, polarity, precursor ions, isolation windows, activation and scan windows. Use it to find scan indexes for spectrum or scan_metadata; limit 1..1000. Read-only.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn list_scans(&self, Parameters(args): Parameters<ListScansArgs>) -> CallToolResult {
         self.dispatch(Command::ListScans {
@@ -458,7 +478,12 @@ impl McpServer {
         .await
     }
     #[tool(
-        description = "Retrieve unsmoothed full-resolution XIC data for one batch quantification result, in bounded pages. Quantitative areas use this data, independently of detection smoothing."
+        description = "Read a page of the unsmoothed, full-resolution XIC behind one batch result, as [minutes, intensity] points; the areas are computed from this data, independent of detection smoothing. Use it to check a peak yourself; limit 1..10000. Read-only.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn quantification_trace(
         &self,
@@ -472,7 +497,12 @@ impl McpServer {
         .await
     }
     #[tool(
-        description = "Export batch quantification CSV using the existing exporter, including method snapshots, current results, diagnostics and review status. Requires authorized export path; refuses overwrite."
+        description = "Save the batch quantification as a CSV file with method snapshot, current results, diagnostics and review status, using the same exporter as the GUI. Requires --allow-exports; the path must be a new file inside an --allow-root, and existing files are never overwritten.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn export_quantification(
         &self,
@@ -482,7 +512,12 @@ impl McpServer {
             .await
     }
     #[tool(
-        description = "Rollback one batch result to its original automatically detected peak and original status; requires change authorization."
+        description = "Roll one batch result back to its automatically detected peak and original status, discarding any manual boundary set with review_quantification or in the GUI. Requires --allow-changes; fails while a batch runs.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn reset_quantification(
         &self,
@@ -494,7 +529,12 @@ impl McpServer {
         .await
     }
     #[tool(
-        description = "Execute 1..64 operations sequentially with per-operation outcomes. No nested batches. Completed operations are retained on partial failure; this is not a transaction."
+        description = "Run 1 to 64 of the typed operations in order and return one outcome per operation (the schema of each is the operation object, e.g. {\"operation\":\"set_view\",...}). Use it to save round trips for a fixed sequence. Not a transaction: finished steps stay applied when a later one fails, no nesting, and each step needs the permission of its own tool.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn batch(&self, Parameters(args): Parameters<BatchArgs>) -> CallToolResult {
         self.dispatch(Command::Batch {
@@ -503,7 +543,12 @@ impl McpServer {
         .await
     }
     #[tool(
-        description = "Export the current chromatogram or spectrum visualization as SVG using the existing GUI exporter. Requires --allow-exports and a new file under an authorized root."
+        description = "Save the displayed chromatogram (or spectrum, with spectrum=true) as an SVG file. Use it to hand a figure to the person. Requires --allow-exports; the path must be a new file inside an --allow-root, and existing files are never overwritten.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn export_figure(
         &self,
@@ -516,26 +561,46 @@ impl McpServer {
         .await
     }
     #[tool(
-        description = "Undo the last MCP integration when the workspace has not changed; restore previous boundaries and preserve original data."
+        description = "Undo the last integration that was applied through MCP, restoring the previous boundaries and measurement list. Fails if the workspace changed since, so unrelated edits are never discarded. Requires --allow-changes.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn undo_integration(&self) -> CallToolResult {
         self.dispatch(Command::UndoIntegration {}).await
     }
     #[tool(
-        description = "List reproducible viewer integration measurements and extraction parameters."
+        description = "List the integration measurements recorded in the window (dataset, trace, boundaries, area, extraction parameters). Use it to review what has been integrated so far, by the person or by MCP. Read-only.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn measurements(&self) -> CallToolResult {
         self.dispatch(Command::Measurements {}).await
     }
     #[tool(
-        description = "Request cancellation of the current batch quantification; completed results are retained."
+        description = "Ask the running batch quantification to stop; results already completed are kept. Use it when a batch was started with wrong settings. Requires --allow-changes.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn cancel_quantification(&self) -> CallToolResult {
         self.dispatch(Command::CancelQuantification {}).await
     }
 
     #[tool(
-        description = "Chromascope open_files operation. Retention time in minutes, m/z tolerance in ppm (or mDa for XIC extraction); bounded data pages up to 10000. Launch policy controls changes and exports."
+        description = "Load 1 to 64 mzML or mzML.gz files into the live window and return a dataset_id per file. Use it before any other dataset tool; opening the same file twice creates a second dataset. Does not need --allow-changes, but every path must lie inside an --allow-root.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn open_files(&self, Parameters(args): Parameters<OpenFilesArgs>) -> CallToolResult {
         let OpenFilesArgs { paths } = args;
@@ -543,7 +608,12 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Chromascope dataset_metadata operation. Retention time in minutes, m/z tolerance in ppm (or mDa for XIC extraction); bounded data pages up to 10000. Launch policy controls changes and exports."
+        description = "Return file-level metadata for one dataset: scan count, retention-time range in minutes, m/z range and the scan filters present (MS level, polarity, precursor m/z, m/z window). Use it to choose valid extraction parameters before extract_chromatogram. Read-only.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn dataset_metadata(
         &self,
@@ -554,7 +624,12 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Chromascope scan_metadata operation. Retention time in minutes, m/z tolerance in ppm (or mDa for XIC extraction); bounded data pages up to 10000. Launch policy controls changes and exports."
+        description = "Return the full metadata of a single scan by its zero-based index (native ID, retention time, MS level, polarity, precursor and instrument settings). Use it to inspect one scan you already know; use list_scans to browse many. Read-only.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn scan_metadata(
         &self,
@@ -566,7 +641,12 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Chromascope select_dataset operation. Retention time in minutes, m/z tolerance in ppm (or mDa for XIC extraction); bounded data pages up to 10000. Launch policy controls changes and exports."
+        description = "Make one loaded dataset the active dataset shown in the chromatogram and spectrum panels, and clear the current integration. Use it before extract_chromatogram with display=true or integrate with apply=true. Requires --allow-changes.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn select_dataset(
         &self,
@@ -577,7 +657,12 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Chromascope extract_chromatogram operation. Retention time in minutes, m/z tolerance in ppm (or mDa for XIC extraction); bounded data pages up to 10000. Launch policy controls changes and exports."
+        description = "Extract a TIC, BPC or XIC chromatogram from one dataset with the GUI's extraction code and keep the full-resolution result for chromatogram_data, integrate and export_csv. XIC needs mass plus tolerance_ppm or tolerance_mda; TIC/BPC take an optional mz_range; retention times are minutes. Read-only unless display=true, which shows the trace in the window and requires --allow-changes.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn extract_chromatogram(
         &self,
@@ -615,7 +700,12 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Chromascope chromatogram_data operation. Retention time in minutes, m/z tolerance in ppm (or mDa for XIC extraction); bounded data pages up to 10000. Launch policy controls changes and exports."
+        description = "Read a page of the last extracted chromatogram of one dataset as [retention time in minutes, intensity] points, unsmoothed unless smoothing was requested at extraction. Use it after extract_chromatogram to get numbers instead of an image; limit 1..10000. Read-only.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn chromatogram_data(
         &self,
@@ -635,7 +725,12 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Chromascope spectrum operation. Retention time in minutes, m/z tolerance in ppm (or mDa for XIC extraction); bounded data pages up to 10000. Launch policy controls changes and exports."
+        description = "Read one mass spectrum of a dataset, chosen by scan index or by retention time in minutes (exactly one of the two), as a page of [m/z, intensity] points; limit 1..10000. Use it to identify what elutes at a peak. Read-only unless display=true, which shows the spectrum in the window and requires --allow-changes.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn spectrum(&self, Parameters(args): Parameters<SpectrumArgs>) -> CallToolResult {
         let SpectrumArgs {
@@ -658,7 +753,12 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Chromascope set_view operation. Retention time in minutes, m/z tolerance in ppm (or mDa for XIC extraction); bounded data pages up to 10000. Launch policy controls changes and exports."
+        description = "Zoom the plots: set the retention-time range (minutes), the m/z range and/or switch overlay mode. Use it to frame a region before chromatogram_image or spectrum_image; it changes what the person sees, not any data. Requires --allow-changes.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn set_view(&self, Parameters(args): Parameters<SetViewArgs>) -> CallToolResult {
         let SetViewArgs {
@@ -675,7 +775,12 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Chromascope set_visibility operation. Retention time in minutes, m/z tolerance in ppm (or mDa for XIC extraction); bounded data pages up to 10000. Launch policy controls changes and exports."
+        description = "Show or hide one dataset's trace in the comparison plot without closing it. Use it to declutter an overlay before taking an image. Requires --allow-changes.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn set_visibility(
         &self,
@@ -693,7 +798,12 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Chromascope integrate operation. Retention time in minutes, m/z tolerance in ppm (or mDa for XIC extraction); bounded data pages up to 10000. Launch policy controls changes and exports."
+        description = "Integrate a peak between two retention times (minutes) on the last extracted chromatogram of a dataset with a straight-chord baseline and return the area in intensity*minutes. Bounds must lie inside the extracted trace. With apply=false it only calculates; with apply=true it also records the measurement in the window (the dataset must be displayed) and requires --allow-changes.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn integrate(&self, Parameters(args): Parameters<IntegrateArgs>) -> CallToolResult {
         let IntegrateArgs {
@@ -712,7 +822,12 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Chromascope export_csv operation. Retention time in minutes, m/z tolerance in ppm (or mDa for XIC extraction); bounded data pages up to 10000. Launch policy controls changes and exports."
+        description = "Save the last extracted chromatogram of a dataset (or its displayed spectrum, with spectrum=true) as a CSV file. Use it to give the person the raw numbers. Requires --allow-exports; the path must be a new file inside an --allow-root, and existing files are never overwritten.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn export_csv(&self, Parameters(args): Parameters<ExportCsvArgs>) -> CallToolResult {
         let ExportCsvArgs {
@@ -729,7 +844,12 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Chromascope apply_preset operation. Retention time in minutes, m/z tolerance in ppm (or mDa for XIC extraction); bounded data pages up to 10000. Launch policy controls changes and exports."
+        description = "Apply a preset given as TOML text: it sets overlay, rows and columns and schedules the preset's traces to be extracted in the background for the open datasets (the reply only says scheduled; check gui_state afterwards). Use it to reproduce a saved setup. Requires --allow-changes; every open dataset must lie inside an --allow-root.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn apply_preset(&self, Parameters(args): Parameters<ApplyPresetArgs>) -> CallToolResult {
         let ApplyPresetArgs { toml } = args;
@@ -737,7 +857,12 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Chromascope start_quantification operation. Retention time in minutes, m/z tolerance in ppm (or mDa for XIC extraction); bounded data pages up to 10000. Launch policy controls changes and exports."
+        description = "Start a batch quantification: a method as TOML text (analytes, windows, tolerances, smoothing, detection settings) run on the given dataset_ids. Results appear in the Quantification tab; poll with quantification_status. Replaces the results of the previous batch and requires --allow-changes; fails if a batch is already running.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn start_quantification(
         &self,
@@ -755,7 +880,12 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Chromascope review_quantification operation. Retention time in minutes, m/z tolerance in ppm (or mDa for XIC extraction); bounded data pages up to 10000. Launch policy controls changes and exports."
+        description = "Correct the peak boundaries of one batch result by giving both start_minutes and end_minutes; the area and status are recomputed and the automatic result is kept for reset_quantification. Marking a result as human-reviewed is refused, because that must be done by a person in the GUI. Requires --allow-changes; fails while a batch runs or if the method changed.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn review_quantification(
         &self,
@@ -776,37 +906,56 @@ impl McpServer {
         .await
     }
     #[tool(
-        description = "Execute a typed Chromascope operation. Units: retention time minutes, tolerance ppm, intensity arbitrary units, integrated area intensity*minutes. Read-only by default; display/apply changes require launch authorization. Supports datasets, numerical retrieval, spectra, integration, plots, presets, existing batch quantification and review."
-    )]
-    async fn workbench(&self, Parameters(args): Parameters<WorkbenchArgs>) -> CallToolResult {
-        self.dispatch(args.command).await
-    }
-    #[tool(
-        description = "List live loaded datasets, stable IDs, loading status and active selection."
+        description = "List the datasets loaded in the window: dataset_id, name, path, loading state, visibility, last extraction parameters and which one is active. Use it to look up a dataset_id after open_files or after the app was restarted (ids are only valid for the running window). Read-only.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn list_datasets(&self) -> CallToolResult {
         self.dispatch(Command::ListDatasets {}).await
     }
     #[tool(
-        description = "Inspect current GUI parameters, plot bounds, retained traces, measurements, and operation history."
+        description = "Return the whole current state of the window: datasets, active dataset, processing parameters, plot bounds, retained traces, measurements, the history of operations and the units used. Use it at the start of a session and whenever you are unsure what the person is looking at. Read-only.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn gui_state(&self) -> CallToolResult {
         self.dispatch(Command::GuiState {}).await
     }
     #[tool(
-        description = "Return current chromatogram plot as MCP PNG image with structured state. Uses the GUI's plotting code."
+        description = "Render the chromatogram currently shown in the window as a PNG image, with the GUI's own plotting code, plus the plot state. Use it for visual review after set_view or extract_chromatogram with display=true. Read-only; nothing is written to disk.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn chromatogram_image(&self) -> CallToolResult {
         self.dispatch(Command::PlotImage { spectrum: false }).await
     }
     #[tool(
-        description = "Return current mass spectrum plot as MCP PNG image with structured state. Uses the GUI's plotting code."
+        description = "Render the mass spectrum currently shown in the window as a PNG image, with the GUI's own plotting code, plus the plot state. Use it for visual review after spectrum with display=true. Read-only; nothing is written to disk.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn spectrum_image(&self) -> CallToolResult {
         self.dispatch(Command::PlotImage { spectrum: true }).await
     }
     #[tool(
-        description = "Poll existing batch quantification progress and reproducible results, including automatic and reviewed boundaries."
+        description = "Poll the batch quantification: progress, method signature and every result with its automatic and current peak, status, diagnostic and review state. Use it after start_quantification and to find a result_index for the other quantification tools. Read-only.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn quantification_status(&self) -> CallToolResult {
         self.dispatch(Command::QuantificationStatus {}).await
@@ -817,7 +966,7 @@ impl ServerHandler for McpServer {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("chromascope", env!("CARGO_PKG_VERSION")))
-            .with_instructions("Use named tools or workbench command schemas for analytical actions. Inspect datasets first. Retrieve bounded numerical pages for quantitation; images aid visual review. Read-only unless explicitly enabled at launch. AI interpretations are external to measured results.")
+            .with_instructions("Use the named tools; batch runs several of them in one call. Inspect datasets first (list_datasets, gui_state). Retrieve bounded numerical pages for quantitation; images aid visual review. Read-only unless explicitly enabled at launch. AI interpretations are external to measured results.")
     }
 }
 
@@ -833,11 +982,6 @@ pub struct ExportFigureArgs {
     pub path: String,
 }
 
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct WorkbenchArgs {
-    pub command: Command,
-}
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ListMzmlFilesArgs {
@@ -934,6 +1078,96 @@ mod tests {
             assert!(tool.input_schema.contains_key("type"));
         }
     }
+    /// Tools that change the window, results or files on disk; every other tool only reads.
+    const WRITE_TOOLS: &[&str] = &[
+        "open_files",
+        "select_dataset",
+        "extract_chromatogram",
+        "spectrum",
+        "set_view",
+        "set_visibility",
+        "set_display",
+        "select_trace",
+        "integrate",
+        "undo_integration",
+        "export_figure",
+        "export_csv",
+        "apply_preset",
+        "start_quantification",
+        "cancel_quantification",
+        "review_quantification",
+        "reset_quantification",
+        "export_quantification",
+        "batch",
+    ];
+    #[test]
+    fn tool_descriptions_are_unique_nonempty_and_annotated() {
+        let tools = McpServer::tool_router().list_all();
+        assert_eq!(tools.len(), 31, "31 typed tools; workbench is not listed");
+        assert!(
+            tools.iter().all(|t| t.name != "workbench"),
+            "workbench duplicated the typed tools and must not be listed"
+        );
+        let mut seen = std::collections::HashMap::new();
+        for tool in &tools {
+            let description = tool.description.as_deref().unwrap_or("").trim();
+            assert!(
+                description.len() >= 40,
+                "{} needs a real description",
+                tool.name
+            );
+            assert!(
+                !description.contains("Chromascope") || !description.contains("operation."),
+                "{} still has the shared boilerplate",
+                tool.name
+            );
+            if let Some(other) = seen.insert(description.to_owned(), tool.name.to_string()) {
+                panic!("{} and {} share a description", other, tool.name);
+            }
+            let hints = tool
+                .annotations
+                .as_ref()
+                .unwrap_or_else(|| panic!("{} has no annotations", tool.name));
+            let read_only = hints
+                .read_only_hint
+                .unwrap_or_else(|| panic!("{} lacks read_only_hint", tool.name));
+            assert!(
+                hints.destructive_hint.is_some(),
+                "{} lacks destructive_hint",
+                tool.name
+            );
+            assert_eq!(
+                read_only,
+                !WRITE_TOOLS.contains(&&*tool.name),
+                "{}: read_only_hint disagrees with the permission it needs",
+                tool.name
+            );
+            if read_only {
+                assert_eq!(hints.destructive_hint, Some(false), "{}", tool.name);
+            }
+            // Tools gated by a launch flag must say which one.
+            let gated =
+                description.contains("--allow-changes") || description.contains("--allow-exports");
+            if !read_only && !matches!(&*tool.name, "open_files" | "batch") {
+                let flag = if tool.name.starts_with("export_") {
+                    "--allow-exports"
+                } else {
+                    "--allow-changes"
+                };
+                assert!(
+                    gated && description.contains(flag),
+                    "{} must state the launch flag it needs ({flag})",
+                    tool.name
+                );
+            }
+        }
+        for name in WRITE_TOOLS {
+            assert!(
+                tools.iter().any(|t| t.name == *name),
+                "{name} is not a listed tool"
+            );
+        }
+    }
     #[test]
     fn protocol_initialize_discovery_and_invalid_tool_arguments() {
         use rmcp::ServiceExt;
@@ -952,7 +1186,14 @@ mod tests {
             assert!(init["result"]["capabilities"]["tools"].is_object());
             write.write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n").await.unwrap();
             let discovered=rpc(&mut write,&mut read,json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}})).await;
-            assert!(discovered["result"]["tools"].as_array().unwrap().len()>=24);
+            let listed=discovered["result"]["tools"].as_array().unwrap();
+            assert_eq!(listed.len(),31);
+            assert!(listed.iter().all(|t|t["name"]!="workbench"));
+            assert!(listed.iter().all(|t|t["annotations"]["readOnlyHint"].is_boolean()&&t["annotations"]["destructiveHint"].is_boolean()),"every tool must carry both hints on the wire");
+            let find=|name:&str|listed.iter().find(|t|t["name"]==name).unwrap();
+            assert_eq!(find("gui_state")["annotations"]["readOnlyHint"],true);
+            assert_eq!(find("reset_quantification")["annotations"]["destructiveHint"],true);
+            assert_eq!(find("export_csv")["annotations"]["readOnlyHint"],false);
             let invalid=rpc(&mut write,&mut read,json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"spectrum","arguments":{"dataset_id":"bad"}}})).await;
             assert!(invalid["error"].is_object() || invalid["result"]["isError"]==true);
             drop(write);drop(read);task.await.unwrap();
