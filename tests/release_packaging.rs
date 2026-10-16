@@ -230,6 +230,7 @@ fn documentation_matches_the_shipped_app() {
     // Numerical behaviour that users can run into is written down.
     let guide = read("docs/USER_GUIDE.md");
     assert!(guide.contains("within **0.01 Da**"));
+    assert!(guide.contains("double precision and rounds once"));
 
     let status = read("docs/FEATURE_STATUS.md");
     assert!(!status.contains("Reports and AI activity"));

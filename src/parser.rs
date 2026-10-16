@@ -36,6 +36,18 @@ use std::path::PathBuf;
 /// (see `processing::process_chromatogram`), never an empty or zero trace.
 pub const PRECURSOR_MATCH_TOLERANCE_DA: f64 = 0.01;
 
+/// Sums peak intensities for a trace point.
+///
+/// Peak intensities and the stored trace values are `f32` (and so are retention times): that is
+/// the resolution of the data, and of the mzML arrays it comes from, so `f32` is kept for storage
+/// and plotting. The *sum* is accumulated in `f64` and rounded once, because adding many `f32`
+/// values in `f32` loses the small terms once the running total is large (above 2^24 = 16,777,216
+/// a unit increment is lost entirely). Full-resolution areas and quantification are computed
+/// from these points in `f64`.
+pub(crate) fn sum_intensities(values: impl IntoIterator<Item = f32>) -> f32 {
+    values.into_iter().map(f64::from).sum::<f64>() as f32
+}
+
 /// Whether a scan precursor at `scan_mz` belongs to a trace requested for precursor `target`.
 pub fn precursor_within_tolerance(scan_mz: f64, target: f64) -> bool {
     (scan_mz - target).abs() < PRECURSOR_MATCH_TOLERANCE_DA
@@ -163,7 +175,7 @@ fn raw_summary(
                 .map(|(i, intensity)| (*intensity, mzs[lo + i] as f32))
                 .unwrap_or((0.0, 0.0))
         } else {
-            (intensities[lo..hi].iter().sum(), 0.0)
+            (sum_intensities(intensities[lo..hi].iter().copied()), 0.0)
         };
         if !result.0.is_finite() || !result.1.is_finite() {
             return Err(ChromascopeError::MzDataError(
@@ -1235,7 +1247,7 @@ impl MzData {
                     }
                     return Ok((
                         spectrum_rt,
-                        intensities[start..end].iter().sum(),
+                        sum_intensities(intensities[start..end].iter().copied()),
                         spectrum_idx,
                     ));
                 }
@@ -1245,7 +1257,8 @@ impl MzData {
                         spectrum_idx, e
                     ))
                 })?;
-                let total_intensity: f32 = centroided
+                let total_intensity: f32 = sum_intensities(
+                    centroided
                     .peaks
                     .all_peaks_for(
                         mass,
@@ -1259,8 +1272,8 @@ impl MzData {
                         },
                     )
                     .iter()
-                    .map(|p| p.intensity)
-                    .sum();
+                    .map(|p| p.intensity),
+                );
 
                 Ok((spectrum_rt, total_intensity, spectrum_idx))
             })
@@ -1845,6 +1858,18 @@ mod tests {
         assert!(!chrom.intensity.is_empty());
         assert!(chrom.mz.is_empty()); // TIC has no m/z
         assert_eq!(chrom.retention_time.len(), chrom.index.len());
+    }
+
+    #[test]
+    fn trace_points_sum_intensities_in_double_precision() {
+        let values = [16_777_216.0f32, 1.0, 1.0, 1.0, 1.0];
+        // Plain f32 accumulation loses every unit once the total reaches 2^24.
+        assert_eq!(values.iter().sum::<f32>(), 16_777_216.0);
+        assert_eq!(sum_intensities(values), 16_777_220.0);
+        assert_eq!(sum_intensities(std::iter::empty()), 0.0);
+        assert_eq!(sum_intensities([0.1f32; 10]), 1.0);
+        // A total beyond f32 range stays infinite and is rejected by the callers' checks.
+        assert!(sum_intensities([f32::MAX, f32::MAX]).is_infinite());
     }
 
     // ========== Precursor match window ==========
