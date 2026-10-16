@@ -258,6 +258,51 @@ fn calibration_quantification_tables_and_replay_reference() {
     );
     delivery::verify_bundle(&out).unwrap();
 }
+/// A request may spell a source differently from its canonical registered path (macOS /var is
+/// a symlink to /private/var, Windows has 8.3 short names and mapped drives). The bundle must
+/// still map that spelling, so the replay reads the bundled copy and never the original file.
+#[test]
+fn replay_reads_the_bundled_copy_when_the_request_spells_the_path_differently() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut batch = raw_request(temp.path());
+    fs::create_dir(temp.path().join("detour")).unwrap();
+    for sample in &mut batch.samples {
+        let name = Path::new(&sample.source).file_name().unwrap().to_owned();
+        let spelled = temp.path().join("detour").join("..").join(name);
+        assert_ne!(spelled, fs::canonicalize(&spelled).unwrap());
+        sample.source = spelled.to_str().unwrap().into();
+    }
+    let source = std::path::PathBuf::from(&batch.samples[0].source);
+    let root = temp.path().join("project");
+    let mut p = Project::create(&root).unwrap();
+    for sample in &batch.samples {
+        p.register(Path::new(&sample.source)).unwrap();
+    }
+    let dataset = p.register(&source).unwrap();
+    let r = engine::execute(
+        &source,
+        request(Operation::TargetedBatch { batch }),
+        &JobControl::default(),
+    )
+    .unwrap();
+    let id = r.result_id;
+    p.add_result(&root, dataset, &r).unwrap();
+    p.commit(&root, 0).unwrap();
+    let out = temp.path().join("bundle");
+    delivery::export(&root, &out, &Config::default(), true).unwrap();
+    let replay = delivery::reprocess(&out, id).unwrap();
+    assert_eq!(replay["reproduced"], true, "{replay}");
+    for observation in replay["response"]["output"]["batch"]["observations"]
+        .as_array()
+        .unwrap()
+    {
+        let read = observation["quantifier"]["source"].as_str().unwrap();
+        assert!(
+            Path::new(read).starts_with(fs::canonicalize(&out).unwrap()),
+            "replay read {read}, not the bundled copy"
+        );
+    }
+}
 
 #[test]
 fn unsafe_mapping_and_changed_sources_are_rejected() {

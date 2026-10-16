@@ -548,6 +548,25 @@ pub fn export(
                 }
             }
         }
+        // Registered sources are canonical, but stored requests keep the path as it was given
+        // (a symlinked folder such as macOS /var, a Windows 8.3 short name, a mapped drive).
+        // Map those spellings too while the originals are here to resolve, so a replay always
+        // reads the bundled copy instead of silently reading the original file.
+        for artifact in &p.results {
+            let request = serde_json::to_value(&p.load_result(root, artifact.result_id)?.request)
+                .map_err(err)?;
+            let mut paths = Vec::new();
+            collect_strings(&request, &mut paths);
+            for given in paths {
+                if map.contains_key(&given) || !Path::new(&given).is_file() {
+                    continue;
+                }
+                let canonical = fs::canonicalize(&given).map_err(err)?;
+                if let Some(relative) = map.get(canonical.to_string_lossy().as_ref()).cloned() {
+                    map.insert(given, relative);
+                }
+            }
+        }
         write(
             destination,
             "source-map.json",
@@ -750,6 +769,14 @@ fn relabel_measurements(value: &mut Value, map: &BTreeMap<String, String>) {
                 relabel_measurements(v, map)
             }
         }
+        _ => {}
+    }
+}
+fn collect_strings(value: &Value, out: &mut Vec<String>) {
+    match value {
+        Value::String(s) => out.push(s.clone()),
+        Value::Array(a) => a.iter().for_each(|v| collect_strings(v, out)),
+        Value::Object(o) => o.values().for_each(|v| collect_strings(v, out)),
         _ => {}
     }
 }
