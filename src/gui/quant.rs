@@ -45,7 +45,10 @@ pub(super) struct QuantState {
     /// Integration settings being tuned in the review card: (analyte, applied snapshot, draft).
     #[serde(skip)]
     draft: Option<(String, Integration, Integration)>,
+    /// Counts the batches started over MCP. Not part of a saved project: a project saved by a
+    /// build without MCP must open in one with it, and the other way round.
     #[cfg(feature = "mcp")]
+    #[serde(skip)]
     remote_job_id: u64,
     pub active: bool,
     method: Method,
@@ -3047,6 +3050,21 @@ mod tests {
                     size,
                 );
             }
+        }
+    }
+    #[test]
+    fn a_saved_workspace_opens_whether_or_not_the_build_has_mcp() {
+        // Saved by a build with MCP, which used to store its job counter, and by one without.
+        let mut with_counter = serde_json::to_value(QuantState::default()).unwrap();
+        with_counter["remote_job_id"] = serde_json::json!(3);
+        let mut without_counter = with_counter.clone();
+        without_counter
+            .as_object_mut()
+            .unwrap()
+            .remove("remote_job_id");
+        for saved in [with_counter, without_counter] {
+            QuantState::verify_snapshot(saved.clone()).unwrap();
+            serde_json::from_value::<QuantState>(saved).unwrap();
         }
     }
     #[test]
