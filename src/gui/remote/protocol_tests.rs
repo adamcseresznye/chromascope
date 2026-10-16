@@ -1204,3 +1204,264 @@ ppm=-1.0",
     desktop.finish();
     read_only.finish();
 }
+
+/// A one-analyte method that fits the fixture's retention-time range.
+fn fixture_method(desktop: &mut Desktop, id: u64, name: &str) -> String {
+    let metadata = desktop.tool("dataset_metadata", json!({"dataset_id":id}));
+    let (start, end) = (
+        metadata["retention_time_minutes"][0].as_f64().unwrap(),
+        metadata["retention_time_minutes"][1].as_f64().unwrap(),
+    );
+    format!("version = 1\nname = '{name}'\ndetection_smoothing = 0\nminimum_height = 0.0\nboundary_fraction = 0.05\n[[analytes]]\nexpected_rt = {}\nrt_window = [{start}, {end}]\n[analytes.extraction]\nname = 'target'\nacquisition = 'FS'\nkind = 'XIC'\nmass = 524.3\nppm = 10.0\npolarity = 'positive'\nsmoothing = 0\n", (start + end) / 2.0)
+}
+
+/// Runs the method on the dataset and returns the finished batch status.
+fn run_batch(desktop: &mut Desktop, id: u64, method: &str) -> Value {
+    desktop.tool(
+        "start_quantification",
+        json!({"method_toml":method,"dataset_ids":[id]}),
+    );
+    for _ in 0..2000 {
+        let status = desktop.tool("quantification_status", json!({}));
+        if status["running"] == false {
+            return status;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    panic!("the batch did not finish");
+}
+
+#[test]
+fn methods_are_saved_and_opened_over_mcp() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut desktop = Desktop::start(vec![temp.path().to_owned()], true, true, false);
+    let id = desktop.open_fixture();
+    let text = fixture_method(&mut desktop, id, "Saved over MCP");
+    // A method given as text is checked, then saved; the window is not touched.
+    let first = temp.path().join("assay.toml");
+    let saved = desktop.tool("save_method", json!({"path":first,"method_toml":text}));
+    assert_eq!(
+        (
+            saved["name"].as_str(),
+            saved["analytes"].as_u64(),
+            saved["from_window"].as_bool()
+        ),
+        (Some("Saved over MCP"), Some(1), Some(false))
+    );
+    let parsed: crate::quant::Method =
+        toml::from_str(&std::fs::read_to_string(&first).unwrap()).unwrap();
+    assert_eq!(parsed.name, "Saved over MCP");
+    let before = desktop.app.quant.method_summary();
+    assert!(!before.contains("Saved over MCP"), "{before}");
+    // Opening it makes it the window's method; saving without text writes that method.
+    let opened = desktop.tool("open_method", json!({"path":first}));
+    assert_eq!(
+        (opened["name"].as_str(), opened["analytes"].as_u64()),
+        (Some("Saved over MCP"), Some(1)),
+        "{opened}"
+    );
+    assert_eq!(
+        desktop.app.quant.method_summary(),
+        "Saved over MCP · 1 analytes"
+    );
+    let second = temp.path().join("copy.toml");
+    desktop.tool("save_method", json!({"path":second}));
+    assert_eq!(
+        std::fs::read_to_string(&second).unwrap(),
+        std::fs::read_to_string(&first).unwrap(),
+        "a method survives open and save unchanged"
+    );
+    // Edits that were never saved are not replaced unless the caller says so.
+    let edited = fixture_method(&mut desktop, id, "Edited, unsaved");
+    run_batch(&mut desktop, id, &edited);
+    let error = desktop.tool_error("open_method", json!({"path":first}));
+    assert!(
+        error["message"].as_str().unwrap().contains("never saved"),
+        "{error}"
+    );
+    assert_eq!(
+        desktop.app.quant.method_summary(),
+        "Edited, unsaved · 1 analytes"
+    );
+    let forced = desktop.tool("open_method", json!({"path":first,"discard_unsaved":true}));
+    assert_eq!(forced["name"], "Saved over MCP");
+    assert!(
+        forced["results_from_an_earlier_method"].as_u64().unwrap() >= 1,
+        "{forced}"
+    );
+    // Bad input writes and changes nothing.
+    for (arguments, expect) in [
+        (
+            json!({"path":temp.path().join("bad.toml"),"method_toml":"version = 1\nname = 'x'\nsurprise = true"}),
+            "unknown field",
+        ),
+        (
+            json!({"path":temp.path().join("bad2.toml"),"method_toml":"this is not toml ["}),
+            "",
+        ),
+        (json!({"path":first}), "already exists"),
+        (json!({"path":temp.path().join("m.txt")}), ".toml"),
+    ] {
+        let error = desktop.tool_error("save_method", arguments);
+        assert!(
+            error["message"].as_str().unwrap().contains(expect),
+            "{error}"
+        );
+    }
+    assert!(!temp.path().join("bad.toml").exists() && !temp.path().join("bad2.toml").exists());
+    std::fs::write(
+        temp.path().join("broken.toml"),
+        "version = 1\nname = 'broken'\n[[analytes]]",
+    )
+    .unwrap();
+    assert!(desktop.tool_error(
+        "open_method",
+        json!({"path":temp.path().join("broken.toml")})
+    )["message"]
+        .is_string());
+    assert_eq!(
+        desktop.app.quant.method_summary(),
+        "Saved over MCP · 1 analytes"
+    );
+    // Permissions: exports to save, changes to open.
+    let mut guarded = Desktop::start(vec![temp.path().to_owned()], false, false, false);
+    assert!(guarded.tool_error(
+        "save_method",
+        json!({"path":temp.path().join("g.toml"),"method_toml":text})
+    )["message"]
+        .as_str()
+        .unwrap()
+        .contains("--allow-exports"));
+    assert!(
+        guarded.tool_error("open_method", json!({"path":first}))["message"]
+            .as_str()
+            .unwrap()
+            .contains("--allow-changes")
+    );
+    desktop.finish();
+    guarded.finish();
+}
+
+#[test]
+fn batches_are_saved_and_loaded_over_mcp_with_their_manual_corrections() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut desktop = Desktop::start(vec![temp.path().to_owned()], true, true, false);
+    let id = desktop.open_fixture();
+    let method = fixture_method(&mut desktop, id, "Batch over MCP");
+    let status = run_batch(&mut desktop, id, &method);
+    assert_eq!(status["results"].as_array().unwrap().len(), 1);
+    // A manual correction must survive the file.
+    let trace = desktop.tool(
+        "quantification_trace",
+        json!({"result_index":0,"offset":0,"limit":10000}),
+    );
+    let points: Vec<[f64; 2]> = serde_json::from_value(trace["points"].clone()).unwrap();
+    let (a, z) = (points[1][0], points[points.len() - 2][0]);
+    let corrected = desktop.tool(
+        "review_quantification",
+        json!({"result_index":0,"start_minutes":a,"end_minutes":z,"reviewed":false}),
+    );
+    let path = temp.path().join("run.chromquant");
+    let saved = desktop.tool("save_batch", json!({"path":path}));
+    assert_eq!(
+        (saved["results"].as_u64(), saved["samples"].as_u64()),
+        (Some(1), Some(1)),
+        "{saved}"
+    );
+    let again = desktop.tool_error("save_batch", json!({"path":path}));
+    assert!(
+        again["message"]
+            .as_str()
+            .unwrap()
+            .contains("already exists"),
+        "{again}"
+    );
+    // A fresh window loads it: same method, same corrected peak, source reopened.
+    let mut other = Desktop::start(vec![temp.path().to_owned()], true, true, false);
+    let loaded = other.tool("load_batch", json!({"path":path}));
+    assert_eq!(loaded["results"], 1, "{loaded}");
+    assert_eq!(loaded["reopening"].as_array().unwrap().len(), 1);
+    other.pump_until(10, |d| {
+        !d.app.files.is_empty() && d.app.files.values().all(|f| !f.is_loading)
+    });
+    let restored = other.tool("quantification_status", json!({}));
+    assert_eq!(
+        restored["results"][0]["peak"],
+        corrected["results"][0]["peak"]
+    );
+    assert_eq!(restored["results"][0]["status"], "Manual");
+    assert_eq!(restored["method"], status["method"]);
+    // A source outside the roots is not reopened; the stored results stay.
+    let mut forged: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let foreign = elsewhere.path().join("foreign.mzML");
+    std::fs::copy(fixture_mzml(), &foreign).unwrap();
+    forged["samples"][0][0] = json!(foreign);
+    let forged_path = temp.path().join("forged.chromquant");
+    std::fs::write(&forged_path, serde_json::to_vec(&forged).unwrap()).unwrap();
+    let mut third = Desktop::start(vec![temp.path().to_owned()], true, true, false);
+    let loaded = third.tool("load_batch", json!({"path":forged_path}));
+    assert_eq!(loaded["reopening"].as_array().unwrap().len(), 0);
+    assert!(
+        loaded["skipped"][0]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("outside authorized roots"),
+        "{loaded}"
+    );
+    assert_eq!(
+        third.tool("quantification_status", json!({}))["results"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        third.app.files.is_empty(),
+        "nothing outside the roots was opened"
+    );
+    // Damaged and unsupported files change nothing.
+    let mut victim = Desktop::start(vec![temp.path().to_owned()], true, true, false);
+    let mut future = forged.clone();
+    future["version"] = json!(2);
+    for (name, bytes, expect) in [
+        ("broken.chromquant", b"{ nope".to_vec(), ""),
+        (
+            "future.chromquant",
+            serde_json::to_vec(&future).unwrap(),
+            "Unsupported batch version",
+        ),
+    ] {
+        std::fs::write(temp.path().join(name), bytes).unwrap();
+        let error = victim.tool_error("load_batch", json!({"path":temp.path().join(name)}));
+        assert!(
+            error["message"].as_str().unwrap().contains(expect),
+            "{name}: {error}"
+        );
+        assert_eq!(
+            victim.tool("quantification_status", json!({}))["results"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+    }
+    // Permissions.
+    let mut guarded = Desktop::start(vec![temp.path().to_owned()], false, false, false);
+    assert!(guarded.tool_error(
+        "save_batch",
+        json!({"path":temp.path().join("g.chromquant")})
+    )["message"]
+        .as_str()
+        .unwrap()
+        .contains("--allow-exports"));
+    assert!(
+        guarded.tool_error("load_batch", json!({"path":path}))["message"]
+            .as_str()
+            .unwrap()
+            .contains("--allow-changes")
+    );
+    for d in [desktop, other, third, victim, guarded] {
+        d.finish();
+    }
+}

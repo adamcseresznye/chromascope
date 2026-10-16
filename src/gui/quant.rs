@@ -677,17 +677,63 @@ fn request_method(q: &mut QuantState, action: MethodAction) {
         change_method(q, action);
     }
 }
+/// The (source, run) pairs of the selected samples, as a batch file records them.
+fn batch_samples_of(
+    files: &std::collections::HashMap<super::state::FileId, super::state::OpenFile>,
+    selected: &HashSet<usize>,
+) -> Vec<(String, String)> {
+    files
+        .iter()
+        .filter(|(id, _)| selected.contains(id))
+        .map(|(_, f)| {
+            (
+                f.cache
+                    .source_path
+                    .clone()
+                    .unwrap_or_else(|| f.path.clone()),
+                f.name.clone(),
+            )
+        })
+        .collect()
+}
+/// The batch file for the current method and results.
+fn batch_of(q: &QuantState) -> Result<Batch, String> {
+    validate(&q.method)?;
+    Ok(Batch {
+        version: 1,
+        method: q.method.clone(),
+        results: q.results.clone(),
+        samples: q.batch_samples.clone(),
+    })
+}
+/// Replaces the method and results by those of a checked batch file and lists the source
+/// datasets it will reopen.
+fn install_batch(q: &mut QuantState, batch: Batch) -> Result<(), String> {
+    validate_batch(&batch)?;
+    q.method = batch.method;
+    q.results = batch.results;
+    q.selected = None;
+    q.method_path = None;
+    q.saved_method = String::new();
+    q.pending_sources = batch
+        .samples
+        .iter()
+        .map(|(source, _)| PathBuf::from(source))
+        .collect();
+    q.pending_sources.sort();
+    q.pending_sources.dedup();
+    q.restore_samples = Some(batch.samples.clone());
+    q.batch_samples = batch.samples;
+    q.seen_samples.clear();
+    q.selected_samples.clear();
+    q.message="Batch restored. Reopening its source datasets; stored results remain available if a source is missing.".into();
+    Ok(())
+}
 fn batch_file(q: &mut QuantState, save: bool) -> Result<(), String> {
     let dialog = rfd::FileDialog::new().add_filter("Quantification batch", &["chromquant"]);
     if save {
         if let Some(path) = dialog.set_file_name("batch.chromquant").save_file() {
-            validate(&q.method)?;
-            let batch = Batch {
-                version: 1,
-                method: q.method.clone(),
-                results: q.results.clone(),
-                samples: q.batch_samples.clone(),
-            };
+            let batch = batch_of(q)?;
             crate::atomic_write::write_atomic(
                 path,
                 serde_json::to_vec(&batch).map_err(|e| e.to_string())?,
@@ -698,24 +744,7 @@ fn batch_file(q: &mut QuantState, save: bool) -> Result<(), String> {
     } else if let Some(path) = dialog.pick_file() {
         let batch: Batch = serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
             .map_err(|e| e.to_string())?;
-        validate_batch(&batch)?;
-        q.method = batch.method;
-        q.results = batch.results;
-        q.selected = None;
-        q.method_path = None;
-        q.saved_method = String::new();
-        q.pending_sources = batch
-            .samples
-            .iter()
-            .map(|(source, _)| PathBuf::from(source))
-            .collect();
-        q.pending_sources.sort();
-        q.pending_sources.dedup();
-        q.restore_samples = Some(batch.samples.clone());
-        q.batch_samples = batch.samples;
-        q.seen_samples.clear();
-        q.selected_samples.clear();
-        q.message="Batch restored. Reopening its source datasets; stored results remain available if a source is missing.".into();
+        install_batch(q, batch)?;
     }
     Ok(())
 }
@@ -865,20 +894,7 @@ pub(super) fn show(app: &mut MzViewerApp, ctx: &egui::Context) {
                 .count();
             ui.small(format!("{selected} selected / {} loaded", app.files.len()));
         });
-    q.batch_samples = app
-        .files
-        .iter()
-        .filter(|(id, _)| q.selected_samples.contains(id))
-        .map(|(_, f)| {
-            (
-                f.cache
-                    .source_path
-                    .clone()
-                    .unwrap_or_else(|| f.path.clone()),
-                f.name.clone(),
-            )
-        })
-        .collect();
+    q.batch_samples = batch_samples_of(&app.files, &q.selected_samples);
     if let Some(samples) = &q.restore_samples {
         for sample in samples {
             if !app.files.values().any(|f| {
@@ -1879,6 +1895,9 @@ pub(super) fn remote_start(
     }
     app.quant.method = method;
     app.quant.selected_samples = ids.into_iter().collect();
+    // The Quantification tab keeps this list current while it is on screen; a batch started
+    // from MCP may run with the tab closed.
+    app.quant.batch_samples = batch_samples_of(&app.files, &app.quant.selected_samples);
     run(app)?;
     app.quant.remote_job_id += 1;
     Ok(())
@@ -1976,6 +1995,98 @@ pub(super) fn remote_reset(app: &mut MzViewerApp, index: usize) -> Result<(), St
     r.status = r.automatic_status.clone();
     select(&mut app.quant, index);
     Ok(())
+}
+
+/// Saves the method as a new file: the one in the window, or `method_toml` after checking it.
+#[cfg(feature = "mcp")]
+pub(super) fn remote_save_method(
+    q: &mut QuantState,
+    path: &std::path::Path,
+    method_toml: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    let from_text = match method_toml {
+        Some(text) => Some(toml::from_str::<Method>(text).map_err(|e| e.to_string())?),
+        None => None,
+    };
+    let method = from_text.as_ref().unwrap_or(&q.method);
+    validate(method)?;
+    let text = signature(method);
+    crate::atomic_write::write_atomic_new(path, &text).map_err(|e| e.to_string())?;
+    let summary = serde_json::json!({"path":path,"name":method.name,"analytes":method.analytes.len(),"from_window":from_text.is_none()});
+    if from_text.is_none() {
+        // Saved from the window, like Save method: the window now knows its file.
+        q.saved_method = text;
+        q.method_path = Some(path.to_owned());
+        q.message = "Method saved.".into();
+    }
+    Ok(summary)
+}
+/// Opens a method file as the window's method. Like the Open command it asks (here: needs
+/// `discard_unsaved`) before replacing edits that were never saved.
+#[cfg(feature = "mcp")]
+pub(super) fn remote_open_method(
+    q: &mut QuantState,
+    path: &std::path::Path,
+    discard_unsaved: bool,
+) -> Result<serde_json::Value, String> {
+    if q.rx.is_some() {
+        return Err("A batch is running; wait for it to finish".into());
+    }
+    let method: Method = toml::from_str(&std::fs::read_to_string(path).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    validate(&method)?;
+    let current = signature(&q.method);
+    if !discard_unsaved && current != q.saved_method && current != signature(&Method::default()) {
+        return Err("The method in the window has edits that were never saved; save it with save_method first, or pass discard_unsaved=true".into());
+    }
+    q.method_epoch = q.method_epoch.wrapping_add(1);
+    q.method = method;
+    q.saved_method = signature(&q.method);
+    q.method_path = Some(path.to_owned());
+    q.message = "Method opened. Existing results retain their original method snapshots.".into();
+    let stale = {
+        let fresh = fresh(&q.method);
+        q.results.iter().filter(|r| fresh.stale(r)).count()
+    };
+    Ok(
+        serde_json::json!({"path":path,"name":q.method.name,"analytes":q.method.analytes.len(),"results_from_an_earlier_method":stale}),
+    )
+}
+/// Saves the batch (method, results with traces and manual corrections) as a new file.
+#[cfg(feature = "mcp")]
+pub(super) fn remote_save_batch(
+    q: &mut QuantState,
+    path: &std::path::Path,
+) -> Result<serde_json::Value, String> {
+    if q.rx.is_some() {
+        return Err("A batch is running; wait for it to finish".into());
+    }
+    let batch = batch_of(q)?;
+    let bytes = serde_json::to_vec(&batch).map_err(|e| e.to_string())?;
+    crate::atomic_write::write_atomic_new(path, &bytes).map_err(|e| e.to_string())?;
+    q.message = "Batch saved, including traces and manual corrections.".into();
+    Ok(
+        serde_json::json!({"path":path,"bytes":bytes.len(),"results":batch.results.len(),"samples":batch.samples.len()}),
+    )
+}
+/// Replaces the method and results by a saved batch. Returns the source datasets the batch was
+/// measured from, for the caller to reopen if it is allowed to.
+#[cfg(feature = "mcp")]
+pub(super) fn remote_load_batch(
+    q: &mut QuantState,
+    path: &std::path::Path,
+) -> Result<Vec<PathBuf>, String> {
+    if q.rx.is_some() {
+        return Err("A batch is running; wait for it to finish".into());
+    }
+    let batch: Batch = serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    install_batch(q, batch)?;
+    Ok(std::mem::take(&mut q.pending_sources))
+}
+#[cfg(feature = "mcp")]
+pub(super) fn remote_result_count(q: &QuantState) -> usize {
+    q.results.len()
 }
 
 fn analyte_index(q: &QuantState, i: usize) -> Option<usize> {

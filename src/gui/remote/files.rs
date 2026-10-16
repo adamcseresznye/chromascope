@@ -172,3 +172,67 @@ pub(super) fn save_preset(
         json!({"path":path,"traces":described["traces"].as_array().map_or(0, Vec::len),"overlay":described["overlay"]}),
     )
 }
+
+pub(super) fn save_method(
+    app: &mut MzViewerApp,
+    b: &GuiBridge,
+    path: &str,
+    method_toml: Option<&str>,
+) -> Result<Value, String> {
+    let path = b.policy.output_as(path, "toml")?;
+    super::super::quant::remote_save_method(&mut app.quant, &path, method_toml)
+}
+
+pub(super) fn open_method(
+    app: &mut MzViewerApp,
+    b: &GuiBridge,
+    path: &str,
+    discard_unsaved: bool,
+) -> Result<Value, String> {
+    let path = b.policy.file(path, "toml")?;
+    super::super::quant::remote_open_method(&mut app.quant, &path, discard_unsaved)
+}
+
+pub(super) fn save_batch(
+    app: &mut MzViewerApp,
+    b: &GuiBridge,
+    path: &str,
+) -> Result<Value, String> {
+    let path = b.policy.output_as(path, "chromquant")?;
+    super::super::quant::remote_save_batch(&mut app.quant, &path)
+}
+
+/// Loads a batch and reopens the source datasets the policy allows, like the window does.
+pub(super) fn load_batch(
+    app: &mut MzViewerApp,
+    b: &GuiBridge,
+    path: &str,
+) -> Result<Value, String> {
+    let path = b.policy.file(path, "chromquant")?;
+    let sources = super::super::quant::remote_load_batch(&mut app.quant, &path)?;
+    let mut reopening = vec![];
+    let mut skipped = vec![];
+    for source in sources {
+        let already_open = app
+            .files
+            .values()
+            .any(|f| f.cache.source_path.as_deref().unwrap_or(&f.path) == source.to_string_lossy());
+        if already_open {
+            continue;
+        }
+        match b.policy.source(&source.to_string_lossy()) {
+            Ok(allowed) => reopening.push(allowed),
+            Err(reason) => skipped.push(json!({"source":source,"reason":reason})),
+        }
+    }
+    if !reopening.is_empty() {
+        super::super::panels::queue_file_imports(app, reopening.clone());
+    }
+    Ok(json!({
+        "path":path,
+        "results":super::super::quant::remote_result_count(&app.quant),
+        "reopening":reopening,
+        "skipped":skipped,
+        "note":"Datasets reopen in the background; list_datasets shows them when loaded.",
+    }))
+}

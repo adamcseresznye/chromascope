@@ -770,6 +770,8 @@ impl MzViewerApp {
             c,
             Command::SelectDataset { .. }
                 | Command::LoadSession { .. }
+                | Command::OpenMethod { .. }
+                | Command::LoadBatch { .. }
                 | Command::SetLayout { .. }
                 | Command::RetainTrace { .. }
                 | Command::RemoveTrace { .. }
@@ -943,6 +945,15 @@ impl MzViewerApp {
             Command::ListPresets { directory } => files::list_presets(self, b, directory)?,
             Command::GetPreset { source } => files::get_preset(b, &source)?,
             Command::SavePreset { path, toml } => files::save_preset(self, b, &path, &toml)?,
+            Command::SaveMethod { path, method_toml } => {
+                files::save_method(self, b, &path, method_toml.as_deref())?
+            }
+            Command::OpenMethod {
+                path,
+                discard_unsaved,
+            } => files::open_method(self, b, &path, discard_unsaved)?,
+            Command::SaveBatch { path } => files::save_batch(self, b, &path)?,
+            Command::LoadBatch { path } => files::load_batch(self, b, &path)?,
             Command::SaveSession { path } => files::save_session(self, ctx, b, &path)?,
             Command::LoadSession { .. } => {
                 return Err("load_session replies when the workspace is restored, so it cannot run inside a batch; call it on its own".into())

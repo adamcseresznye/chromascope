@@ -182,6 +182,21 @@ pub enum Command {
         path: String,
         toml: String,
     },
+    SaveMethod {
+        path: String,
+        method_toml: Option<String>,
+    },
+    OpenMethod {
+        path: String,
+        #[serde(default)]
+        discard_unsaved: bool,
+    },
+    SaveBatch {
+        path: String,
+    },
+    LoadBatch {
+        path: String,
+    },
     SaveSession {
         path: String,
     },
@@ -1408,6 +1423,58 @@ impl McpServer {
         .await
     }
     #[tool(
+        description = "Save a quantification method as a new .toml file: the method in the Quantification tab (the same file Save method writes), or with method_toml a method you give as text, checked first. Use it to keep a method for open_method or start_quantification. Requires --allow-exports; the path must be a new .toml file inside an --allow-root, and existing files are never overwritten.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn save_method(&self, Parameters(args): Parameters<SaveMethodArgs>) -> CallToolResult {
+        self.dispatch(Command::SaveMethod {
+            path: args.path,
+            method_toml: args.method_toml,
+        })
+        .await
+    }
+    #[tool(
+        description = "Make a method file the Quantification tab's method, as the Open method command does; existing results keep the method they were measured with and are reported as coming from an earlier method. Refuses to replace edits that were never saved unless discard_unsaved is true, and fails while a batch runs. Requires --allow-changes; the file must be a valid .toml method inside an --allow-root.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn open_method(&self, Parameters(args): Parameters<OpenMethodArgs>) -> CallToolResult {
+        self.dispatch(Command::OpenMethod {
+            path: args.path,
+            discard_unsaved: args.discard_unsaved,
+        })
+        .await
+    }
+    #[tool(
+        description = "Save the batch quantification (its method, every result with trace, automatic and manual peak, status and review state, and the samples) as a new .chromquant file, the file Save batch writes. Use it to keep results you can reload with load_batch. Fails while a batch runs. Requires --allow-exports; the path must be a new .chromquant file inside an --allow-root, and existing files are never overwritten.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn save_batch(&self, Parameters(args): Parameters<BatchFileArgs>) -> CallToolResult {
+        self.dispatch(Command::SaveBatch { path: args.path }).await
+    }
+    #[tool(
+        description = "Replace the Quantification tab's method and results by a saved .chromquant batch, after checking every result against its method and trace. The source datasets it was measured from are reopened when they lie inside an --allow-root (others are reported as skipped; the stored results stay available). Requires --allow-changes; discards the current batch results, so save_batch first if they matter.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn load_batch(&self, Parameters(args): Parameters<BatchFileArgs>) -> CallToolResult {
+        self.dispatch(Command::LoadBatch { path: args.path }).await
+    }
+    #[tool(
         description = "Save the viewer workspace (open datasets, current and retained traces, measurements, view settings) as a new .chromascope session file, the same file the Save viewer session command writes; the file is written complete or not at all. Use it to keep a state you can return to with load_session. Fails while an import or extraction is running. Requires --allow-exports; the path must be a new file inside an --allow-root, and existing files are never overwritten.",
         annotations(
             read_only_hint = false,
@@ -1584,6 +1651,29 @@ pub struct SavePresetArgs {
 }
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct SaveMethodArgs {
+    /// New .toml file inside an --allow-root.
+    pub path: String,
+    /// A method as TOML text to check and save instead of the method in the window.
+    pub method_toml: Option<String>,
+}
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OpenMethodArgs {
+    /// Existing method .toml file inside an --allow-root.
+    pub path: String,
+    /// Replace the window's method even though it has edits that were never saved.
+    #[serde(default)]
+    pub discard_unsaved: bool,
+}
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BatchFileArgs {
+    /// Path of the `.chromquant` batch file inside an --allow-root.
+    pub path: String,
+}
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SessionPathArgs {
     /// Path of the `.chromascope` session file.
     pub path: String,
@@ -1717,6 +1807,10 @@ mod tests {
         "remove_trace",
         "set_trace_visibility",
         "save_preset",
+        "save_method",
+        "open_method",
+        "save_batch",
+        "load_batch",
         "save_session",
         "load_session",
         "integrate",
@@ -1734,7 +1828,7 @@ mod tests {
     #[test]
     fn tool_descriptions_are_unique_nonempty_and_annotated() {
         let tools = McpServer::tool_router().list_all();
-        assert_eq!(tools.len(), 40, "40 typed tools; workbench is not listed");
+        assert_eq!(tools.len(), 44, "44 typed tools; workbench is not listed");
         assert!(
             tools.iter().all(|t| t.name != "workbench"),
             "workbench duplicated the typed tools and must not be listed"
@@ -1819,11 +1913,11 @@ mod tests {
             let discovered=rpc(&mut write,&mut read,json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}})).await;
             let listed=discovered["result"]["tools"].as_array().unwrap();
             let desktop=McpServer::tool_router().list_all();
-            assert_eq!(desktop.len(),40);
+            assert_eq!(desktop.len(),44);
             assert!(desktop.iter().all(|d|listed.iter().any(|t|t["name"]==d.name.as_ref())),"every viewer tool is listed");
             let engine=crate::engine_mcp::EngineMcp::new(vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))]).unwrap().tool_names();
             let visible=engine.iter().filter(|n|crate::EXPERIMENTAL||!matches!(n.as_str(),"start_untargeted"|"untargeted_status"|"cancel_untargeted"|"untargeted_features")).count();
-            assert_eq!(listed.len(),40+visible,"viewer tools plus the shared engine tools");
+            assert_eq!(listed.len(),44+visible,"viewer tools plus the shared engine tools");
             assert!(listed.iter().all(|t|t["name"]!="workbench"));
             assert!(listed.iter().all(|t|t["annotations"]["readOnlyHint"].is_boolean()&&t["annotations"]["destructiveHint"].is_boolean()),"every tool must carry both hints on the wire");
             let find=|name:&str|listed.iter().find(|t|t["name"]==name).unwrap();
