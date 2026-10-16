@@ -1895,6 +1895,28 @@ impl ServerHandler for McpServer {
         listed.tools = tools;
         Ok(listed)
     }
+    async fn list_prompts(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> std::result::Result<ListPromptsResult, rmcp::ErrorData> {
+        Ok(ListPromptsResult::with_all_items(
+            crate::engine_mcp::workflow_prompts(),
+        ))
+    }
+    async fn get_prompt(
+        &self,
+        request: GetPromptRequestParams,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> std::result::Result<GetPromptResponse, rmcp::ErrorData> {
+        let focus = request
+            .arguments
+            .as_ref()
+            .and_then(|a| a.get("focus"))
+            .and_then(Value::as_str);
+        crate::engine_mcp::workflow_prompt(&request.name, focus, true)
+            .map(GetPromptResponse::Complete)
+    }
     fn get_tool(&self, name: &str) -> Option<Tool> {
         self.tool_router
             .get(name)
@@ -1902,7 +1924,12 @@ impl ServerHandler for McpServer {
             .or_else(|| self.engine.get_tool(name))
     }
     fn get_info(&self) -> ServerConfig {
-        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+        ServerConfig::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_prompts()
+                .build(),
+        )
             .with_server_info(Implementation::new("chromascope", env!("CARGO_PKG_VERSION")))
             .with_instructions("One server for everything the person sees in the window. Inspect datasets first (list_datasets, gui_state). Use the typed viewer tools to open data, extract and integrate; start_analysis runs calibration, quantification and QC on the shared engine and, when launched with --allow-changes, shows the finished result in the Quantification tab (analysis_status says whether it did). Retrieve bounded numerical pages for quantitation; images aid visual review. Read-only unless explicitly enabled at launch (--allow-changes, --allow-exports, --allow-project-writes). AI interpretations are external to measured results.")
     }

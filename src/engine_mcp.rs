@@ -151,6 +151,99 @@ fn public_schema(schema: impl serde::Serialize) -> serde_json::Value {
     }
     value
 }
+/// The six ready-made analysis tasks. `analysis_capabilities` returns them as data and both MCP
+/// servers offer them as prompts, so every client sees the same recipes.
+pub fn workflow_recipes() -> Vec<serde_json::Value> {
+    let report_operations = if crate::EXPERIMENTAL {
+        vec!["export_targeted", "export_qc", "export_statistics"]
+    } else {
+        vec!["export_targeted", "export_qc"]
+    };
+    vec![
+        serde_json::json!({"name":"investigate_chromatographic_anomalies","prompt":"Investigate this unexpected peak without changing the original result.","operations":["metadata","extract","spectrum","process_chromatograms","evaluate_qc"],"review":"Compare unsmoothed evidence, baseline and flags; do not invent causes."}),
+        serde_json::json!({"name":"review_integration","prompt":"Preview alternative peak bounds and present both areas for review.","operations":["extract","process_chromatograms","revise_chromatogram"],"review":"Use preview=true first; retain original and corrected revisions with reasons."}),
+        serde_json::json!({"name":"construct_calibration","prompt":"Build a weighted calibration from my standards and quantify unknowns.","operations":["targeted_batch","evaluate_targeted_qc","review_targeted","export_targeted"],"review":"Declare units, roles, range, dilution, weighting and thresholds; review accuracy, qualifiers and missing states."}),
+        serde_json::json!({"name":"troubleshoot_qc","prompt":"Explain QC failures using recorded evidence and identify missing measurements.","operations":["evaluate_targeted_qc","evaluate_qc","review_qc","export_qc"],"review":"Acknowledgement does not erase failures; required absent evidence remains indeterminate."}),
+        serde_json::json!({"name":"compare_processing_methods","prompt":"Compare two processing configurations on the same raw chromatogram.","operations":["extract","process_chromatograms","quantify","validate_method"],"review":"Run separate jobs with frozen parameters; compare evidence and units, not explanations alone."}),
+        serde_json::json!({"name":"prepare_report","prompt":"Prepare a reproducible draft including questionable results and review history.","operations":report_operations,"tools":["analysis_status","analysis_result","session_audit","prepare_analysis_report"],"review":"Include all relevant job IDs; report is a review draft, never approved scientific release."}),
+    ]
+}
+
+/// The recipes as MCP prompts: ready-made tasks a client can offer to its user.
+pub fn workflow_prompts() -> Vec<Prompt> {
+    workflow_recipes()
+        .iter()
+        .map(|recipe| {
+            let name = recipe["name"].as_str().unwrap_or_default();
+            Prompt::new(
+                name,
+                recipe["prompt"].as_str(),
+                Some(vec![PromptArgument::new("focus")
+                    .with_description(
+                        "What to look at: a sample, an analyte, a job ID, a retention time. Optional.",
+                    )
+                    .with_required(false)]),
+            )
+            .with_title(name.replace('_', " "))
+        })
+        .collect()
+}
+
+/// One recipe as the conversation a client starts from. With `window` the text also tells the
+/// AI how to use the open window (the desktop server); without it only the engine tools.
+pub fn workflow_prompt(
+    name: &str,
+    focus: Option<&str>,
+    window: bool,
+) -> std::result::Result<GetPromptResult, rmcp::ErrorData> {
+    let recipe = workflow_recipes()
+        .into_iter()
+        .find(|recipe| recipe["name"] == name)
+        .ok_or_else(|| rmcp::ErrorData::invalid_params(format!("Unknown prompt: {name}"), None))?;
+    let operations: Vec<&str> = recipe["operations"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+        .unwrap_or_default();
+    let mut text = format!("{}\n", recipe["prompt"].as_str().unwrap_or_default());
+    if let Some(focus) = focus.map(str::trim).filter(|f| !f.is_empty()) {
+        text.push_str(&format!("\nFocus: {focus}\n"));
+    }
+    text.push_str("\nHow to work:\n");
+    let mut step = 1;
+    let mut push = |line: String| {
+        text.push_str(&format!("{step}. {line}\n"));
+        step += 1;
+    };
+    if window {
+        push("Look at what the person has open with list_datasets and gui_state; datasets are named by dataset_id or by the stable_id that survives a restart.".into());
+    } else {
+        push(
+            "Find the data with discover_datasets; every path must lie inside an allowed root."
+                .into(),
+        );
+    }
+    push(format!(
+        "Run the computations as engine jobs with start_analysis (operations: {}); follow them with analysis_status and read results with analysis_result, which pages the stored response.",
+        operations.join(", ")
+    ));
+    if let Some(tools) = recipe["tools"].as_array() {
+        let tools: Vec<&str> = tools.iter().filter_map(|t| t.as_str()).collect();
+        push(format!("Tools for this task: {}.", tools.join(", ")));
+    }
+    push(format!(
+        "Review rule: {}",
+        recipe["review"].as_str().unwrap_or_default()
+    ));
+    if window {
+        push("When a result is worth the person's attention, put it in front of them with show_workspace (finished calibrations and QC reports are already in the Quantification tab when the server was started with --allow-changes).".into());
+    }
+    push("Units: retention time in minutes, area in instrument intensity * minute, concentration as declared by the calibration. Your reading of the evidence is not a scientific verdict: say what is measured and what is your interpretation.".into());
+    Ok(
+        GetPromptResult::new(vec![PromptMessage::new_text(Role::User, text)])
+            .with_description(recipe["prompt"].as_str().unwrap_or_default().to_owned()),
+    )
+}
+
 fn feature_reply(result: crate::domain::Result<serde_json::Value>) -> CallToolResult {
     let result = result.and_then(|value| {
         if serde_json::to_vec(&value)
@@ -440,24 +533,12 @@ impl EngineMcp {
         )
     )]
     async fn analysis_capabilities(&self) -> CallToolResult {
-        let report_operations = if crate::EXPERIMENTAL {
-            vec!["export_targeted", "export_qc", "export_statistics"]
-        } else {
-            vec!["export_targeted", "export_qc"]
-        };
         feature_reply(Ok(serde_json::json!({
             "request_schema":public_schema(schemars::schema_for!(Request)),
             "response_schema":public_schema(schemars::schema_for!(crate::engine::Response)),
             "units":{"retention_time":"minute","area":"instrument intensity * minute","concentration":"declared by calibration"},
             "policy":{"project_writes_enabled":self.project_writes,"analysis":"immutable retained computation; no project commit","preview":"revise_chromatogram preview=true; cannot commit","proposal":(if crate::EXPERIMENTAL {"annotation/boundary/review revisions are proposed until explicitly committed"} else {"boundary/review revisions are proposed until explicitly committed"}),"commit":"existing project, expected revision, client-attributed approval; never scientific certification","report":"review draft; unresolved/failed/missing evidence preserved; AI narrative unverified"},
-            "workflows":[
-                {"name":"investigate_chromatographic_anomalies","prompt":"Investigate this unexpected peak without changing the original result.","operations":["metadata","extract","spectrum","process_chromatograms","evaluate_qc"],"review":"Compare unsmoothed evidence, baseline and flags; do not invent causes."},
-                {"name":"review_integration","prompt":"Preview alternative peak bounds and present both areas for review.","operations":["extract","process_chromatograms","revise_chromatogram"],"review":"Use preview=true first; retain original and corrected revisions with reasons."},
-                {"name":"construct_calibration","prompt":"Build a weighted calibration from my standards and quantify unknowns.","operations":["targeted_batch","evaluate_targeted_qc","review_targeted","export_targeted"],"review":"Declare units, roles, range, dilution, weighting and thresholds; review accuracy, qualifiers and missing states."},
-                {"name":"troubleshoot_qc","prompt":"Explain QC failures using recorded evidence and identify missing measurements.","operations":["evaluate_targeted_qc","evaluate_qc","review_qc","export_qc"],"review":"Acknowledgement does not erase failures; required absent evidence remains indeterminate."},
-                {"name":"compare_processing_methods","prompt":"Compare two processing configurations on the same raw chromatogram.","operations":["extract","process_chromatograms","quantify","validate_method"],"review":"Run separate jobs with frozen parameters; compare evidence and units, not explanations alone."},
-                {"name":"prepare_report","prompt":"Prepare a reproducible draft including questionable results and review history.","operations":report_operations,"tools":["analysis_status","analysis_result","session_audit","prepare_analysis_report"],"review":"Include all relevant job IDs; report is a review draft, never approved scientific release."}
-            ]
+            "workflows":workflow_recipes(),
         })))
     }
     #[tool(
@@ -1362,8 +1443,27 @@ impl ServerHandler for EngineMcp {
             cache_scope: supports_cache_hints.then_some(CacheScope::Public),
         })
     }
+    async fn list_prompts(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> std::result::Result<ListPromptsResult, rmcp::ErrorData> {
+        Ok(ListPromptsResult::with_all_items(workflow_prompts()))
+    }
+    async fn get_prompt(
+        &self,
+        request: GetPromptRequestParams,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> std::result::Result<GetPromptResponse, rmcp::ErrorData> {
+        let focus = request
+            .arguments
+            .as_ref()
+            .and_then(|a| a.get("focus"))
+            .and_then(serde_json::Value::as_str);
+        workflow_prompt(&request.name, focus, false).map(GetPromptResponse::Complete)
+    }
     fn get_info(&self) -> ServerConfig {
-        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().enable_prompts().build())
             .with_server_info(Implementation::new("chromascope-engine",env!("CARGO_PKG_VERSION")))
             .with_instructions("Headless analytical capability. Discover typed engine operations and workflow recipes with analysis_capabilities; start_analysis provides retained jobs, status/cancellation and immutable result paging. Reports are reproducible review drafts; AI narratives and client approvals are not independently verified scientific evidence. Project commits require explicit operator policy and expected revisions. Legacy visual tools are provided by chromascope-mcp. Scientific units: RT minutes, area instrument intensity * minute. Targeted operations explicitly return calibrated concentrations with declared units, dilution, flags and reversible review history.")
     }

@@ -2477,3 +2477,83 @@ fn view_reset_cleared_displays_and_the_measurements_file_work_over_mcp() {
     desktop.finish();
     guarded.finish();
 }
+
+#[test]
+fn the_six_workflow_recipes_are_offered_as_prompts() {
+    let mut desktop = Desktop::start(vec![], false, false, false);
+    let init = desktop.rpc("initialize", json!({"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"prompts","version":"1"}}));
+    assert!(
+        init["result"]["capabilities"]["prompts"].is_object(),
+        "{init}"
+    );
+    let listed = desktop.rpc("prompts/list", json!({}));
+    let prompts = listed["result"]["prompts"].as_array().unwrap();
+    let names: Vec<&str> = prompts
+        .iter()
+        .map(|p| p["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "investigate_chromatographic_anomalies",
+            "review_integration",
+            "construct_calibration",
+            "troubleshoot_qc",
+            "compare_processing_methods",
+            "prepare_report"
+        ]
+    );
+    for prompt in prompts {
+        assert!(
+            prompt["description"].as_str().unwrap().len() > 20,
+            "{prompt}"
+        );
+        assert_eq!(prompt["arguments"][0]["name"], "focus");
+    }
+    // The prompts are the recipes `analysis_capabilities` returns: the same words, the same operations.
+    let capabilities = desktop.tool("analysis_capabilities", json!({}));
+    for recipe in capabilities["workflows"].as_array().unwrap() {
+        let name = recipe["name"].as_str().unwrap();
+        let got = desktop.rpc(
+            "prompts/get",
+            json!({"name":name,"arguments":{"focus":"sample QC-3, analyte a"}}),
+        );
+        let message = &got["result"]["messages"][0];
+        assert_eq!(message["role"], "user", "{got}");
+        let text = message["content"]["text"].as_str().unwrap();
+        assert!(text.contains(recipe["prompt"].as_str().unwrap()), "{name}");
+        assert!(text.contains("Focus: sample QC-3, analyte a"));
+        for operation in recipe["operations"].as_array().unwrap() {
+            assert!(
+                text.contains(operation.as_str().unwrap()),
+                "{name} lacks {operation}"
+            );
+        }
+        assert!(text.contains(recipe["review"].as_str().unwrap()));
+        assert!(
+            text.contains("list_datasets") && text.contains("show_workspace"),
+            "the desktop server tells the AI about the window"
+        );
+        // Every tool the text sends the AI to exists on this server.
+        let tools = desktop.tools();
+        for tool in [
+            "start_analysis",
+            "analysis_status",
+            "analysis_result",
+            "list_datasets",
+            "gui_state",
+            "show_workspace",
+        ] {
+            assert!(tools.iter().any(|t| t["name"] == tool), "{tool}");
+        }
+    }
+    // Without a focus the line is left out; an unknown prompt is an error.
+    let plain = desktop.rpc("prompts/get", json!({"name":"prepare_report"}));
+    assert!(!plain["result"]["messages"][0]["content"]["text"]
+        .as_str()
+        .unwrap()
+        .contains("Focus:"));
+    let missing = desktop.rpc("prompts/get", json!({"name":"make_coffee"}));
+    assert!(missing["error"].is_object(), "{missing}");
+    desktop.finish();
+}

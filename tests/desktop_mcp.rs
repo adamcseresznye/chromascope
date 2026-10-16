@@ -103,6 +103,18 @@ fn experimental_workflows_are_hidden_on_the_desktop_server() {
                 assert!(!text.contains(word), "{} still mentions {word}", tool["name"]);
             }
         }
+        // The recipes offered as prompts must not mention the hidden workflows either.
+        let prompts = client.rpc("prompts/list", json!({})).await;
+        assert_eq!(prompts["result"]["prompts"].as_array().unwrap().len(), 6);
+        for prompt in prompts["result"]["prompts"].as_array().unwrap() {
+            let got = client
+                .rpc("prompts/get", json!({"name":prompt["name"]}))
+                .await;
+            let text = got.to_string();
+            for word in &hidden {
+                assert!(!text.contains(word), "prompt {} mentions {word}", prompt["name"]);
+            }
+        }
         let capabilities = client.call("analysis_capabilities", json!({})).await;
         let text = capabilities["result"]["structuredContent"].to_string();
         for word in hidden.iter().chain(&["annotation"]) {

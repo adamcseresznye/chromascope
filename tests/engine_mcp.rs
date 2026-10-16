@@ -420,3 +420,38 @@ fn experimental_workflows_are_hidden_and_rejected() {
         task.await.unwrap();
     });
 }
+
+#[tokio::test]
+async fn the_headless_server_offers_the_same_workflow_prompts() {
+    let temp = tempfile::tempdir().unwrap();
+    let (mut client, task) = connect(EngineMcp::new(vec![temp.path().to_owned()]).unwrap()).await;
+    let listed = client.rpc("prompts/list", json!({})).await;
+    let prompts = listed["result"]["prompts"].as_array().unwrap();
+    assert_eq!(prompts.len(), 6, "{listed}");
+    let capabilities = client.call("analysis_capabilities", json!({})).await;
+    let recipes = capabilities["result"]["structuredContent"]["workflows"]
+        .as_array()
+        .unwrap();
+    for (prompt, recipe) in prompts.iter().zip(recipes) {
+        assert_eq!(prompt["name"], recipe["name"]);
+        let got = client
+            .rpc(
+                "prompts/get",
+                json!({"name":prompt["name"],"arguments":{"focus":"job 7"}}),
+            )
+            .await;
+        let text = got["result"]["messages"][0]["content"]["text"]
+            .as_str()
+            .unwrap();
+        assert!(text.contains(recipe["prompt"].as_str().unwrap()) && text.contains("Focus: job 7"));
+        // No window here: the text points at discovery, not at the viewer tools.
+        assert!(
+            text.contains("discover_datasets") && !text.contains("show_workspace"),
+            "{text}"
+        );
+    }
+    let unknown = client.rpc("prompts/get", json!({"name":"unknown"})).await;
+    assert!(unknown["error"].is_object());
+    drop(client);
+    task.abort();
+}
