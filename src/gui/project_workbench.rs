@@ -502,6 +502,7 @@ impl State {
         self.project.as_ref().map(|p| p.revision)
     }
     /// The SHA-256 of a registered dataset of the open project, by the project's dataset UUID.
+    #[cfg(feature = "mcp")]
     pub(super) fn source_sha256(&self, id: uuid::Uuid) -> Option<String> {
         self.project
             .as_ref()?
