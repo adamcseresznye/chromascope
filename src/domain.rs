@@ -293,7 +293,11 @@ mod tests {
     /// read both from the source so they cannot drift apart unnoticed.
     #[test]
     fn is_experimental_agrees_with_experimental_names() {
-        let source = include_str!("domain.rs");
+        // A checkout with CRLF line endings (git autocrlf on Windows) must read the same.
+        let source = include_str!("domain.rs").replace("
+", "
+");
+        let source = source.as_str();
         let body = &source[source.find("pub fn is_experimental").unwrap()..];
         let body = &body[body.find("matches!(").unwrap()..];
         let body = &body[..body.find("\n        )\n").unwrap()];
