@@ -175,6 +175,10 @@ pub enum Command {
         index: usize,
     },
     ClearIntegration {},
+    ShowWorkspace {
+        workspace: String,
+        stage: Option<String>,
+    },
     Measurements {},
     ListPresets {
         directory: Option<String>,
@@ -1530,6 +1534,24 @@ impl McpServer {
         self.dispatch(Command::ClearIntegration {}).await
     }
     #[tool(
+        description = "Switch the window to another workspace, as the Analysis workflow menu and the tabs do: the Data explorer, the Quantification and QC tab (at its peak review, calibration or QC stage), the method editor, the Audit package or AI activity. Use it to show the person what you just computed, for instance after start_analysis put a calibration in the Quantification tab. Changes only what is on screen. Requires --allow-changes.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn show_workspace(
+        &self,
+        Parameters(args): Parameters<ShowWorkspaceArgs>,
+    ) -> CallToolResult {
+        self.dispatch(Command::ShowWorkspace {
+            workspace: args.workspace,
+            stage: args.stage,
+        })
+        .await
+    }
+    #[tool(
         description = "Build the audit package of a project in a new folder, as Export audit package does: a readable report.html, the machine-readable evidence (revisions, results, CSV, SVG) and checksums.json, optionally with the raw sources. Open warnings in the window (unresolved peaks, unreviewed results, failed QC) stop the export until acknowledge_warnings is true; they are then saved in the bundle as review-warnings.json. Runs in the background and replies when done. Requires --allow-exports; the destination must be a new folder inside an --allow-root, existing folders are never overwritten.",
         annotations(
             read_only_hint = false,
@@ -1883,6 +1905,17 @@ pub struct RemoveMeasurementArgs {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct ShowWorkspaceArgs {
+    /// `data_explorer`, `quantification`, `method_editor` (the method window of the
+    /// Quantification tab), `audit_package` or `ai_activity`.
+    pub workspace: String,
+    /// For `quantification`: `review` (peak areas), `calibration` (calibration and
+    /// concentrations) or `qc` (batch QC); the tab's last stage when omitted.
+    pub stage: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct BuildBundleArgs {
     /// New folder to create inside an --allow-root; it must not exist.
     pub destination: String,
@@ -2090,6 +2123,7 @@ mod tests {
         "save_preset",
         "build_bundle",
         "set_settings",
+        "show_workspace",
         "remove_measurement",
         "clear_integration",
         "create_project",
@@ -2117,7 +2151,7 @@ mod tests {
     #[test]
     fn tool_descriptions_are_unique_nonempty_and_annotated() {
         let tools = McpServer::tool_router().list_all();
-        assert_eq!(tools.len(), 55, "55 typed tools; workbench is not listed");
+        assert_eq!(tools.len(), 56, "56 typed tools; workbench is not listed");
         assert!(
             tools.iter().all(|t| t.name != "workbench"),
             "workbench duplicated the typed tools and must not be listed"
@@ -2208,11 +2242,11 @@ mod tests {
             let discovered=rpc(&mut write,&mut read,json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}})).await;
             let listed=discovered["result"]["tools"].as_array().unwrap();
             let desktop=McpServer::tool_router().list_all();
-            assert_eq!(desktop.len(),55);
+            assert_eq!(desktop.len(),56);
             assert!(desktop.iter().all(|d|listed.iter().any(|t|t["name"]==d.name.as_ref())),"every viewer tool is listed");
             let engine=crate::engine_mcp::EngineMcp::new(vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))]).unwrap().tool_names();
             let visible=engine.iter().filter(|n|crate::EXPERIMENTAL||!matches!(n.as_str(),"start_untargeted"|"untargeted_status"|"cancel_untargeted"|"untargeted_features")).count();
-            assert_eq!(listed.len(),55+visible,"viewer tools plus the shared engine tools");
+            assert_eq!(listed.len(),56+visible,"viewer tools plus the shared engine tools");
             assert!(listed.iter().all(|t|t["name"]!="workbench"));
             assert!(listed.iter().all(|t|t["annotations"]["readOnlyHint"].is_boolean()&&t["annotations"]["destructiveHint"].is_boolean()),"every tool must carry both hints on the wire");
             let find=|name:&str|listed.iter().find(|t|t["name"]==name).unwrap();

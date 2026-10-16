@@ -2093,3 +2093,71 @@ fn measurements_can_be_removed_and_the_integration_cleared_over_mcp() {
     desktop.finish();
     read_only.finish();
 }
+
+#[test]
+fn the_window_can_be_switched_between_workspaces_over_mcp() {
+    let mut desktop = Desktop::start(vec![], true, false, false);
+    let stage = |d: &Desktop| {
+        d.ctx
+            .data(|data| data.get_temp::<usize>(egui::Id::new("quantification_stage")))
+    };
+    let activity = |d: &Desktop| {
+        d.ctx
+            .data(|data| data.get_temp::<bool>(egui::Id::new("activity_open")))
+            .unwrap_or(false)
+    };
+    assert!(!desktop.app.quant.active);
+    desktop.tool("show_workspace", json!({"workspace":"quantification"}));
+    assert!(desktop.app.quant.active);
+    for (name, expected) in [("review", 0), ("calibration", 1), ("qc", 2)] {
+        let shown = desktop.tool(
+            "show_workspace",
+            json!({"workspace":"quantification","stage":name}),
+        );
+        assert_eq!(shown["stage"], name);
+        assert!(desktop.app.quant.active);
+        assert_eq!(stage(&desktop), Some(expected), "{name}");
+    }
+    desktop.tool("show_workspace", json!({"workspace":"audit_package"}));
+    assert!(desktop.app.delivery.open && !desktop.app.quant.active);
+    desktop.tool("show_workspace", json!({"workspace":"ai_activity"}));
+    assert!(activity(&desktop) && !desktop.app.delivery.open);
+    desktop.tool("show_workspace", json!({"workspace":"method_editor"}));
+    assert!(desktop.app.quant.active && !activity(&desktop));
+    desktop.tool("show_workspace", json!({"workspace":"data_explorer"}));
+    assert!(!desktop.app.quant.active && !desktop.app.delivery.open && !activity(&desktop));
+    // Unknown names, a stage on the wrong workspace and workflows that are not in this build.
+    let mut bad = vec![
+        json!({"workspace":"nowhere"}),
+        json!({"workspace":"data_explorer","stage":"qc"}),
+        json!({"workspace":"quantification","stage":"final"}),
+    ];
+    if !crate::EXPERIMENTAL {
+        bad.extend([
+            json!({"workspace":"identification"}),
+            json!({"workspace":"untargeted_analysis"}),
+            json!({"workspace":"statistics"}),
+        ]);
+    }
+    for arguments in bad {
+        let error = desktop.tool_error("show_workspace", arguments.clone());
+        assert!(
+            error["message"].as_str().unwrap().contains("workspace:")
+                || error["message"].as_str().unwrap().contains("stage"),
+            "{arguments}: {error}"
+        );
+    }
+    assert!(!desktop.app.quant.active);
+    let mut read_only = Desktop::start(vec![], false, false, false);
+    let error = read_only.tool_error("show_workspace", json!({"workspace":"quantification"}));
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("--allow-changes"),
+        "{error}"
+    );
+    assert!(!read_only.app.quant.active);
+    desktop.finish();
+    read_only.finish();
+}

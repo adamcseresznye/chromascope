@@ -874,6 +874,7 @@ impl MzViewerApp {
         let changes = matches!(
             c,
             Command::SelectDataset { .. }
+                | Command::ShowWorkspace { .. }
                 | Command::RemoveMeasurement { .. }
                 | Command::ClearIntegration {}
                 | Command::SetSettings { .. }
@@ -1073,6 +1074,9 @@ impl MzViewerApp {
             Command::ClearIntegration {} => {
                 self.integration = Default::default();
                 json!({"cleared":true})
+            }
+            Command::ShowWorkspace { workspace, stage } => {
+                ops::show_workspace(self, ctx, &workspace, stage.as_deref())?
             }
             Command::ListPresets { directory } => files::list_presets(self, b, directory)?,
             Command::GetPreset { source } => files::get_preset(b, &source)?,

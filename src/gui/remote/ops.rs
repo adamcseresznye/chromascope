@@ -250,3 +250,37 @@ pub(super) fn set_settings(
     }
     Ok(now)
 }
+
+/// Switches the window to a workspace, through the same function the Analysis workflow menu uses.
+pub(super) fn show_workspace(
+    app: &mut MzViewerApp,
+    ctx: &egui::Context,
+    workspace: &str,
+    stage: Option<&str>,
+) -> Result<Value, String> {
+    use super::super::workflow::Destination;
+    if stage.is_some() && workspace != "quantification" {
+        return Err("stage applies to the quantification workspace only".into());
+    }
+    let destination = match (workspace, stage) {
+        ("data_explorer", _) => Destination::Data,
+        ("quantification", None) => Destination::Quant,
+        ("quantification", Some("review")) => Destination::QuantReview,
+        ("quantification", Some("calibration")) => Destination::QuantCalibration,
+        ("quantification", Some("qc")) => Destination::QuantQc,
+        ("quantification", Some(_)) => return Err("stage: review, calibration or qc".into()),
+        ("method_editor", _) => Destination::Method,
+        ("audit_package", _) => Destination::AuditPackage,
+        ("ai_activity", _) => Destination::Activity,
+        // The workflows that are not part of this build cannot be shown.
+        ("identification", _) if crate::EXPERIMENTAL => Destination::Identify,
+        ("untargeted_analysis", _) if crate::EXPERIMENTAL => Destination::Untargeted,
+        ("statistics", _) if crate::EXPERIMENTAL => Destination::Statistics,
+        _ => return Err(
+            "workspace: data_explorer, quantification, method_editor, audit_package or ai_activity"
+                .into(),
+        ),
+    };
+    super::super::workflow::go(app, ctx, destination);
+    Ok(json!({"workspace":workspace,"stage":stage}))
+}
