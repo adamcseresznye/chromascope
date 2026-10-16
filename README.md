@@ -49,15 +49,17 @@ Open an mzML file from **File**, pick **XIC**, and double-click a trace to see i
 
 ## Architecture
 
-One Rust package provides typed `domain` requests, `engine::execute`, bounded `jobs`, append-only `project` revisions and `delivery`. GUI, CLI and headless MCP use shared chromatography, targeted quantification and QC modules. Legacy viewer/desktop MCP paths retain shared parser/processing kernels and GUI presentation state. View commands require the desktop; headless analysis does not.
+One Rust package provides typed `domain` requests, `engine::execute`, bounded `jobs`, append-only `project` revisions and `delivery`. The GUI, the CLI and both MCP servers share the same chromatography, targeted quantification and QC modules. The desktop MCP server hosts the window and also serves the engine tools, so an AI client works in the person's window and what it computes appears there; the headless server serves the engine tools alone.
 
 ```mermaid
 flowchart LR
   GUI[egui desktop] --> Engine[Shared analytical engine]
   CLI[JSON CLI] --> Engine
-  MCP[Headless stdio MCP] --> Engine
+  DMCP[Desktop MCP server] --> GUI
+  DMCP --> Engine
+  HMCP[Headless MCP server] --> Engine
   Engine --> Rust[Rust kernels / mzdata]
-    Engine --> Project[Immutable revisions and provenance]
+  Engine --> Project[Immutable revisions and provenance]
   Project --> Delivery[JSON / CSV / TSV / SVG / HTML drafts]
 ```
 
@@ -138,7 +140,31 @@ target/debug/chromascope-cli.exe project-verify NEW_BUNDLE_DIRECTORY
 
 ## MCP setup and AI-assisted analysis
 
-Configure a compatible client with an absolute executable and existing authorized data roots:
+An AI client can do over MCP everything a person can do in the window, with the same result and the same audit trail. `chromascope-mcp` opens a visible Chromascope window and serves **75 tools**: 60 that drive the window (open data including vendor files through msconvert, extract chromatograms, layouts, integration, presets, methods, sessions, batch quantification, results, projects, audit packages, display settings) and the 15 engine tools (`start_analysis`, calibration, QC, review proposals and more). A calibration or QC that an AI computes appears in the Quantification tab without reopening anything. It also offers the six workflow recipes as MCP **prompts** and the open datasets, traces, quantification results, QC reports and project revisions as MCP **resources** (`chromascope://...`).
+
+The operator decides at launch what an AI may do; the default is read-only inside the folders you name:
+
+```json
+{
+  "mcpServers": {
+    "chromascope": {
+      "command": "C:/path/to/chromascope-mcp.exe",
+      "args": ["--allow-root", "C:/path/to/data", "--allow-changes", "--allow-exports"]
+    }
+  }
+}
+```
+
+| Flag | Lets the AI |
+|---|---|
+| `--allow-root DIRECTORY` | read and name files inside this folder (repeatable; nothing outside is reachable) |
+| `--allow-changes` | change what is in the window: select, zoom, apply integrations, run a batch, open methods, sessions and projects |
+| `--allow-exports` | write **new** files (figures, CSV, sessions, methods, batches, audit packages); existing files are never overwritten |
+| `--allow-project-writes` | create projects, save revisions, approve review proposals |
+
+Every call is recorded under **AI activity**. Marking a peak as human-reviewed stays a window action, and choosing the msconvert program is left to the person. Tools, prompts, resources and the parity test that keeps window and tools in step are in the [desktop MCP guide](docs/MCP.md); see also the [client example](examples/mcp-client.json).
+
+For scripts, CI and machines without a desktop, `chromascope-engine-mcp` serves only the 15 engine tools without a window:
 
 ```json
 {
@@ -152,8 +178,6 @@ Configure a compatible client with an absolute executable and existing authorize
 ```
 
 `analysis_capabilities` supplies generated request/response schemas and recipes. Use `discover_datasets`, `start_analysis`, `analysis_status`, paged `analysis_result`, `cancel_analysis`, `session_audit` and `prepare_analysis_report`. Jobs/audit are session-local; export before shutdown. `commit_analysis` additionally requires `--allow-project-writes`, an existing project/dataset, expected revision, actor and reason. Attributed actors are not authenticated human approvals. See [headless MCP contracts](docs/MCP_ANALYSIS.md).
-
-For visual automation, `chromascope-mcp` hosts the desktop and keeps the original viewer and batch tools (31 tools). Change/export flags, roots and setup are in the [desktop MCP guide](docs/MCP.md) and [client example](examples/mcp-client.json).
 
 ```powershell
 python examples/mcp_targeted_workflow.py YOUR_TARGETED_REQUEST.json NEW_AI_DRAFT --server target/debug/chromascope-engine-mcp.exe --qc-rules YOUR_RULES.json
@@ -177,9 +201,10 @@ Raw acquisitions are preserved. Results retain units, parameters, kernel/runtime
 
 ```sh
 cargo fmt --all -- --check
+cargo clippy --locked --all-targets -- -D warnings
 cargo clippy --locked --all-targets --all-features -- -D warnings
-cargo check --locked --all-features
-cargo test --locked --all-features
+cargo test --locked
+cargo test --locked --features mcp
 cargo test --locked --no-default-features --features mcp-headless
 cargo build --locked --all-features --bins
 python tests/reference/verify_references.py NEW_REFERENCE_DIRECTORY
