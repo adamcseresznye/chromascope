@@ -380,9 +380,11 @@ pub(super) fn write_warnings_file(
     destination: &std::path::Path,
     warnings: &[String],
 ) -> Result<(), String> {
+    let path = destination.join("review-warnings.json");
     let text = serde_json::to_string_pretty(warnings).map_err(|e| e.to_string())?;
+    crate::atomic_write::write_atomic(&path, text).map_err(|e| e.to_string())?;
     // Recorded in the bundle's checksums, so the bundle still verifies with the warnings in it.
-    crate::delivery::add_bundle_file(destination, "review-warnings.json", text.as_bytes())
+    crate::delivery::record_bundle_file(destination, "review-warnings.json")
         .map_err(|e| e.to_string())
 }
 

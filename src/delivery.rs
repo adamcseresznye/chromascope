@@ -590,13 +590,23 @@ pub fn export(
 /// verifies. Used for what is only known after the export, such as the review warnings a
 /// scientist acknowledged. An existing file is never replaced.
 pub fn add_bundle_file(bundle: &Path, name: &str, bytes: &[u8]) -> Result<()> {
+    check_bundle_file_name(name)?;
+    write(bundle, name, bytes)?;
+    record_bundle_file(bundle, name)
+}
+fn check_bundle_file_name(name: &str) -> Result<()> {
     if name.is_empty() || name.contains(['/', '\\']) || name == "checksums.json" {
         return Err(EngineError::new(
             "invalid_parameters",
             "A bundle file name has no folders and is not checksums.json",
         ));
     }
-    write(bundle, name, bytes)?;
+    Ok(())
+}
+/// Records a file that was written into an exported bundle in `checksums.json` (a bundle
+/// without that file is left alone).
+pub fn record_bundle_file(bundle: &Path, name: &str) -> Result<()> {
+    check_bundle_file_name(name)?;
     let list = bundle.join("checksums.json");
     if list.exists() {
         let mut checksums: BTreeMap<String, String> =
