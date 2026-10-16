@@ -1,6 +1,7 @@
 //! User preferences kept on this computer in one `settings.json` next to the other app files:
 //! theme, interface size and how many decimals an on-screen m/z shows. Exports and stored
-//! data always keep full precision. A missing, partial or unreadable file means defaults.
+//! data always keep full precision. A missing, partial or unreadable file means defaults, and a
+//! field that cannot be read costs only that field: the others in the file are kept.
 
 use crate::validation::MassTolerance;
 use eframe::egui;
@@ -79,10 +80,32 @@ impl Settings {
     }
 }
 
+/// Reads each field on its own, so one bad value (a hand-edit, or a setting written by a newer
+/// version) does not reset the others. Out-of-range numbers are clamped by `sanitised`.
 fn parse(bytes: &[u8]) -> Settings {
-    serde_json::from_slice::<Settings>(bytes)
-        .unwrap_or_default()
-        .sanitised()
+    let defaults = Settings::default();
+    let Ok(serde_json::Value::Object(file)) = serde_json::from_slice(bytes) else {
+        return defaults;
+    };
+    let theme = file
+        .get("theme")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or(defaults.theme);
+    let mz_decimals = file
+        .get("mz_decimals")
+        .and_then(serde_json::Value::as_f64)
+        .filter(|n| n.is_finite())
+        .map_or(defaults.mz_decimals, |n| n.clamp(0.0, 255.0) as u8);
+    let zoom = file
+        .get("zoom")
+        .and_then(serde_json::Value::as_f64)
+        .map_or(defaults.zoom, |n| n as f32);
+    Settings {
+        mz_decimals,
+        theme,
+        zoom,
+    }
+    .sanitised()
 }
 
 fn path() -> Option<PathBuf> {
@@ -174,11 +197,35 @@ mod tests {
     }
 
     #[test]
+    fn one_unreadable_field_does_not_reset_the_others() {
+        let s = parse(br#"{"mz_decimals":5,"theme":"purple","zoom":"big"}"#);
+        assert_eq!(
+            (s.mz_decimals, s.theme, s.zoom),
+            (5, ThemeChoice::System, 1.0)
+        );
+        let s = parse(br#"{"mz_decimals":"many","theme":"dark","zoom":1.2}"#);
+        assert_eq!(
+            (s.mz_decimals, s.theme, s.zoom),
+            (4, ThemeChoice::Dark, 1.2)
+        );
+        let s = parse(br#"{"mz_decimals":3,"theme":["light"],"zoom":null,"colour":"teal"}"#);
+        assert_eq!(
+            (s.mz_decimals, s.theme, s.zoom),
+            (3, ThemeChoice::System, 1.0)
+        );
+        // Not an object at all: defaults.
+        assert_eq!(parse(b"[1,2,3]"), Settings::default());
+        assert_eq!(parse(b"null"), Settings::default());
+    }
+
+    #[test]
     fn out_of_range_values_are_pulled_into_the_offered_choices() {
         let s = parse(br#"{"mz_decimals":9,"zoom":5.0}"#);
         assert_eq!(s.mz_decimals, 6);
         assert_eq!(s.zoom, 1.3);
         assert_eq!(parse(br#"{"mz_decimals":0}"#).mz_decimals, 2);
+        assert_eq!(parse(br#"{"mz_decimals":-3}"#).mz_decimals, 2);
+        assert_eq!(parse(br#"{"mz_decimals":300}"#).mz_decimals, 6);
     }
 
     #[test]
