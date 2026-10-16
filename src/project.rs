@@ -682,3 +682,187 @@ mod workspace_tests {
         fs::remove_dir_all(root).unwrap();
     }
 }
+
+#[cfg(test)]
+mod validation_tests {
+    use super::*;
+
+    fn hash(c: char) -> String {
+        c.to_string().repeat(64)
+    }
+
+    fn source() -> Source {
+        Source {
+            id: DatasetId::default(),
+            path: std::env::temp_dir().join("sample.mzML"),
+            sha256: hash('a'),
+            bytes: 1,
+        }
+    }
+
+    fn proposal() -> crate::proposals::Proposal {
+        crate::proposals::Proposal {
+            version: 1,
+            id: uuid::Uuid::new_v4(),
+            request: Request {
+                version: 1,
+                operation_id: OperationId::default(),
+                actor: "test".into(),
+                operation: Operation::Metadata,
+            },
+            expected_project_revision: Some(0),
+            before: serde_json::json!({}),
+            before_sha256: hash('b'),
+            proposed: serde_json::json!({}),
+            reason: "test".into(),
+            evidence: vec![],
+            events: vec![],
+            applied: None,
+        }
+    }
+
+    /// A project that passes every check, with one of everything the checks look at.
+    fn valid() -> Project {
+        let source = source();
+        let artifact = Artifact {
+            result_id: ResultId::default(),
+            dataset_id: source.id,
+            sha256: hash('c'),
+        };
+        Project {
+            schema_version: 1,
+            id: ProjectId::default(),
+            revision: 0,
+            sources: vec![source],
+            methods: vec![SavedMethod {
+                id: MethodId::default(),
+                method: Method::default(),
+                legacy_sha256: None,
+            }],
+            results: vec![artifact],
+            failures: vec![],
+            restored_from_revision: None,
+            agent_commits: vec![],
+            workspace_sha256: Some(hash('d')),
+            review_proposals: vec![proposal()],
+        }
+    }
+
+    fn rejected(project: &Project, expected: &str) {
+        let error = project.validate().expect_err(expected);
+        assert!(
+            error.to_string().contains(expected),
+            "expected {expected:?}, got {error}"
+        );
+    }
+
+    #[test]
+    fn a_consistent_project_validates() {
+        valid().validate().unwrap();
+    }
+
+    #[test]
+    fn schema_version_and_workspace_checksum_are_checked() {
+        let mut p = valid();
+        p.schema_version = 2;
+        assert_eq!(p.validate().unwrap_err().code, "unsupported_capability");
+        for bad in [
+            "",
+            "xyz",
+            &"a".repeat(63),
+            &"a".repeat(65),
+            &"A".repeat(64),
+            &"g".repeat(64),
+        ] {
+            let mut p = valid();
+            p.workspace_sha256 = Some(bad.to_owned());
+            rejected(&p, "Invalid workspace checksum");
+        }
+    }
+
+    #[test]
+    fn dataset_identities_must_be_unique_hashed_and_absolute() {
+        let mut p = valid();
+        p.sources.push(p.sources[0].clone());
+        rejected(&p, "dataset identity");
+        let mut p = valid();
+        p.sources[0].sha256 = "not a hash".into();
+        rejected(&p, "dataset identity");
+        let mut p = valid();
+        p.sources[0].path = PathBuf::from("relative/sample.mzML");
+        rejected(&p, "dataset identity");
+    }
+
+    #[test]
+    fn results_must_be_unique_hashed_and_refer_to_a_registered_dataset() {
+        let mut p = valid();
+        p.results.push(Artifact {
+            result_id: p.results[0].result_id,
+            dataset_id: p.results[0].dataset_id,
+            sha256: hash('c'),
+        });
+        rejected(&p, "result references");
+        let mut p = valid();
+        p.results[0].dataset_id = DatasetId::default();
+        rejected(&p, "result references");
+        let mut p = valid();
+        p.results[0].sha256 = hash('C');
+        rejected(&p, "result references");
+    }
+
+    #[test]
+    fn methods_and_proposals_must_be_unique_and_well_formed() {
+        let mut p = valid();
+        let id = p.methods[0].id;
+        p.methods.push(SavedMethod {
+            id,
+            method: Method::default(),
+            legacy_sha256: None,
+        });
+        rejected(&p, "Duplicate method identity");
+        let mut p = valid();
+        p.methods[0].method.name = String::new();
+        assert!(p.validate().is_err(), "a method that fails its own checks");
+        let mut p = valid();
+        p.review_proposals.push(p.review_proposals[0].clone());
+        rejected(&p, "proposal identity");
+        let mut p = valid();
+        p.review_proposals[0].before_sha256 = "short".into();
+        rejected(&p, "proposal identity");
+        let mut p = valid();
+        p.review_proposals[0].version = 2;
+        rejected(&p, "proposal identity");
+    }
+
+    #[test]
+    fn commit_and_open_refuse_an_inconsistent_project_and_keep_history_intact() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("project");
+        let mut project = Project::create(&root).unwrap();
+        project.sources.push(source());
+        project.sources.push(project.sources[0].clone());
+        let error = project.commit(&root, 0).unwrap_err();
+        assert!(error.to_string().contains("dataset identity"), "{error}");
+        assert_eq!(project.revision, 0, "a refused commit keeps the revision");
+        let revisions = fs::read_dir(&root)
+            .unwrap()
+            .filter(|e| {
+                e.as_ref()
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("revision-")
+            })
+            .count();
+        assert_eq!(revisions, 1, "no second revision was written");
+        // A revision file that was edited by hand to hold two identical datasets is not opened.
+        let path = root.join("revision-00000000000000000000.json");
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let s = serde_json::to_value(source()).unwrap();
+        value["sources"] = serde_json::json!([s, s]);
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        let error = Project::open(&root).err().expect("open must fail");
+        assert!(error.to_string().contains("dataset identity"), "{error}");
+    }
+}
