@@ -782,6 +782,11 @@ fn measurements_csv(rows: &[Measurement]) -> String {
     }
     csv
 }
+/// The text of the measurements file (what Export CSV in the Integration results writes).
+#[cfg(feature = "mcp")]
+pub(super) fn measurements_csv_text(app: &MzViewerApp) -> String {
+    measurements_csv(&app.workspace.measurements)
+}
 pub(super) fn results(app: &mut MzViewerApp, ctx: &Context) {
     let mut open = ctx
         .data(|d| d.get_temp::<bool>(egui::Id::new("results_open")))

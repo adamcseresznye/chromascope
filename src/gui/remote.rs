@@ -874,6 +874,7 @@ impl MzViewerApp {
         let changes = matches!(
             c,
             Command::SelectDataset { .. }
+                | Command::ClearDisplay { .. }
                 | Command::ImportResults { .. }
                 | Command::ShowWorkspace { .. }
                 | Command::RemoveMeasurement { .. }
@@ -1081,6 +1082,13 @@ impl MzViewerApp {
             }
             Command::ExportResults { kind, path } => files::export_results(self, b, &kind, &path)?,
             Command::ImportResults { kind, path } => files::import_results(self, b, &kind, &path)?,
+            Command::ClearDisplay { what } => ops::clear_display(self, &what)?,
+            Command::ExportMeasurements { path } => {
+                let path = b.policy.output_as(&path, "csv")?;
+                let csv = workspace::measurements_csv_text(self);
+                crate::atomic_write::write_atomic_new(&path, &csv).map_err(err)?;
+                json!({"path":path,"measurements":self.workspace.measurements.len()})
+            }
             Command::ListPresets { directory } => files::list_presets(self, b, directory)?,
             Command::GetPreset { source } => files::get_preset(b, &source)?,
             Command::SavePreset { path, toml } => files::save_preset(self, b, &path, &toml)?,
@@ -1286,9 +1294,18 @@ impl MzViewerApp {
                 retention_time_range,
                 mz_range,
                 overlay,
+                reset,
             } => {
                 let rt = retention_time_range.map(range).transpose()?;
                 let mz = mz_range.map(range).transpose()?;
+                if reset {
+                    // The automatic view: what the Reset view command asks the plots for.
+                    self.workspace.bounds = None;
+                    self.workspace.spectrum_bounds = None;
+                    self.workspace.apply_bounds = false;
+                    self.workspace.apply_spectrum_bounds = false;
+                    ctx.data_mut(|d| d.insert_temp(egui::Id::new("reset_chromatograms"), true));
+                }
                 if let Some([a, z]) = rt {
                     let y = self.workspace.bounds.unwrap_or([[0.0, 0.0], [1.0, 1.0]]);
                     self.workspace.bounds = Some([[a, y[0][1]], [z, y[1][1]]]);

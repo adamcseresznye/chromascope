@@ -284,3 +284,27 @@ pub(super) fn show_workspace(
     super::super::workflow::go(app, ctx, destination);
     Ok(json!({"workspace":workspace,"stage":stage}))
 }
+
+/// Clears what the window shows, as the Clear spectrum and Clear batch preset commands do.
+pub(super) fn clear_display(app: &mut MzViewerApp, what: &str) -> Result<Value, String> {
+    match what {
+        "spectrum" => {
+            if let Some(file) = app.active_file_id.and_then(|id| app.files.get_mut(&id)) {
+                file.cache.mass_spectrum = None;
+            }
+            app.user_input.retention_time_ms_spectrum = None;
+            app.workspace.view.spectrum = false;
+        }
+        "batch_preset" => {
+            if app.async_state.is_processing {
+                return Err("An extraction is running; retry when it has finished".into());
+            }
+            app.presets.specs = None;
+            app.presets.applied.clear();
+            app.presets.failed.clear();
+            app.state_changed = StateChange::Unchanged;
+        }
+        _ => return Err("what: spectrum or batch_preset".into()),
+    }
+    Ok(json!({"cleared":what}))
+}

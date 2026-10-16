@@ -2349,3 +2349,131 @@ fn calibration_and_qc_results_are_exported_and_imported_over_mcp() {
         d.finish();
     }
 }
+
+#[test]
+fn view_reset_cleared_displays_and_the_measurements_file_work_over_mcp() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut desktop = Desktop::start(vec![temp.path().to_owned()], true, true, false);
+    let id = desktop.open_fixture();
+    desktop.tool(
+        "extract_chromatogram",
+        json!({"dataset_id":id,"kind":"tic","polarity":"positive","ms_level":1,"smoothing":0,"display":true}),
+    );
+    // Zoom, then return to the automatic view.
+    let zoomed = desktop.tool("set_view", json!({"retention_time_range":[0.5, 1.5]}));
+    assert!(!zoomed["chromatogram_bounds"].is_null());
+    let reset = desktop.tool("set_view", json!({"reset":true}));
+    assert!(
+        reset["chromatogram_bounds"].is_null() && reset["spectrum_bounds"].is_null(),
+        "{reset}"
+    );
+    assert_eq!(
+        desktop
+            .ctx
+            .data(|d| d.get_temp::<bool>(egui::Id::new("reset_chromatograms"))),
+        Some(true),
+        "the plots are asked to fit themselves again"
+    );
+    // A range given with the reset is applied after it.
+    let both = desktop.tool(
+        "set_view",
+        json!({"reset":true,"retention_time_range":[0.2, 0.9]}),
+    );
+    assert!(!both["chromatogram_bounds"].is_null());
+    // Clear the spectrum, then the shared batch preset.
+    desktop.tool(
+        "spectrum",
+        json!({"dataset_id":id,"index":0,"display":true,"offset":0,"limit":5}),
+    );
+    assert!(desktop.app.files[&(id as usize)]
+        .cache
+        .mass_spectrum
+        .is_some());
+    desktop.tool("clear_display", json!({"what":"spectrum"}));
+    assert!(desktop.app.files[&(id as usize)]
+        .cache
+        .mass_spectrum
+        .is_none());
+    assert!(!desktop.app.workspace.view.spectrum);
+    let preset = include_str!("../../../presets/example.toml");
+    desktop.tool("apply_preset", json!({"toml":preset}));
+    assert!(desktop.app.presets.specs.is_some());
+    desktop.pump_until(10, |d| !d.app.async_state.is_processing);
+    desktop.tool("clear_display", json!({"what":"batch_preset"}));
+    assert!(desktop.app.presets.specs.is_none());
+    let error = desktop.tool_error("clear_display", json!({"what":"everything"}));
+    assert!(
+        error["message"].as_str().unwrap().contains("what:"),
+        "{error}"
+    );
+    // The measurements as a file, never over an existing one (the preset replaced the trace on
+    // screen, so show the TIC again before integrating it).
+    desktop.tool(
+        "extract_chromatogram",
+        json!({"dataset_id":id,"kind":"tic","polarity":"positive","ms_level":1,"smoothing":0,"display":true}),
+    );
+    let data = desktop.tool(
+        "chromatogram_data",
+        json!({"dataset_id":id,"offset":0,"limit":10000}),
+    );
+    let points: Vec<[f64; 2]> = serde_json::from_value(data["points"].clone()).unwrap();
+    let (a, m, z) = (
+        points[0][0],
+        points[points.len() / 2][0],
+        points[points.len() - 1][0],
+    );
+    for (start, end) in [(a, m), (m, z)] {
+        desktop.tool(
+            "integrate",
+            json!({"dataset_id":id,"start_minutes":start,"end_minutes":end,"apply":true}),
+        );
+    }
+    let path = temp.path().join("areas.csv");
+    let saved = desktop.tool("export_measurements", json!({"path":path}));
+    assert_eq!(saved["measurements"], 2);
+    let csv = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        csv.starts_with("file,source,trace,start_rt_min,end_rt_min,area_au_min"),
+        "{csv}"
+    );
+    assert_eq!(csv.lines().count(), 3);
+    let again = desktop.tool_error("export_measurements", json!({"path":path}));
+    assert!(
+        again["message"]
+            .as_str()
+            .unwrap()
+            .contains("already exists"),
+        "{again}"
+    );
+    let wrong = desktop.tool_error(
+        "export_measurements",
+        json!({"path":temp.path().join("areas.txt")}),
+    );
+    assert!(
+        wrong["message"].as_str().unwrap().contains(".csv"),
+        "{wrong}"
+    );
+    // Permissions.
+    let mut guarded = Desktop::start(vec![temp.path().to_owned()], false, false, false);
+    assert!(
+        guarded.tool_error("clear_display", json!({"what":"spectrum"}))["message"]
+            .as_str()
+            .unwrap()
+            .contains("--allow-changes")
+    );
+    assert!(guarded.tool_error(
+        "export_measurements",
+        json!({"path":temp.path().join("g.csv")})
+    )["message"]
+        .as_str()
+        .unwrap()
+        .contains("--allow-exports"));
+    assert!(
+        guarded.tool_error("set_view", json!({"reset":true}))["message"]
+            .as_str()
+            .unwrap()
+            .contains("--allow-changes")
+    );
+    desktop.finish();
+    guarded.finish();
+}

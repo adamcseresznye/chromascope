@@ -135,6 +135,8 @@ pub enum Command {
         retention_time_range: Option<[f64; 2]>,
         mz_range: Option<[f64; 2]>,
         overlay: Option<bool>,
+        #[serde(default)]
+        reset: bool,
     },
     SetVisibility {
         dataset_id: DatasetRef,
@@ -185,6 +187,12 @@ pub enum Command {
     },
     ImportResults {
         kind: String,
+        path: String,
+    },
+    ClearDisplay {
+        what: String,
+    },
+    ExportMeasurements {
         path: String,
     },
     Measurements {},
@@ -803,6 +811,10 @@ pub struct SetViewArgs {
     pub retention_time_range: Option<[f64; 2]>,
     pub mz_range: Option<[f64; 2]>,
     pub overlay: Option<bool>,
+    /// Restore the automatic view of the chromatograms and the spectrum, as Reset view does;
+    /// ranges given in the same call are applied afterwards.
+    #[serde(default)]
+    pub reset: bool,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -1201,7 +1213,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Zoom the plots: set the retention-time range (minutes), the m/z range and/or switch overlay mode. Use it to frame a region before chromatogram_image or spectrum_image; it changes what the person sees, not any data. Requires --allow-changes.",
+        description = "Zoom the plots: set the retention-time range (minutes), the m/z range and/or switch overlay mode, or with reset=true return to the automatic view (the Reset view and Reset zoom commands). Zoom in or out, and pan, by giving the range you want. Use it to frame a region before chromatogram_image or spectrum_image; it changes what the person sees, not any data. Requires --allow-changes.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -1213,11 +1225,13 @@ impl McpServer {
             retention_time_range,
             mz_range,
             overlay,
+            reset,
         } = args;
         self.dispatch(Command::SetView {
             retention_time_range,
             mz_range,
             overlay,
+            reset,
         })
         .await
     }
@@ -1594,6 +1608,36 @@ impl McpServer {
             path: args.path,
         })
         .await
+    }
+    #[tool(
+        description = "Clear something the window is showing: the mass spectrum (what Clear spectrum does: the spectrum panel is hidden and the chromatograms get the space) or the shared batch preset (what Clear batch preset does: traces are no longer extracted for every sample from one preset). Datasets, measurements and results stay. Requires --allow-changes; fails while an extraction runs.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn clear_display(
+        &self,
+        Parameters(args): Parameters<ClearDisplayArgs>,
+    ) -> CallToolResult {
+        self.dispatch(Command::ClearDisplay { what: args.what })
+            .await
+    }
+    #[tool(
+        description = "Save the window's integration measurements (file, trace, start and end in minutes, area, parameters) as a new CSV file, the file the Integration results window's Export CSV writes. Use it to hand the person the areas you recorded with integrate. Requires --allow-exports; the path must be a new .csv file inside an --allow-root, and existing files are never overwritten.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn export_measurements(
+        &self,
+        Parameters(args): Parameters<ExportMeasurementsArgs>,
+    ) -> CallToolResult {
+        self.dispatch(Command::ExportMeasurements { path: args.path })
+            .await
     }
     #[tool(
         description = "Build the audit package of a project in a new folder, as Export audit package does: a readable report.html, the machine-readable evidence (revisions, results, CSV, SVG) and checksums.json, optionally with the raw sources. Open warnings in the window (unresolved peaks, unreviewed results, failed QC) stop the export until acknowledge_warnings is true; they are then saved in the bundle as review-warnings.json. Runs in the background and replies when done. Requires --allow-exports; the destination must be a new folder inside an --allow-root, existing folders are never overwritten.",
@@ -1980,6 +2024,20 @@ pub struct ImportResultsArgs {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct ClearDisplayArgs {
+    /// `spectrum` (clear the shown mass spectrum and give the chromatograms the space) or
+    /// `batch_preset` (stop sharing one preset's traces across the batch).
+    pub what: String,
+}
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExportMeasurementsArgs {
+    /// New .csv file inside an --allow-root.
+    pub path: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct BuildBundleArgs {
     /// New folder to create inside an --allow-root; it must not exist.
     pub destination: String,
@@ -2187,6 +2245,8 @@ mod tests {
         "save_preset",
         "build_bundle",
         "set_settings",
+        "clear_display",
+        "export_measurements",
         "export_results",
         "import_results",
         "show_workspace",
@@ -2217,7 +2277,7 @@ mod tests {
     #[test]
     fn tool_descriptions_are_unique_nonempty_and_annotated() {
         let tools = McpServer::tool_router().list_all();
-        assert_eq!(tools.len(), 58, "58 typed tools; workbench is not listed");
+        assert_eq!(tools.len(), 60, "60 typed tools; workbench is not listed");
         assert!(
             tools.iter().all(|t| t.name != "workbench"),
             "workbench duplicated the typed tools and must not be listed"
@@ -2308,11 +2368,11 @@ mod tests {
             let discovered=rpc(&mut write,&mut read,json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}})).await;
             let listed=discovered["result"]["tools"].as_array().unwrap();
             let desktop=McpServer::tool_router().list_all();
-            assert_eq!(desktop.len(),58);
+            assert_eq!(desktop.len(),60);
             assert!(desktop.iter().all(|d|listed.iter().any(|t|t["name"]==d.name.as_ref())),"every viewer tool is listed");
             let engine=crate::engine_mcp::EngineMcp::new(vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))]).unwrap().tool_names();
             let visible=engine.iter().filter(|n|crate::EXPERIMENTAL||!matches!(n.as_str(),"start_untargeted"|"untargeted_status"|"cancel_untargeted"|"untargeted_features")).count();
-            assert_eq!(listed.len(),58+visible,"viewer tools plus the shared engine tools");
+            assert_eq!(listed.len(),60+visible,"viewer tools plus the shared engine tools");
             assert!(listed.iter().all(|t|t["name"]!="workbench"));
             assert!(listed.iter().all(|t|t["annotations"]["readOnlyHint"].is_boolean()&&t["annotations"]["destructiveHint"].is_boolean()),"every tool must carry both hints on the wire");
             let find=|name:&str|listed.iter().find(|t|t["name"]==name).unwrap();
