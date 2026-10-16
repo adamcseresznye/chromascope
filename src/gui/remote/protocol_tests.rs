@@ -1862,3 +1862,160 @@ fn display_preferences_are_read_and_changed_over_mcp() {
     desktop.finish();
     read_only.finish();
 }
+
+#[test]
+fn the_viewer_tools_that_predate_the_parity_work_run_over_the_protocol() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut desktop = Desktop::start(vec![temp.path().to_owned()], true, true, false);
+    let id = desktop.open_fixture();
+    let tic = |smoothing: u8| json!({"dataset_id":id,"kind":"tic","polarity":"positive","ms_level":1,"smoothing":smoothing,"display":true});
+    // Choosing the dataset, then showing a trace.
+    let selected = desktop.tool("select_dataset", json!({"dataset_id":id}));
+    assert_eq!(selected["active_dataset_id"], id);
+    // Selecting a dataset makes the window extract its default trace, as it does for a person.
+    desktop.pump_until(10, |d| {
+        !d.app.async_state.is_processing && d.app.state_changed == StateChange::Unchanged
+    });
+    desktop.tool("extract_chromatogram", tic(0));
+    // How it is drawn and framed.
+    let display = desktop.tool(
+        "set_display",
+        json!({"compare_samples":false,"intensity_scale":"shared_highest","line_width":3.0}),
+    );
+    assert_eq!(display["line_width"], 3.0, "{display}");
+    let data = desktop.tool(
+        "chromatogram_data",
+        json!({"dataset_id":id,"offset":0,"limit":10000}),
+    );
+    let points: Vec<[f64; 2]> = serde_json::from_value(data["points"].clone()).unwrap();
+    let (first, last) = (points[0][0], points[points.len() - 1][0]);
+    let view = desktop.tool(
+        "set_view",
+        json!({"retention_time_range":[first, last],"overlay":true}),
+    );
+    assert_eq!(view["overlay"], true);
+    assert_eq!(
+        desktop.tool("set_visibility", json!({"dataset_id":id,"visible":false}))["visible"],
+        false
+    );
+    assert_eq!(
+        desktop.tool("set_visibility", json!({"dataset_id":id,"visible":true}))["visible"],
+        true
+    );
+    // Scans and spectra.
+    let scans = desktop.tool("list_scans", json!({"dataset_id":id,"offset":0,"limit":3}));
+    assert_eq!(scans["scans"].as_array().unwrap().len(), 3);
+    let scan = desktop.tool("scan_metadata", json!({"dataset_id":id,"index":0}));
+    assert_eq!(scan["index"], 0);
+    let spectrum = desktop.tool(
+        "spectrum",
+        json!({"dataset_id":id,"index":0,"display":true,"offset":0,"limit":5}),
+    );
+    assert_eq!(spectrum["points"].as_array().unwrap().len(), 5);
+    // Pictures of what the window shows.
+    for tool in ["chromatogram_image", "spectrum_image"] {
+        let reply = desktop.call(tool, json!({}));
+        let content = reply["result"]["content"].as_array().unwrap();
+        assert!(
+            content.iter().any(|c| c["type"] == "image"),
+            "{tool}: no image"
+        );
+    }
+    // Integrate, list, undo.
+    desktop.tool(
+        "integrate",
+        json!({"dataset_id":id,"start_minutes":first,"end_minutes":last,"apply":true}),
+    );
+    assert_eq!(
+        desktop.tool("measurements", json!({}))["measurements"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    desktop.tool("undo_integration", json!({}));
+    assert_eq!(
+        desktop.tool("measurements", json!({}))["measurements"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+    // A second extraction retains the first, which select_trace brings back.
+    desktop.tool("extract_chromatogram", tic(3));
+    // The window's own default extraction (before the explicit one) is retained as well; the
+    // one to bring back is the unsmoothed positive TIC with points.
+    let retained = desktop.tool("gui_state", json!({}))["retained_traces"][0]["traces"].clone();
+    let wanted = retained
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["parameters"]["smoothing"] == 0 && t["point_count"].as_u64().unwrap() > 0)
+        .unwrap()["trace_index"]
+        .as_u64()
+        .unwrap();
+    let back = desktop.tool(
+        "select_trace",
+        json!({"dataset_id":id,"trace_index":wanted}),
+    );
+    assert_eq!(back["parameters"]["smoothing"], 0, "{back}");
+    let after = desktop.tool(
+        "chromatogram_data",
+        json!({"dataset_id":id,"offset":0,"limit":10000}),
+    );
+    assert_eq!(
+        after["total"], data["total"],
+        "the retained trace is back with all its points"
+    );
+    // Exports: numbers and figures, never over an existing file.
+    for (tool, arguments, name) in [
+        (
+            "export_csv",
+            json!({"dataset_id":id,"spectrum":false}),
+            "trace.csv",
+        ),
+        (
+            "export_csv",
+            json!({"dataset_id":id,"spectrum":true}),
+            "spectrum.csv",
+        ),
+        ("export_figure", json!({"spectrum":false}), "trace.svg"),
+        ("export_figure", json!({"spectrum":true}), "spectrum.svg"),
+    ] {
+        let mut arguments = arguments;
+        arguments["path"] = json!(temp.path().join(name));
+        desktop.tool(tool, arguments.clone());
+        let written = std::fs::read(temp.path().join(name)).unwrap();
+        assert!(
+            written.len() > 50,
+            "{name}: {}",
+            String::from_utf8_lossy(&written)
+        );
+        let again = desktop.tool_error(tool, arguments);
+        assert!(
+            again["message"]
+                .as_str()
+                .unwrap()
+                .contains("already exists"),
+            "{again}"
+        );
+    }
+    // Quantification: results, export, cancel, reset.
+    let method = fixture_method(&mut desktop, id, "Older tools");
+    run_batch(&mut desktop, id, &method);
+    let csv = temp.path().join("batch.csv");
+    desktop.tool("export_quantification", json!({"path":csv}));
+    assert!(std::fs::read_to_string(&csv)
+        .unwrap()
+        .contains("method_toml"));
+    assert_eq!(
+        desktop.tool("cancel_quantification", json!({}))["cancellation_requested"],
+        true
+    );
+    let reset = desktop.tool("reset_quantification", json!({"result_index":0}));
+    assert_eq!(
+        reset["results"][0]["peak"],
+        reset["results"][0]["automatic"]
+    );
+    desktop.finish();
+}
