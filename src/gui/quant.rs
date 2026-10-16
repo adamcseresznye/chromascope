@@ -525,7 +525,7 @@ fn serde_name<T: Serialize>(value: &T) -> String {
 }
 fn csv(results: &[Measurement], method: &Method) -> String {
     fn cell(s: &str) -> String {
-        format!("\"{}\"", s.replace('"', "\"\""))
+        crate::csv_text::cell(s)
     }
     let mut out = "sample,source,run,analyte,method_name,status,needs_recalculation,review_state,confidence_score,confidence_tier,confidence_flags,area_intensity_min,apex_rt_min,start_rt_min,end_rt_min,height,acquisition,ms_level,polarity,target_mz,ppm,mda,precursor_mz,mz_range,baseline,area_source,algorithm,diagnostic,method_toml\n".to_owned();
     let fresh = fresh(method);
@@ -2768,6 +2768,31 @@ mod tests {
             "\"Missing\",\"true\",\"Not reviewed\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\""
         ));
         assert!(output.contains("\"straight_line\",\"unsmoothed\",\"classic\""));
+    }
+    #[test]
+    fn csv_neutralises_formula_names_but_keeps_negative_numbers() {
+        let mut hostile = result();
+        hostile.sample = "=HYPERLINK(\"http://example.invalid\",\"x\")".into();
+        hostile.analyte = "@SUM(A1:A9)".into();
+        hostile.run = "+cmd|' /C calc'!A0".into();
+        hostile.source = "-2+3".into();
+        hostile
+            .peak
+            .as_mut()
+            .expect("the helper result has a peak")
+            .area = -5.25;
+        let output = csv(&[hostile], &method());
+        assert!(output.contains("\"'=HYPERLINK("), "{output}");
+        assert!(output.contains("\"'@SUM(A1:A9)\""));
+        assert!(output.contains("\"'+cmd|"));
+        assert!(output.contains("\"'-2+3\""));
+        // A negative area is data, not a formula.
+        assert!(output.contains("\"-5.25\""));
+        assert!(!output.contains("'-5.25"));
+        // Nothing starts a cell with a bare formula character.
+        for bad in [",\"=", ",\"@", ",\"+c", ",\"-2"] {
+            assert!(!output.contains(bad), "{bad}");
+        }
     }
     fn sample(app: &mut MzViewerApp, id: usize) {
         let path = PathBuf::from("test_file/data_dependent_02.mzML");

@@ -479,6 +479,33 @@ fn shared_engine_cli_review_export_no_overwrite() {
     );
 }
 
+#[test]
+fn csv_cells_that_look_like_formulas_are_neutralised_in_both_targeted_tables() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut request = raw_request(temp.path());
+    request.samples[6].id = "=HYPERLINK(\"http://example.invalid\",\"x\")".into();
+    request.samples[7].id = "@SUM(A1:A9)".into();
+    let batch = run(request, &JobControl::default()).unwrap();
+    for (name, table) in [
+        ("concentrations", csv(&batch).unwrap()),
+        ("calibration", calibration_csv(&batch).unwrap()),
+    ] {
+        if name == "concentrations" {
+            assert!(table.contains("\"'=HYPERLINK("), "{table}");
+            assert!(table.contains("\"'@SUM(A1:A9)\""), "{table}");
+        }
+        for line in table.lines() {
+            for bad in [",\"=", ",\"@"] {
+                assert!(!line.contains(bad), "{name}: {line}");
+            }
+            assert!(
+                !line.starts_with("\"=") && !line.starts_with("\"@"),
+                "{line}"
+            );
+        }
+    }
+}
+
 include!("fixtures/targeted_support.rs");
 #[test]
 fn raw_mzml_to_reviewed_concentrations_via_engine_and_cli() {

@@ -1451,7 +1451,7 @@ pub fn review(
 pub fn csv(batch: &BatchResult) -> Result<String> {
     verify(batch)?;
     let mut out=String::from("sample,target,state,response,injected_concentration,concentration,unit,dilution,accuracy_percent,reviewed,flags,role,injection_order,nominal_concentration,response_unit,qualifier_ratios\n");
-    let quote = |s: String| format!("\"{}\"", s.replace('"', "\"\""));
+    let quote = |s: String| crate::csv_text::cell(&s);
     let number = |n: Option<f64>| n.map(|v| v.to_string()).unwrap_or_default();
     for r in &batch.results {
         let target = batch
@@ -1503,7 +1503,7 @@ pub fn csv(batch: &BatchResult) -> Result<String> {
 /// Independent table of standard fits/residuals; full configuration and lineage stay in JSON.
 pub fn calibration_csv(batch: &BatchResult) -> Result<String> {
     verify(batch)?;
-    let quote = |s: &str| format!("\"{}\"", s.replace('"', "\"\""));
+    let quote = crate::csv_text::cell;
     let num = |x: Option<f64>| x.map(|v| v.to_string()).unwrap_or_default();
     let mut out=String::from("target,sample,nominal,unit,response,weight,fitted,residual,back_calculated,accuracy_percent,flags\n");
     for (id, model) in &batch.calibrations {

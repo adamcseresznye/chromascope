@@ -720,7 +720,7 @@ pub fn observations_csv(report: &Report) -> Result<String> {
     verify(report)?;
     let mut out = "feature_id,mz,aligned_rt_seconds,sample_id,state,intensity_area_seconds,flags\n"
         .to_string();
-    let quote = |s: &str| format!("\"{}\"", s.replace('"', "\"\""));
+    let quote = crate::csv_text::cell;
     for f in &report.features {
         for c in &f.cells {
             let state = serde_json::to_value(&c.state).unwrap();
@@ -775,7 +775,7 @@ pub fn csv(report: &Report) -> Result<String> {
 }
 pub fn matrix_csv(report: &Report, included_only: bool) -> Result<String> {
     verify(report)?;
-    let quote = |s: &str| format!("\"{}\"", s.replace('"', "\"\""));
+    let quote = crate::csv_text::cell;
     let mut out = "feature_id,mz,aligned_rt_seconds,filter_state,flags".to_string();
     for sample in &report.config.samples {
         out.push_str(&format!(

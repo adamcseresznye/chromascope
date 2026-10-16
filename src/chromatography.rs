@@ -906,7 +906,7 @@ pub fn revise(
 /// stages and full provenance remain in the JSON analysis/batch artifact.
 pub fn peaks_csv(analyses: &[Analysis]) -> String {
     let mut out=String::from("trace,revision,reviewed,segment,start_min,end_min,apex_min,height,prominence,fwhm_min,area_intensity_min,snr,flags\n");
-    let quote = |s: &str| format!("\"{}\"", s.replace('"', "\"\""));
+    let quote = crate::csv_text::cell;
     for a in analyses {
         for p in a.peaks() {
             out.push_str(&format!(

@@ -762,7 +762,7 @@ pub(super) fn record(app: &mut MzViewerApp) {
     }
 }
 fn csv_field(s: &str) -> String {
-    format!("\"{}\"", s.replace('"', "\"\""))
+    crate::csv_text::cell(s)
 }
 fn measurements_csv(rows: &[Measurement]) -> String {
     let mut csv =
@@ -1713,6 +1713,12 @@ mod tests {
         assert!(csv.contains("endpoint chord"));
         assert!(csv.contains("483"));
         assert!(csv.contains("\"\"mass\"\""));
+        // File, source and trace names come from files on disk and from AI clients.
+        app.workspace.measurements[0].file = "=cmd|' /C calc'!A0".into();
+        app.workspace.measurements[0].trace = "@SUM(1+1)".into();
+        let csv = measurements_csv(&app.workspace.measurements);
+        assert!(csv.contains("\"'=cmd|"), "{csv}");
+        assert!(csv.contains("\"'@SUM(1+1)\""), "{csv}");
     }
     #[test]
     fn session_restores_trace_to_new_file_id_and_keeps_selection() {

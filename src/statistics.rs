@@ -546,7 +546,7 @@ pub fn verify_response(response: &crate::engine::Response) -> Result<()> {
 pub fn export_csv(report: &Report) -> Result<String> {
     verify(report)?;
     fn quote(s: &str) -> String {
-        format!("\"{}\"", s.replace('"', "\"\""))
+        crate::csv_text::cell(s)
     }
     fn number(n: Option<f64>) -> String {
         n.map(|v| v.to_string()).unwrap_or_default()

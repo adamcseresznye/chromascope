@@ -926,7 +926,7 @@ pub fn execute_operation(
 /// Candidate export is evidence, not a list of automatically identified compounds.
 pub fn candidates_csv(report: &SearchReport) -> Result<String> {
     verify_report(report)?;
-    let quote = |text: &str| format!("\"{}\"", text.replace('"', "\"\""));
+    let quote = crate::csv_text::cell;
     let mut csv=String::from("report_id,library_name,library_version,source_url,library_sha256,license,accession,name,precursor_error_ppm,cosine,matched_fragments,matched_query_intensity_fraction,precursor_tolerance,precursor_tolerance_unit,fragment_tolerance,fragment_tolerance_unit,current_confidence,annotation_reason,compatibility_warnings\n");
     for c in &report.candidates {
         let e = &report.library.entries[c.entry_index];

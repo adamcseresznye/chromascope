@@ -12,6 +12,7 @@ pub mod annotation;
 pub mod atomic_write;
 pub mod chromatography;
 pub mod confidence;
+pub mod csv_text;
 pub mod delivery;
 pub mod domain;
 pub mod engine;

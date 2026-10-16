@@ -583,7 +583,7 @@ pub fn csv(ledger: &Ledger) -> Result<String> {
         out.push_str(
             &fields
                 .iter()
-                .map(|s| format!("\"{}\"", s.replace('"', "\"\"")))
+                .map(|s| crate::csv_text::cell(s))
                 .collect::<Vec<_>>()
                 .join(","),
         );

@@ -235,3 +235,29 @@ fn the_audit_package_has_one_name_in_the_tab_the_window_and_the_workflow() {
     // Being optional is a status of the workflow step, not part of the name.
     assert!(workflow.contains("Optional. Export a readable report"));
 }
+
+#[test]
+fn every_csv_text_cell_goes_through_the_formula_safe_helper() {
+    // Ad-hoc quoting (`s.replace('"', "\"\"")`) cannot neutralise a leading "=" or "@", so the
+    // only place allowed to double quotes for CSV is the helper itself.
+    fn walk(dir: &Path, hits: &mut Vec<String>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                walk(&path, hits);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                let text = fs::read_to_string(&path).unwrap();
+                if text.contains("replace('\"', \"\\\"\\\"\")") && !path.ends_with("csv_text.rs") {
+                    hits.push(path.display().to_string());
+                }
+            }
+        }
+    }
+    let mut hits = Vec::new();
+    walk(&root().join("src"), &mut hits);
+    assert!(
+        hits.is_empty(),
+        "quote CSV cells with csv_text::cell instead: {hits:?}"
+    );
+    assert!(read("src/csv_text.rs").contains("pub fn cell("));
+}

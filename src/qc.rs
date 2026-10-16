@@ -820,7 +820,7 @@ pub fn review(
 }
 pub fn csv(report: &Report) -> Result<String> {
     verify(report)?;
-    let quote = |s: &str| format!("\"{}\"", s.replace('"', "\"\""));
+    let quote = crate::csv_text::cell;
     let mut out="rule,target,metric,status,value,unit,lower,upper,n,required,calculation,reason,evidence_json,statistics_json,observations_json,batch_status,review_pending,rule_json,calibration_json,report_id\n".to_string();
     for d in &report.decisions {
         out.push_str(&format!(

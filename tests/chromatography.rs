@@ -497,7 +497,16 @@ fn truncated_width_is_missing_and_between_scan_area_is_exact() {
     assert!(m.peaks()[0].flags.contains(&"truncated_half_height".into()));
     close(m.peaks()[0].area_intensity_minutes, 4.375, 1e-12, 0.0);
     assert_eq!(m.peaks()[0].apex_minutes, 1.0);
-    assert!(peaks_csv(&[m]).contains("4.375"));
+    assert!(peaks_csv(std::slice::from_ref(&m)).contains("4.375"));
+    // A trace named like a formula is text in the spreadsheet, not a formula.
+    let mut hostile = m;
+    hostile.raw.name = "=HYPERLINK(\"http://example.invalid\")".into();
+    let table = peaks_csv(&[hostile]);
+    assert!(table.contains("\"'=HYPERLINK("), "{table}");
+    assert!(!table.contains(
+        "
+\"="
+    ));
     let big = process(
         Trace::from_points(
             "overflow".into(),
