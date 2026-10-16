@@ -1229,7 +1229,7 @@ mod compact_header_tests {
                         "View",
                         "Data explorer",
                         "Quantification and QC",
-                        "Audit package",
+                        super::super::workflow::AUDIT_PACKAGE,
                         "AI activity",
                     ]
                     .into_iter()

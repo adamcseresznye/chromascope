@@ -17,7 +17,7 @@ pub fn navigation(app: &mut MzViewerApp, ui: &mut egui::Ui) {
     const IDENTIFICATION: usize = 2;
     const UNTARGETED: usize = 3;
     const STATISTICS: usize = 4;
-    const REPORTS: usize = 5;
+    const AUDIT: usize = 5;
     const ACTIVITY: usize = 6;
     let destinations: Vec<(usize, &str)> = [
         (DATA, "Data explorer"),
@@ -25,7 +25,7 @@ pub fn navigation(app: &mut MzViewerApp, ui: &mut egui::Ui) {
         (IDENTIFICATION, "Identification"),
         (UNTARGETED, "Untargeted analysis"),
         (STATISTICS, "Statistics"),
-        (REPORTS, "Audit package"),
+        (AUDIT, super::workflow::AUDIT_PACKAGE),
         (ACTIVITY, "AI activity"),
     ]
     .into_iter()
@@ -42,7 +42,7 @@ pub fn navigation(app: &mut MzViewerApp, ui: &mut egui::Ui) {
     } else if crate::EXPERIMENTAL && app.statistics.open {
         STATISTICS
     } else if app.delivery.open {
-        REPORTS
+        AUDIT
     } else if ui
         .ctx()
         .data(|d| d.get_temp::<bool>(egui::Id::new("activity_open")))
@@ -85,7 +85,7 @@ pub fn navigation(app: &mut MzViewerApp, ui: &mut egui::Ui) {
     app.spectral.open = selected == IDENTIFICATION;
     app.untargeted.open = selected == UNTARGETED;
     app.statistics.open = selected == STATISTICS;
-    app.delivery.open = selected == REPORTS;
+    app.delivery.open = selected == AUDIT;
     ui.ctx().data_mut(|d| {
         d.insert_temp(egui::Id::new("activity_open"), selected == ACTIVITY);
         d.insert_temp(egui::Id::new("central_workspaces"), true);
@@ -1124,7 +1124,7 @@ mod keyboard_contract_tests {
         let _ = ctx.run(
             egui::RawInput {
                 events: vec![egui::Event::Key {
-                    // Experimental tabs are hidden by default: Alt+3 is then Reports.
+                    // Experimental tabs are hidden by default: Alt+3 is then the audit package.
                     key: if crate::EXPERIMENTAL {
                         egui::Key::Num4
                     } else {

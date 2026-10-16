@@ -185,3 +185,53 @@ fn package_metadata_feeds_the_deb_and_rpm_packages() {
             .is_some_and(|d| d.len() > description.len())
     );
 }
+
+fn gui_sources() -> Vec<(String, String)> {
+    fn walk(dir: &Path, out: &mut Vec<(String, String)>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                let text = fs::read_to_string(&path).unwrap().replace("\r\n", "\n");
+                out.push((path.display().to_string(), text));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(&root().join("src/gui"), &mut out);
+    out.push(("src/gui/mod.rs".into(), read("src/gui/mod.rs")));
+    out
+}
+
+#[test]
+fn the_audit_package_has_one_name_in_the_tab_the_window_and_the_workflow() {
+    let sources = gui_sources();
+    let all: String = sources.iter().map(|(_, text)| text.as_str()).collect();
+    for old in [
+        "Audit package (optional)",
+        "Report and audit package",
+        "\"Reports\"",
+    ] {
+        assert!(
+            !all.contains(old),
+            "{old:?} is no longer a name of this tab"
+        );
+    }
+    // The literal exists once, as the constant every place uses.
+    assert_eq!(all.matches("\"Audit package\"").count(), 1);
+    let workflow = read("src/gui/workflow.rs");
+    assert!(workflow.contains("const AUDIT_PACKAGE: &str = \"Audit package\";"));
+    for user in [
+        "src/gui/delivery.rs",
+        "src/gui/workbench.rs",
+        "src/gui/panels.rs",
+    ] {
+        assert!(
+            read(user).contains("AUDIT_PACKAGE"),
+            "{user} must use the constant"
+        );
+    }
+    // Being optional is a status of the workflow step, not part of the name.
+    assert!(workflow.contains("Optional. Export a readable report"));
+}

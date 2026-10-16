@@ -32,7 +32,7 @@ pub(super) enum Destination {
     Untargeted,
     Statistics,
     /// Audit package workspace.
-    Reports,
+    AuditPackage,
     Activity,
     /// Project dialogs; these do not change the visible workspace.
     OpenProject,
@@ -63,6 +63,10 @@ pub(super) struct StepStatus {
 /// Steps that make up the analysis proper; the last step (audit package) is optional.
 const REQUIRED_STEPS: usize = 7;
 
+/// The one name of the audit-package workspace: its tab, its window and its workflow step.
+/// Whether the step is optional is shown as a status on the step, never as part of the name.
+pub(super) const AUDIT_PACKAGE: &str = "Audit package";
+
 const TITLES: [&str; 8] = [
     "Project",
     "Import data",
@@ -71,7 +75,7 @@ const TITLES: [&str; 8] = [
     "Calibration and concentrations",
     "Batch QC",
     "Review results",
-    "Report and audit package (optional)",
+    AUDIT_PACKAGE,
 ];
 
 /// Switch the visible workspace, preserving project, dataset, analyte, and
@@ -111,7 +115,7 @@ pub(super) fn go(app: &mut MzViewerApp, ctx: &egui::Context, destination: Destin
     app.spectral.open = destination == Destination::Identify;
     app.untargeted.open = destination == Destination::Untargeted;
     app.statistics.open = destination == Destination::Statistics;
-    app.delivery.open = destination == Destination::Reports;
+    app.delivery.open = destination == Destination::AuditPackage;
     ctx.data_mut(|d| {
         d.insert_temp(
             egui::Id::new("activity_open"),
@@ -121,7 +125,7 @@ pub(super) fn go(app: &mut MzViewerApp, ctx: &egui::Context, destination: Destin
     if destination == Destination::OpenData {
         super::panels::handle_file_selection(app);
     }
-    if destination == Destination::Reports && app.project.has_project() {
+    if destination == Destination::AuditPackage && app.project.has_project() {
         let root = std::path::PathBuf::from(app.project.root_label());
         app.delivery.set_project_if_empty(&root);
     }
@@ -312,11 +316,11 @@ pub(super) fn steps(app: &MzViewerApp) -> Vec<StepStatus> {
         title: TITLES[7],
         state: Pending,
         detail: if has_project {
-            "Export a readable report and the evidence behind it to a new folder.".into()
+            "Optional. Export a readable report and the evidence behind it to a new folder.".into()
         } else {
-            "Needs a project: create or open one in step 1.".into()
+            "Optional. Needs a project: create or open one in step 1.".into()
         },
-        actions: vec![("Open", D::Reports)],
+        actions: vec![("Open", D::AuditPackage)],
     };
     vec![
         project,
@@ -568,10 +572,8 @@ mod tests {
         let list = steps(&app);
         assert_eq!(list.len(), REQUIRED_STEPS + 1);
         assert_eq!(list.first().unwrap().number, 1);
-        assert_eq!(
-            list.last().unwrap().title,
-            "Report and audit package (optional)"
-        );
+        assert_eq!(list.last().unwrap().title, AUDIT_PACKAGE);
+        assert!(list.last().unwrap().detail.starts_with("Optional."));
         // An empty workspace starts at the project step, which offers create and open.
         assert_eq!(current_step(&list), Some(1));
         let labels: Vec<_> = list[0].actions.iter().map(|a| a.0).collect();
@@ -604,7 +606,7 @@ mod tests {
         go(&mut app, &ctx, Destination::Data);
         assert!(!app.quant.active);
         assert_eq!(app.active_file_id, Some(7));
-        go(&mut app, &ctx, Destination::Reports);
+        go(&mut app, &ctx, Destination::AuditPackage);
         assert!(app.delivery.open && !app.quant.active);
     }
 

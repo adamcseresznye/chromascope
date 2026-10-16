@@ -77,7 +77,7 @@ pub(super) fn show(app: &mut super::MzViewerApp, ctx: &egui::Context) {
         }
     }
     let mut open = app.delivery.open;
-    super::workbench::analytical_panel(ctx, "Audit package (optional)", &mut open, |ui| {
+    super::workbench::analytical_panel(ctx, super::workflow::AUDIT_PACKAGE, &mut open, |ui| {
         release_review(app, ctx, ui);
         ui.add_space(8.0);
         let s = &mut app.delivery;
