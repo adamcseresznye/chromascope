@@ -152,6 +152,18 @@ impl UiState {
     pub(super) fn qc_panel(&mut self, ui: &mut egui::Ui) {
         super::qc::panel(&mut self.qc, self.history.get(self.current_batch), ui);
     }
+    #[cfg(feature = "mcp")]
+    pub(super) fn batches(&self) -> &[crate::targeted::BatchResult] {
+        &self.history
+    }
+    #[cfg(feature = "mcp")]
+    pub(super) fn qc_reports(&self) -> &[crate::qc::Report] {
+        self.qc.reports()
+    }
+    #[cfg(feature = "mcp")]
+    pub(super) fn selected_qc(&self) -> Option<&crate::qc::Report> {
+        self.qc.selected_report()
+    }
     pub(super) fn qc_report_count(&self) -> usize {
         self.qc.report_count()
     }

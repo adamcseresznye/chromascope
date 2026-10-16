@@ -26,6 +26,14 @@ impl State {
         self.selected = self.reports.len() - 1;
         Ok(())
     }
+    #[cfg(feature = "mcp")]
+    pub(super) fn reports(&self) -> &[qc::Report] {
+        &self.reports
+    }
+    #[cfg(feature = "mcp")]
+    pub(super) fn selected_report(&self) -> Option<&qc::Report> {
+        self.reports.get(self.selected)
+    }
     pub(super) fn report_count(&self) -> usize {
         self.reports.len()
     }

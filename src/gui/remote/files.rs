@@ -236,3 +236,117 @@ pub(super) fn load_batch(
         "note":"Datasets reopen in the background; list_datasets shows them when loaded.",
     }))
 }
+
+pub(super) fn export_results(
+    app: &MzViewerApp,
+    b: &GuiBridge,
+    kind: &str,
+    path: &str,
+) -> Result<Value, String> {
+    let (extension, bytes) = match kind {
+        "concentrations_csv" | "calibration_csv" => {
+            let batch = app
+                .quant
+                .latest_targeted()
+                .ok_or("The Quantification tab holds no calibration run")?;
+            let csv = if kind == "calibration_csv" {
+                crate::targeted::calibration_csv(batch)
+            } else {
+                crate::targeted::csv(batch)
+            }
+            .map_err(|e| e.to_string())?;
+            ("csv", csv.into_bytes())
+        }
+        "targeted_history_json" => {
+            let history = app.quant.remote_batches();
+            if history.is_empty() {
+                return Err("The Quantification tab holds no calibration run".into());
+            }
+            ("json", serde_json::to_vec_pretty(history).map_err(err)?)
+        }
+        "qc_csv" | "qc_evidence_json" => {
+            let report = app
+                .quant
+                .remote_selected_qc()
+                .ok_or("The Quantification tab holds no QC report")?;
+            if kind == "qc_csv" {
+                (
+                    "csv",
+                    crate::qc::csv(report).map_err(|e| e.to_string())?.into_bytes(),
+                )
+            } else {
+                ("json", serde_json::to_vec_pretty(report).map_err(err)?)
+            }
+        }
+        "qc_history_json" => {
+            let reports = app.quant.remote_qc_reports();
+            if reports.is_empty() {
+                return Err("The Quantification tab holds no QC report".into());
+            }
+            ("json", serde_json::to_vec_pretty(reports).map_err(err)?)
+        }
+        _ => {
+            return Err("kind: concentrations_csv, calibration_csv, targeted_history_json, qc_csv, qc_evidence_json or qc_history_json".into())
+        }
+    };
+    let path = b.policy.output_as(path, extension)?;
+    crate::atomic_write::write_atomic_new(&path, &bytes).map_err(err)?;
+    Ok(json!({"kind":kind,"path":path,"bytes":bytes.len()}))
+}
+
+pub(super) fn import_results(
+    app: &mut MzViewerApp,
+    b: &GuiBridge,
+    kind: &str,
+    path: &str,
+) -> Result<Value, String> {
+    if !matches!(kind, "targeted_history_json" | "qc_history_json") {
+        return Err("kind: targeted_history_json or qc_history_json".into());
+    }
+    let path = b.policy.file(path, "json")?;
+    if std::fs::metadata(&path).map_err(err)?.len() > 256 * 1024 * 1024 {
+        return Err("The file is larger than 256 MiB".into());
+    }
+    let text = std::fs::read_to_string(&path).map_err(err)?;
+    // Check everything before retaining anything.
+    let mut added = 0;
+    if kind == "targeted_history_json" {
+        let batches: Vec<crate::targeted::BatchResult> =
+            serde_json::from_str(&text).map_err(|e| format!("Not a targeted history: {e}"))?;
+        if batches.is_empty() {
+            return Err("The targeted history is empty".into());
+        }
+        for batch in &batches {
+            crate::targeted::verify(batch).map_err(|e| e.to_string())?;
+        }
+        let before = app.quant.remote_batches().len();
+        for batch in batches {
+            app.quant.retain_targeted(batch)?;
+        }
+        added = app.quant.remote_batches().len() - before;
+    } else {
+        let reports: Vec<crate::qc::Report> =
+            match serde_json::from_str::<Vec<crate::qc::Report>>(&text) {
+                Ok(reports) => reports,
+                Err(_) => vec![serde_json::from_str(&text)
+                    .map_err(|e| format!("Not a QC history or report: {e}"))?],
+            };
+        if reports.is_empty() {
+            return Err("The QC history is empty".into());
+        }
+        for report in &reports {
+            crate::qc::verify(report).map_err(|e| e.to_string())?;
+        }
+        for report in reports {
+            app.quant.retain_qc(report)?;
+            added += 1;
+        }
+    }
+    Ok(json!({
+        "kind":kind,
+        "path":path,
+        "added":added,
+        "runs":app.quant.remote_batches().len(),
+        "qc_reports":app.quant.remote_qc_reports().len(),
+    }))
+}

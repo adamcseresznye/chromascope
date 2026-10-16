@@ -874,6 +874,7 @@ impl MzViewerApp {
         let changes = matches!(
             c,
             Command::SelectDataset { .. }
+                | Command::ImportResults { .. }
                 | Command::ShowWorkspace { .. }
                 | Command::RemoveMeasurement { .. }
                 | Command::ClearIntegration {}
@@ -1078,6 +1079,8 @@ impl MzViewerApp {
             Command::ShowWorkspace { workspace, stage } => {
                 ops::show_workspace(self, ctx, &workspace, stage.as_deref())?
             }
+            Command::ExportResults { kind, path } => files::export_results(self, b, &kind, &path)?,
+            Command::ImportResults { kind, path } => files::import_results(self, b, &kind, &path)?,
             Command::ListPresets { directory } => files::list_presets(self, b, directory)?,
             Command::GetPreset { source } => files::get_preset(b, &source)?,
             Command::SavePreset { path, toml } => files::save_preset(self, b, &path, &toml)?,

@@ -1997,6 +1997,19 @@ pub(super) fn remote_reset(app: &mut MzViewerApp, index: usize) -> Result<(), St
     Ok(())
 }
 
+/// What the Quantification tab holds, for the export and import tools.
+#[cfg(feature = "mcp")]
+impl QuantState {
+    pub(super) fn remote_batches(&self) -> &[crate::targeted::BatchResult] {
+        self.targeted.batches()
+    }
+    pub(super) fn remote_qc_reports(&self) -> &[crate::qc::Report] {
+        self.targeted.qc_reports()
+    }
+    pub(super) fn remote_selected_qc(&self) -> Option<&crate::qc::Report> {
+        self.targeted.selected_qc()
+    }
+}
 /// Saves the method as a new file: the one in the window, or `method_toml` after checking it.
 #[cfg(feature = "mcp")]
 pub(super) fn remote_save_method(

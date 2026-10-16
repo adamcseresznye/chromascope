@@ -179,6 +179,14 @@ pub enum Command {
         workspace: String,
         stage: Option<String>,
     },
+    ExportResults {
+        kind: String,
+        path: String,
+    },
+    ImportResults {
+        kind: String,
+        path: String,
+    },
     Measurements {},
     ListPresets {
         directory: Option<String>,
@@ -1552,6 +1560,42 @@ impl McpServer {
         .await
     }
     #[tool(
+        description = "Write the calibration and QC results shown in the Quantification tab to a new file, as the Export menus of its calibration and QC stages do: concentrations or calibration as CSV, QC as CSV or JSON, or every run or QC report with its review history as JSON. Use it to give the person a file of what start_analysis computed. Fails when the tab holds no such result. Requires --allow-exports; the path must be a new file inside an --allow-root, and existing files are never overwritten.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn export_results(
+        &self,
+        Parameters(args): Parameters<ExportResultsArgs>,
+    ) -> CallToolResult {
+        self.dispatch(Command::ExportResults {
+            kind: args.kind,
+            path: args.path,
+        })
+        .await
+    }
+    #[tool(
+        description = "Load saved calibration runs or QC reports into the Quantification tab, as Open targeted history and Open study / report do. Every run and report is checked against its own evidence (checksums, calculations) first and nothing is added if one fails; runs already in the tab are not added twice. Use it to bring back results saved with export_results. Requires --allow-changes; the file must be a .json file inside an --allow-root.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn import_results(
+        &self,
+        Parameters(args): Parameters<ImportResultsArgs>,
+    ) -> CallToolResult {
+        self.dispatch(Command::ImportResults {
+            kind: args.kind,
+            path: args.path,
+        })
+        .await
+    }
+    #[tool(
         description = "Build the audit package of a project in a new folder, as Export audit package does: a readable report.html, the machine-readable evidence (revisions, results, CSV, SVG) and checksums.json, optionally with the raw sources. Open warnings in the window (unresolved peaks, unreviewed results, failed QC) stop the export until acknowledge_warnings is true; they are then saved in the bundle as review-warnings.json. Runs in the background and replies when done. Requires --allow-exports; the destination must be a new folder inside an --allow-root, existing folders are never overwritten.",
         annotations(
             read_only_hint = false,
@@ -1916,6 +1960,26 @@ pub struct ShowWorkspaceArgs {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct ExportResultsArgs {
+    /// `concentrations_csv` or `calibration_csv` (the latest calibration run),
+    /// `targeted_history_json` (every run with its reviews), `qc_csv` or `qc_evidence_json`
+    /// (the selected QC report), `qc_history_json` (every QC report).
+    pub kind: String,
+    /// New file inside an --allow-root: .csv for the CSV kinds, .json for the JSON kinds.
+    pub path: String,
+}
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ImportResultsArgs {
+    /// `targeted_history_json` (a file written by export_results or Save targeted history) or
+    /// `qc_history_json` (a QC history or a single QC report).
+    pub kind: String,
+    /// Existing .json file inside an --allow-root.
+    pub path: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct BuildBundleArgs {
     /// New folder to create inside an --allow-root; it must not exist.
     pub destination: String,
@@ -2123,6 +2187,8 @@ mod tests {
         "save_preset",
         "build_bundle",
         "set_settings",
+        "export_results",
+        "import_results",
         "show_workspace",
         "remove_measurement",
         "clear_integration",
@@ -2151,7 +2217,7 @@ mod tests {
     #[test]
     fn tool_descriptions_are_unique_nonempty_and_annotated() {
         let tools = McpServer::tool_router().list_all();
-        assert_eq!(tools.len(), 56, "56 typed tools; workbench is not listed");
+        assert_eq!(tools.len(), 58, "58 typed tools; workbench is not listed");
         assert!(
             tools.iter().all(|t| t.name != "workbench"),
             "workbench duplicated the typed tools and must not be listed"
@@ -2242,11 +2308,11 @@ mod tests {
             let discovered=rpc(&mut write,&mut read,json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}})).await;
             let listed=discovered["result"]["tools"].as_array().unwrap();
             let desktop=McpServer::tool_router().list_all();
-            assert_eq!(desktop.len(),56);
+            assert_eq!(desktop.len(),58);
             assert!(desktop.iter().all(|d|listed.iter().any(|t|t["name"]==d.name.as_ref())),"every viewer tool is listed");
             let engine=crate::engine_mcp::EngineMcp::new(vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))]).unwrap().tool_names();
             let visible=engine.iter().filter(|n|crate::EXPERIMENTAL||!matches!(n.as_str(),"start_untargeted"|"untargeted_status"|"cancel_untargeted"|"untargeted_features")).count();
-            assert_eq!(listed.len(),56+visible,"viewer tools plus the shared engine tools");
+            assert_eq!(listed.len(),58+visible,"viewer tools plus the shared engine tools");
             assert!(listed.iter().all(|t|t["name"]!="workbench"));
             assert!(listed.iter().all(|t|t["annotations"]["readOnlyHint"].is_boolean()&&t["annotations"]["destructiveHint"].is_boolean()),"every tool must carry both hints on the wire");
             let find=|name:&str|listed.iter().find(|t|t["name"]==name).unwrap();

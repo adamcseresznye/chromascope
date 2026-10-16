@@ -2161,3 +2161,191 @@ fn the_window_can_be_switched_between_workspaces_over_mcp() {
     desktop.finish();
     read_only.finish();
 }
+
+/// A window whose Quantification tab holds a calibration run and a failing QC report.
+fn window_with_results(temp: &std::path::Path, exports: bool) -> Desktop {
+    let batch = raw_request(temp);
+    let source = batch.samples[0].source.clone();
+    let mut desktop = Desktop::start(vec![temp.to_owned()], true, exports, false);
+    let started = desktop.tool(
+        "start_analysis",
+        json!({"path":source,"request":start_request(crate::domain::Operation::TargetedBatch{batch})}),
+    );
+    let job = started["job_id"].as_str().unwrap().to_owned();
+    wait_for_job(&mut desktop, &job);
+    desktop.pump_until(10, |d| d.app.quant.has_targeted_batch());
+    let report = desktop.tool(
+        "prepare_analysis_report",
+        json!({"job_ids":[job],"explanation":"test"}),
+    );
+    let response = report["bundle"]["artifacts"][0]["response"].clone();
+    let batch: crate::targeted::BatchResult =
+        serde_json::from_value(response["output"]["batch"].clone()).unwrap();
+    let rule: crate::qc::Rule = serde_json::from_value(json!({"id":"strict_accuracy","target":"a","group":null,"role":"qc","batch":null,"metric":"accuracy","lower":99.9,"upper":100.1,"minimum_n":2,"required":true,"reference_group":null,"calibration":null})).unwrap();
+    let qc = desktop.tool(
+        "start_analysis",
+        json!({"path":source,"request":start_request(crate::domain::Operation::EvaluateTargetedQc{batch:Box::new(batch),rules:vec![rule]})}),
+    );
+    let qc_job = qc["job_id"].as_str().unwrap().to_owned();
+    wait_for_job(&mut desktop, &qc_job);
+    desktop.pump_until(10, |d| d.app.quant.qc_report_count() == 1);
+    desktop
+}
+
+#[test]
+fn calibration_and_qc_results_are_exported_and_imported_over_mcp() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut desktop = window_with_results(temp.path(), true);
+    // Every kind the window's export menus write.
+    let mut written = std::collections::BTreeMap::new();
+    for (kind, file) in [
+        ("concentrations_csv", "concentrations.csv"),
+        ("calibration_csv", "calibration.csv"),
+        ("targeted_history_json", "targeted.json"),
+        ("qc_csv", "qc.csv"),
+        ("qc_evidence_json", "qc-evidence.json"),
+        ("qc_history_json", "qc-history.json"),
+    ] {
+        let path = temp.path().join(file);
+        let reply = desktop.tool("export_results", json!({"kind":kind,"path":path}));
+        assert!(reply["bytes"].as_u64().unwrap() > 20, "{kind}: {reply}");
+        written.insert(kind, std::fs::read_to_string(&path).unwrap());
+    }
+    assert!(written["concentrations_csv"].contains("ng/mL"));
+    assert!(written["calibration_csv"].lines().count() > 1);
+    assert!(
+        written["qc_csv"].to_lowercase().contains("fail"),
+        "{}",
+        written["qc_csv"]
+    );
+    let history: Value = serde_json::from_str(&written["targeted_history_json"]).unwrap();
+    assert_eq!(history.as_array().unwrap().len(), 1);
+    // Never over an existing file; the extension matches the kind; unknown kinds are refused.
+    let again = desktop.tool_error(
+        "export_results",
+        json!({"kind":"qc_csv","path":temp.path().join("qc.csv")}),
+    );
+    assert!(
+        again["message"]
+            .as_str()
+            .unwrap()
+            .contains("already exists"),
+        "{again}"
+    );
+    let wrong = desktop.tool_error(
+        "export_results",
+        json!({"kind":"qc_csv","path":temp.path().join("qc.json")}),
+    );
+    assert!(
+        wrong["message"].as_str().unwrap().contains(".csv"),
+        "{wrong}"
+    );
+    let unknown = desktop.tool_error(
+        "export_results",
+        json!({"kind":"everything","path":temp.path().join("x.csv")}),
+    );
+    assert!(
+        unknown["message"].as_str().unwrap().contains("kind:"),
+        "{unknown}"
+    );
+    // Another window loads the saved runs and reports; running the import twice adds nothing.
+    let mut other = Desktop::start(vec![temp.path().to_owned()], true, false, false);
+    let loaded = other.tool(
+        "import_results",
+        json!({"kind":"targeted_history_json","path":temp.path().join("targeted.json")}),
+    );
+    assert_eq!(
+        (loaded["added"].as_u64(), loaded["runs"].as_u64()),
+        (Some(1), Some(1)),
+        "{loaded}"
+    );
+    let twice = other.tool(
+        "import_results",
+        json!({"kind":"targeted_history_json","path":temp.path().join("targeted.json")}),
+    );
+    assert_eq!(twice["added"], 0);
+    let qc = other.tool(
+        "import_results",
+        json!({"kind":"qc_history_json","path":temp.path().join("qc-history.json")}),
+    );
+    assert_eq!(qc["qc_reports"], 1);
+    // A single report file is accepted as a history of one.
+    let single = other.tool(
+        "import_results",
+        json!({"kind":"qc_history_json","path":temp.path().join("qc-evidence.json")}),
+    );
+    assert_eq!(single["qc_reports"], 2);
+    assert!(other.app.quant.has_targeted_batch() && other.app.quant.qc_report_count() == 2);
+    // The restored run is the same run.
+    let restored = other.app.quant.latest_targeted().unwrap();
+    assert_eq!(serde_json::to_value(restored).unwrap(), history[0]);
+    // A tampered history is refused as a whole and nothing is retained.
+    let mut tampered = history.clone();
+    let result = tampered[0]["results"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|r| r["concentration"].is_number())
+        .unwrap();
+    result["concentration"] = json!(123456.789);
+    std::fs::write(
+        temp.path().join("tampered.json"),
+        serde_json::to_vec(&tampered).unwrap(),
+    )
+    .unwrap();
+    let mut victim = Desktop::start(vec![temp.path().to_owned()], true, false, false);
+    let error = victim.tool_error(
+        "import_results",
+        json!({"kind":"targeted_history_json","path":temp.path().join("tampered.json")}),
+    );
+    assert!(error["message"].is_string(), "{error}");
+    assert!(!victim.app.quant.has_targeted_batch());
+    for (kind, file) in [
+        ("targeted_history_json", "qc.csv"),
+        ("targeted_history_json", "qc-history.json"),
+        ("qc_history_json", "targeted.json"),
+    ] {
+        let path = temp.path().join(file);
+        let error = victim.tool_error("import_results", json!({"kind":kind,"path":path}));
+        assert!(error["message"].is_string(), "{kind} {file}: {error}");
+    }
+    assert!(!victim.app.quant.has_targeted_batch() && victim.app.quant.qc_report_count() == 0);
+    // Nothing to export from an empty tab; permissions.
+    let empty = victim.tool_error(
+        "export_results",
+        json!({"kind":"concentrations_csv","path":temp.path().join("e.csv")}),
+    );
+    assert!(
+        empty["message"]
+            .as_str()
+            .unwrap()
+            .contains("holds no calibration run"),
+        "{empty}"
+    );
+    let denied = other.tool_error(
+        "export_results",
+        json!({"kind":"qc_csv","path":temp.path().join("denied.csv")}),
+    );
+    assert!(
+        denied["message"]
+            .as_str()
+            .unwrap()
+            .contains("--allow-exports"),
+        "{denied}"
+    );
+    let mut guarded = Desktop::start(vec![temp.path().to_owned()], false, false, false);
+    let error = guarded.tool_error(
+        "import_results",
+        json!({"kind":"qc_history_json","path":temp.path().join("qc-history.json")}),
+    );
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("--allow-changes"),
+        "{error}"
+    );
+    for d in [desktop, other, victim, guarded] {
+        d.finish();
+    }
+}
