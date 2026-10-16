@@ -195,6 +195,11 @@ pub enum Command {
     ExportMeasurements {
         path: String,
     },
+    /// Read-only listing and reading of the MCP resources (not offered as tools).
+    ListResources {},
+    ReadResource {
+        uri: String,
+    },
     Measurements {},
     ListPresets {
         directory: Option<String>,
@@ -1895,6 +1900,71 @@ impl ServerHandler for McpServer {
         listed.tools = tools;
         Ok(listed)
     }
+    async fn list_resources(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> std::result::Result<ListResourcesResult, rmcp::ErrorData> {
+        let reply = self.dispatch(Command::ListResources {}).await;
+        let listing = reply.structured_content.unwrap_or(Value::Null);
+        let resources = listing["resources"]
+            .as_array()
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| {
+                        Some(
+                            Resource::new(item["uri"].as_str()?, item["name"].as_str()?)
+                                .with_description(item["description"].as_str().unwrap_or_default())
+                                .with_mime_type("application/json"),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok(ListResourcesResult::with_all_items(resources))
+    }
+    async fn list_resource_templates(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> std::result::Result<ListResourceTemplatesResult, rmcp::ErrorData> {
+        Ok(ListResourceTemplatesResult::with_all_items(
+            crate::gui::remote::resource_templates()
+                .iter()
+                .map(|(uri, name, description)| {
+                    ResourceTemplate::new(*uri, *name)
+                        .with_description(*description)
+                        .with_mime_type("application/json")
+                })
+                .collect(),
+        ))
+    }
+    async fn read_resource(
+        &self,
+        request: ReadResourceRequestParams,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> std::result::Result<ReadResourceResponse, rmcp::ErrorData> {
+        let reply = self
+            .dispatch(Command::ReadResource {
+                uri: request.uri.clone(),
+            })
+            .await;
+        if reply.is_error == Some(true) {
+            let message = reply
+                .structured_content
+                .as_ref()
+                .and_then(|v| v["message"].as_str())
+                .unwrap_or("The resource cannot be read")
+                .to_owned();
+            return Err(rmcp::ErrorData::resource_not_found(message, None));
+        }
+        let value = reply.structured_content.unwrap_or(Value::Null);
+        Ok(ReadResourceResponse::Complete(ReadResourceResult::new(
+            vec![ResourceContents::text(value.to_string(), request.uri)
+                .with_mime_type("application/json")],
+        )))
+    }
     async fn list_prompts(
         &self,
         _request: Option<PaginatedRequestParams>,
@@ -1928,6 +1998,7 @@ impl ServerHandler for McpServer {
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_prompts()
+                .enable_resources()
                 .build(),
         )
             .with_server_info(Implementation::new("chromascope", env!("CARGO_PKG_VERSION")))

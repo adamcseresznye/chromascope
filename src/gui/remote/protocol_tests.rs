@@ -2166,7 +2166,7 @@ fn the_window_can_be_switched_between_workspaces_over_mcp() {
 fn window_with_results(temp: &std::path::Path, exports: bool) -> Desktop {
     let batch = raw_request(temp);
     let source = batch.samples[0].source.clone();
-    let mut desktop = Desktop::start(vec![temp.to_owned()], true, exports, false);
+    let mut desktop = Desktop::start(vec![temp.to_owned()], true, exports, true);
     let started = desktop.tool(
         "start_analysis",
         json!({"path":source,"request":start_request(crate::domain::Operation::TargetedBatch{batch})}),
@@ -2556,4 +2556,186 @@ fn the_six_workflow_recipes_are_offered_as_prompts() {
     let missing = desktop.rpc("prompts/get", json!({"name":"make_coffee"}));
     assert!(missing["error"].is_object(), "{missing}");
     desktop.finish();
+}
+
+fn read_resource(desktop: &mut Desktop, uri: &str) -> Value {
+    let reply = desktop.rpc("resources/read", json!({"uri":uri}));
+    assert!(reply["error"].is_null(), "{uri}: {reply}");
+    let content = &reply["result"]["contents"][0];
+    assert_eq!(content["uri"], uri);
+    assert_eq!(content["mimeType"], "application/json");
+    serde_json::from_str(content["text"].as_str().unwrap()).unwrap()
+}
+
+#[test]
+fn datasets_traces_results_qc_reports_and_project_revisions_are_readable_resources() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut desktop = window_with_results(temp.path(), true);
+    let id = desktop.open_fixture();
+    for smoothing in [0, 3] {
+        desktop.tool(
+            "extract_chromatogram",
+            json!({"dataset_id":id,"kind":"tic","polarity":"positive","ms_level":1,"smoothing":smoothing,"display":true}),
+        );
+    }
+    let hash = stable_ids(&mut desktop)
+        .into_iter()
+        .find(|(number, _)| *number == id)
+        .unwrap()
+        .1;
+    let hash = hash.trim_start_matches("sha256:").to_owned();
+    desktop.tool(
+        "create_project",
+        json!({"path":temp.path().join("study.json")}),
+    );
+    desktop.tool("set_layout", json!({"mode":"overlay"}));
+    assert_eq!(desktop.tool("save_project", json!({}))["revision"], 2);
+    let init = desktop.rpc("initialize", json!({"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"resources","version":"1"}}));
+    assert!(
+        init["result"]["capabilities"]["resources"].is_object(),
+        "{init}"
+    );
+    // The listing names what is there, with stable URIs.
+    let listed = desktop.rpc("resources/list", json!({}));
+    let uris: Vec<&str> = listed["result"]["resources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["uri"].as_str().unwrap())
+        .collect();
+    for expected in [
+        "chromascope://datasets".to_owned(),
+        format!("chromascope://dataset/{hash}"),
+        format!("chromascope://dataset/{hash}/traces"),
+        "chromascope://quantification".to_owned(),
+        "chromascope://quantification/run/0".to_owned(),
+        "chromascope://qc".to_owned(),
+        "chromascope://qc/0".to_owned(),
+        "chromascope://project".to_owned(),
+        "chromascope://project/revision/1".to_owned(),
+        "chromascope://project/revision/2".to_owned(),
+    ] {
+        assert!(
+            uris.contains(&expected.as_str()),
+            "{expected} missing from {uris:?}"
+        );
+    }
+    let templates = desktop.rpc("resources/templates/list", json!({}));
+    assert_eq!(
+        templates["result"]["resourceTemplates"]
+            .as_array()
+            .unwrap()
+            .len(),
+        5
+    );
+    // A dataset, by stable id and by number, is what dataset_metadata says.
+    let metadata = desktop.tool("dataset_metadata", json!({"dataset_id":id}));
+    let by_hash = read_resource(&mut desktop, &format!("chromascope://dataset/{hash}"));
+    let by_number = read_resource(&mut desktop, &format!("chromascope://dataset/{id}"));
+    assert_eq!(by_hash, metadata);
+    assert_eq!(by_number, metadata);
+    let datasets = read_resource(&mut desktop, "chromascope://datasets");
+    assert_eq!(
+        datasets["datasets"][0]["stable_id"],
+        format!("sha256:{hash}")
+    );
+    // The traces: the current one and the retained one, with their points.
+    let traces = read_resource(
+        &mut desktop,
+        &format!("chromascope://dataset/{hash}/traces"),
+    );
+    assert_eq!(traces["current"]["parameters"]["smoothing"], 3, "{traces}");
+    let retained = traces["retained"].as_array().unwrap();
+    assert!(retained
+        .iter()
+        .any(|t| t["parameters"]["smoothing"] == 0 && t["total_points"].as_u64().unwrap() > 0));
+    assert!(traces["current"]["points"].as_array().unwrap().len() <= 10_000);
+    // Calibration runs and QC reports are the very objects the tools export.
+    let history_file = temp.path().join("history.json");
+    desktop.tool(
+        "export_results",
+        json!({"kind":"targeted_history_json","path":history_file}),
+    );
+    let history: Value = serde_json::from_slice(&std::fs::read(&history_file).unwrap()).unwrap();
+    assert_eq!(
+        read_resource(&mut desktop, "chromascope://quantification/run/0"),
+        history[0]
+    );
+    let evidence_file = temp.path().join("qc.json");
+    desktop.tool(
+        "export_results",
+        json!({"kind":"qc_evidence_json","path":evidence_file}),
+    );
+    let evidence: Value = serde_json::from_slice(&std::fs::read(&evidence_file).unwrap()).unwrap();
+    assert_eq!(read_resource(&mut desktop, "chromascope://qc/0"), evidence);
+    let overview = read_resource(&mut desktop, "chromascope://quantification");
+    assert_eq!(overview["calibration_runs"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        overview["calibration_runs"][0]["results"],
+        history[0]["results"].as_array().unwrap().len()
+    );
+    assert_eq!(overview["qc_reports"], 1);
+    let qc = read_resource(&mut desktop, "chromascope://qc");
+    assert_eq!(qc["reports"][0]["status"], evidence["status"]);
+    // The project and its revisions, as stored.
+    let project = read_resource(&mut desktop, "chromascope://project");
+    assert_eq!(project["revision"], 2);
+    let stored = std::fs::read(
+        temp.path()
+            .join("study_data/revision-00000000000000000002.json"),
+    )
+    .unwrap();
+    assert_eq!(
+        read_resource(&mut desktop, "chromascope://project/revision/2"),
+        serde_json::from_slice::<Value>(&stored).unwrap()
+    );
+    let first = read_resource(&mut desktop, "chromascope://project/revision/1");
+    assert_eq!(first["revision"], 1);
+    // Anything else is "not found", not a guess.
+    for uri in [
+        "chromascope://dataset/99",
+        "chromascope://dataset/ffffffff",
+        "chromascope://quantification/run/9",
+        "chromascope://qc/9",
+        "chromascope://project/revision/0",
+        "chromascope://project/revision/3",
+        "chromascope://nothing",
+        "https://example.com/data",
+    ] {
+        let reply = desktop.rpc("resources/read", json!({"uri":uri}));
+        assert!(reply["error"].is_object(), "{uri} must fail: {reply}");
+    }
+    // Reading needs no permission flag, and a window without a project says so.
+    let mut plain = Desktop::start(vec![], false, false, false);
+    plain.open_fixture();
+    let listed = plain.rpc("resources/list", json!({}));
+    let plain_uris: Vec<&str> = listed["result"]["resources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["uri"].as_str().unwrap())
+        .collect();
+    assert!(
+        plain_uris.contains(&"chromascope://datasets")
+            && !plain_uris.contains(&"chromascope://project")
+    );
+    let none = plain.rpc("resources/read", json!({"uri":"chromascope://project"}));
+    assert!(
+        none["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("No project is open"),
+        "{none}"
+    );
+    // Reading is recorded in the AI activity log like any other request.
+    assert!(desktop
+        .app
+        .remote
+        .as_ref()
+        .unwrap()
+        .history
+        .iter()
+        .any(|e| e["request"]["operation"] == "read_resource"));
+    desktop.finish();
+    plain.finish();
 }

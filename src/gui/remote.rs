@@ -57,6 +57,11 @@ enum BackgroundResult {
     },
 }
 
+/// The URI templates of the resources, for the server's resource template listing.
+pub fn resource_templates() -> &'static [(&'static str, &'static str, &'static str)] {
+    resources::TEMPLATES
+}
+
 /// The stable id of one open dataset: the SHA-256 of its source file, computed off the window
 /// thread the first time the dataset is seen.
 pub(crate) enum StableState {
@@ -770,6 +775,14 @@ impl MzViewerApp {
         };
         Ok(CallToolResult::structured(value))
     }
+    /// File-level metadata of one dataset (the `dataset_metadata` tool and the dataset resource).
+    fn dataset_metadata_value(&self, dataset_id: usize) -> Result<Value, String> {
+        let f = self.files.get(&dataset_id).ok_or("Unknown dataset")?;
+        let d = f.data.bounds;
+        Ok(
+            json!({"dataset_id":dataset_id,"path":f.path,"scan_count":d.scan_count,"retention_time_minutes":[d.min_rt,d.max_rt],"mz_range":[d.min_mz,d.max_mz],"scan_filters":f.data.available_scan_filters.iter().map(|(ms,p,pre,lo,hi)|json!({"ms_level":ms,"polarity":format!("{p:?}"),"precursor_mz":pre,"mz_range":[lo,hi]})).collect::<Vec<_>>(),"has_spectra":f.data.has_spectra(),"chromatograms":f.data.available_chromatograms}),
+        )
+    }
     /// Adds the imported runs to the window and reports one outcome per requested input.
     fn register_imports(
         &mut self,
@@ -1089,6 +1102,8 @@ impl MzViewerApp {
                 crate::atomic_write::write_atomic_new(&path, &csv).map_err(err)?;
                 json!({"path":path,"measurements":self.workspace.measurements.len()})
             }
+            Command::ListResources {} => resources::list(self, b),
+            Command::ReadResource { uri } => resources::read(self, b, &uri)?,
             Command::ListPresets { directory } => files::list_presets(self, b, directory)?,
             Command::GetPreset { source } => files::get_preset(b, &source)?,
             Command::SavePreset { path, toml } => files::save_preset(self, b, &path, &toml)?,
@@ -1193,10 +1208,7 @@ impl MzViewerApp {
                 self.register_imports(imported)
             }
             Command::DatasetMetadata { dataset_id } => {
-                let dataset_id = dataset_id.index();
-                let f = self.files.get(&dataset_id).ok_or("Unknown dataset")?;
-                let d = f.data.bounds;
-                json!({"dataset_id":dataset_id,"path":f.path,"scan_count":d.scan_count,"retention_time_minutes":[d.min_rt,d.max_rt],"mz_range":[d.min_mz,d.max_mz],"scan_filters":f.data.available_scan_filters.iter().map(|(ms,p,pre,lo,hi)|json!({"ms_level":ms,"polarity":format!("{p:?}"),"precursor_mz":pre,"mz_range":[lo,hi]})).collect::<Vec<_>>(),"has_spectra":f.data.has_spectra(),"chromatograms":f.data.available_chromatograms})
+                self.dataset_metadata_value(dataset_id.index())?
             }
             Command::ScanMetadata { dataset_id, index } => {
                 let dataset_id = dataset_id.index();
@@ -1617,6 +1629,7 @@ mod ops;
 mod projects;
 #[cfg(test)]
 mod protocol_tests;
+mod resources;
 #[cfg(test)]
 mod tests {
     use super::*;
