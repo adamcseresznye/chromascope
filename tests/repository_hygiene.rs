@@ -261,3 +261,30 @@ fn every_csv_text_cell_goes_through_the_formula_safe_helper() {
     );
     assert!(read("src/csv_text.rs").contains("pub fn cell("));
 }
+
+#[test]
+fn window_titles_use_sentence_case() {
+    // Title Case is only for names: the app, a product or an acronym.
+    const NAMES: [&str; 3] = ["Chromascope", "LC-HRMS", "MS"];
+    let mut bad = Vec::new();
+    for (file, text) in gui_sources() {
+        for part in text.split("Window::new(\"").skip(1) {
+            let title = part.split('"').next().unwrap();
+            let shouted = title
+                .split_whitespace()
+                .skip(1)
+                .filter(|word| word.chars().next().is_some_and(char::is_uppercase))
+                .filter(|word| {
+                    !NAMES.contains(&word.trim_matches(|c: char| !c.is_alphanumeric() && c != '-'))
+                })
+                .count();
+            if shouted > 0 {
+                bad.push(format!("{file}: {title:?}"));
+            }
+        }
+    }
+    assert!(bad.is_empty(), "use sentence case: {bad:?}");
+    let all: String = gui_sources().into_iter().map(|(_, text)| text).collect();
+    assert!(all.contains("Window::new(\"Plot properties\")"));
+    assert!(all.contains("Window::new(\"m/z range filter\")"));
+}

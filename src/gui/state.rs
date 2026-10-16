@@ -293,7 +293,7 @@ pub struct MzViewerApp {
     pub(crate) integration: IntegrationState,
     /// Async machinery (background threads, channels)
     pub(crate) async_state: AsyncState,
-    /// Whether the Plot Properties window is open
+    /// Whether the Plot properties window is open
     pub(crate) plot_properties_open: bool,
     pub(super) presets: super::presets::PresetState,
     pub(super) workspace: super::workspace::Workspace,

@@ -279,7 +279,7 @@ pub fn render_range_window(app: &mut MzViewerApp, ctx: &egui::Context) {
 
     let mut error_message: Option<String> = None;
 
-    egui::Window::new("m/z Range Filter")
+    egui::Window::new("m/z range filter")
         .max_height((ctx.content_rect().height() - 60.0).max(120.0))
         .vscroll(true)
         .open(&mut app.user_input.range_window_open)
@@ -367,7 +367,7 @@ pub fn render_range_window(app: &mut MzViewerApp, ctx: &egui::Context) {
     }
 }
 
-/// Renders the Plot Properties window when open.
+/// Renders the Plot properties window when open.
 ///
 /// Uses a persistent `egui::Window` so that `ComboBox` dropdowns inside it
 /// don't close when clicked (unlike `context_menu` which closes on any click).
@@ -378,7 +378,7 @@ pub fn render_plot_properties_window(app: &mut MzViewerApp, ctx: &egui::Context)
     // Use a local copy for `.open()` to avoid a simultaneous mutable borrow
     // of `app` inside the closure (needed for `add_plot_properties`).
     let mut open = true;
-    egui::Window::new("Plot Properties")
+    egui::Window::new("Plot properties")
         .max_height((ctx.content_rect().height() - 60.0).max(120.0))
         .vscroll(true)
         .open(&mut open)

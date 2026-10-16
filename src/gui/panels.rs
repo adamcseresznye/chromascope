@@ -933,7 +933,7 @@ pub fn add_native_chromatogram_dropdown(app: &mut MzViewerApp, ui: &mut Ui) {
 }
 
 /// Shows the range enable checkbox and a “Set Range…” button inline in the
-/// Plot Properties grid. The actual TextEdit inputs live in a separate
+/// Plot properties grid. The actual TextEdit inputs live in a separate
 /// persistent window (`render_range_window`) because egui context menus close
 /// on any click, making TextEdit unusable inside them.
 pub fn add_range_options(app: &mut MzViewerApp, ui: &mut Ui) {
