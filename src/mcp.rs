@@ -113,6 +113,8 @@ pub enum Command {
         precursor_mz: Option<f64>,
         acquisition: Option<String>,
         #[serde(default)]
+        native_chromatogram: Option<usize>,
+        #[serde(default)]
         display: bool,
     },
     ChromatogramData {
@@ -597,9 +599,12 @@ pub struct SelectDatasetArgs {
 #[serde(deny_unknown_fields)]
 pub struct ExtractChromatogramArgs {
     pub dataset_id: DatasetRef,
+    /// `tic`, `bpc` or `xic`; `tic` for a stored chromatogram.
     pub kind: String,
+    /// `positive`, `negative` or `unknown`.
     pub polarity: String,
     pub ms_level: u8,
+    /// Smoothing level 0..10 (0 is none).
     pub smoothing: u8,
     pub mass: Option<f64>,
     /// XIC tolerance in ppm. Give this or `tolerance_mda`, not both.
@@ -610,6 +615,12 @@ pub struct ExtractChromatogramArgs {
     pub mz_range: Option<[f64; 2]>,
     pub precursor_mz: Option<f64>,
     pub acquisition: Option<String>,
+    /// Extract a chromatogram stored in the file (SRM/MRM transitions, a stored TIC) instead of
+    /// computing one from the spectra: the `index` of one of the `chromatograms` that
+    /// dataset_metadata lists. Only smoothing applies: give kind `tic`, and omit mass, tolerance, mz_range,
+    /// precursor_mz and acquisition.
+    #[serde(default)]
+    pub native_chromatogram: Option<usize>,
     #[serde(default)]
     pub display: bool,
 }
@@ -891,7 +902,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Return file-level metadata for one dataset: scan count, retention-time range in minutes, m/z range and the scan filters present (MS level, polarity, precursor m/z, m/z window). Use it to choose valid extraction parameters before extract_chromatogram. Read-only.",
+        description = "Return file-level metadata for one dataset: scan count, retention-time range in minutes, m/z range, the scan filters present (MS level, polarity, precursor m/z, m/z window) and the chromatograms stored in the file (index, label, SRM Q1/Q3, point count). Use it to choose valid extraction parameters before extract_chromatogram; pass a stored chromatogram's index as native_chromatogram. Read-only.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -940,7 +951,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Extract a TIC, BPC or XIC chromatogram from one dataset with the GUI's extraction code and keep the full-resolution result for chromatogram_data, integrate and export_csv. XIC needs mass plus tolerance_ppm or tolerance_mda; TIC/BPC take an optional mz_range; retention times are minutes. Read-only unless display=true, which shows the trace in the window and requires --allow-changes.",
+        description = "Extract a TIC, BPC or XIC chromatogram from one dataset with the GUI's extraction code, or with native_chromatogram a chromatogram stored in the file (SRM/MRM transitions), and keep the full-resolution result for chromatogram_data, integrate and export_csv. XIC needs mass plus tolerance_ppm or tolerance_mda; TIC/BPC take an optional mz_range; retention times are minutes. Read-only unless display=true, which shows the trace in the window and requires --allow-changes.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -963,6 +974,7 @@ impl McpServer {
             mz_range,
             precursor_mz,
             acquisition,
+            native_chromatogram,
             display,
         } = args;
         self.dispatch(Command::ExtractChromatogram {
@@ -977,6 +989,7 @@ impl McpServer {
             mz_range,
             precursor_mz,
             acquisition,
+            native_chromatogram,
             display,
         })
         .await

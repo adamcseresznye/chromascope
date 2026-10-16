@@ -1575,7 +1575,7 @@ impl MzData {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -3008,7 +3008,7 @@ mod tests {
     /// `<indexList>` of an `indexedmzML` document (its streaming fallback
     /// covers spectra alone), so the helper writes byte-exact footer offsets
     /// just like real converter output.
-    fn write_chromatogram_only_mzml(dir: &tempfile::TempDir, name: &str) -> PathBuf {
+    pub(crate) fn write_chromatogram_only_mzml(dir: &tempfile::TempDir, name: &str) -> PathBuf {
         use base64::{engine::general_purpose::STANDARD as B64, Engine};
         fn b64_f64(values: &[f64]) -> String {
             let bytes: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();

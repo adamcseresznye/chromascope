@@ -127,6 +127,7 @@ fn import_all(
 fn extraction_parameters(
     command: Command,
     bounds: &crate::validation::DataBounds,
+    stored: &[crate::parser::NativeChromatogramInfo],
 ) -> Result<ProcessingParams, String> {
     let Command::ExtractChromatogram {
         kind,
@@ -139,6 +140,7 @@ fn extraction_parameters(
         mz_range,
         precursor_mz,
         acquisition,
+        native_chromatogram,
         ..
     } = command
     else {
@@ -146,6 +148,42 @@ fn extraction_parameters(
     };
     if ms_level == 0 || smoothing > 10 {
         return Err("MS level must be positive; smoothing must be 0..10".into());
+    }
+    if let Some(index) = native_chromatogram {
+        // A chromatogram stored in the file: nothing is computed from the spectra, so the
+        // spectrum filters have no meaning and are refused rather than silently ignored.
+        if !stored.iter().any(|c| c.index == index) {
+            return Err(format!(
+                "The file stores no chromatogram {index}; dataset_metadata lists the stored chromatograms ({} in this file)",
+                stored.len()
+            ));
+        }
+        if mass.is_some()
+            || tolerance_ppm.is_some()
+            || tolerance_mda.is_some()
+            || mz_range.is_some()
+            || precursor_mz.is_some()
+            || acquisition.is_some()
+            || kind != "tic"
+        {
+            return Err("A stored chromatogram takes only native_chromatogram and smoothing; omit kind, mass, tolerances, mz_range, precursor_mz and acquisition".into());
+        }
+        return Ok(ProcessingParams {
+            acquisition: None,
+            plot_type: PlotType::Tic,
+            polarity: match polarity.as_str() {
+                "positive" => ScanPolarity::Positive,
+                "negative" => ScanPolarity::Negative,
+                "unknown" => ScanPolarity::Unknown,
+                _ => return Err("Polarity: positive, negative or unknown".into()),
+            },
+            ms_level,
+            smoothing,
+            xic_params: None,
+            mz_range: None,
+            precursor_mz: None,
+            native_chromatogram: Some(index),
+        });
     }
     let polarity = match polarity.as_str() {
         "positive" => ScanPolarity::Positive,
@@ -468,7 +506,8 @@ impl MzViewerApp {
                 // The reader opens the file the window reads (the converted run for vendor data).
                 let path = std::path::PathBuf::from(&file.path);
                 let bounds = file.data.bounds;
-                let params = extraction_parameters(command.clone(), &bounds)?;
+                let stored = file.data.available_chromatograms.clone();
+                let params = extraction_parameters(command.clone(), &bounds, &stored)?;
                 let dataset_id = *dataset_id;
                 let display = *display;
                 std::thread::spawn(move || {
@@ -878,7 +917,7 @@ impl MzViewerApp {
                 let dataset_id = dataset_id.index();
                 let f = self.files.get(&dataset_id).ok_or("Unknown dataset")?;
                 let d = f.data.bounds;
-                json!({"dataset_id":dataset_id,"path":f.path,"scan_count":d.scan_count,"retention_time_minutes":[d.min_rt,d.max_rt],"mz_range":[d.min_mz,d.max_mz],"scan_filters":f.data.available_scan_filters.iter().map(|(ms,p,pre,lo,hi)|json!({"ms_level":ms,"polarity":format!("{p:?}"),"precursor_mz":pre,"mz_range":[lo,hi]})).collect::<Vec<_>>()})
+                json!({"dataset_id":dataset_id,"path":f.path,"scan_count":d.scan_count,"retention_time_minutes":[d.min_rt,d.max_rt],"mz_range":[d.min_mz,d.max_mz],"scan_filters":f.data.available_scan_filters.iter().map(|(ms,p,pre,lo,hi)|json!({"ms_level":ms,"polarity":format!("{p:?}"),"precursor_mz":pre,"mz_range":[lo,hi]})).collect::<Vec<_>>(),"has_spectra":f.data.has_spectra(),"chromatograms":f.data.available_chromatograms})
             }
             Command::ScanMetadata { dataset_id, index } => {
                 let dataset_id = dataset_id.index();
@@ -901,7 +940,11 @@ impl MzViewerApp {
             } => {
                 let dataset_id = dataset_id.index();
                 let f = self.files.get_mut(&dataset_id).ok_or("Unknown dataset")?;
-                let params = extraction_parameters(command.clone(), &f.data.bounds)?;
+                let params = extraction_parameters(
+                    command.clone(),
+                    &f.data.bounds,
+                    &f.data.available_chromatograms,
+                )?;
                 let (points, chrom) =
                     processing::process_chromatogram(&mut f.data, &params).map_err(err)?;
                 let count = points.len();
@@ -1328,6 +1371,7 @@ mod tests {
             mz_range: None,
             precursor_mz: None,
             acquisition: None,
+            native_chromatogram: None,
             display,
         }
     }
@@ -1347,10 +1391,12 @@ mod tests {
             mz_range: None,
             precursor_mz: None,
             acquisition: None,
+            native_chromatogram: None,
             display: false,
         };
         let tolerance = |ppm, mda| {
-            extraction_parameters(xic(ppm, mda), &bounds).map(|p| p.xic_params.unwrap().tolerance())
+            extraction_parameters(xic(ppm, mda), &bounds, &[])
+                .map(|p| p.xic_params.unwrap().tolerance())
         };
         assert_eq!(tolerance(Some(10.0), None), Ok(MassTolerance::ppm(10.0)));
         assert_eq!(tolerance(None, Some(5.0)), Ok(MassTolerance::mda(5.0)));
@@ -1361,7 +1407,7 @@ mod tests {
         if let Command::ExtractChromatogram { kind, .. } = &mut tic {
             *kind = "tic".into();
         }
-        assert!(extraction_parameters(tic, &bounds).is_err());
+        assert!(extraction_parameters(tic, &bounds, &[]).is_err());
     }
     #[test]
     fn numerical_round_trip_and_read_only_ui_preservation() {

@@ -648,3 +648,79 @@ fn vendor_data_opens_through_msconvert_and_stays_inside_the_roots() {
     );
     desktop.finish();
 }
+
+#[test]
+fn stored_chromatograms_are_listed_and_extracted() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = crate::parser::tests::write_chromatogram_only_mzml(&directory, "srm.mzML");
+    let mut desktop = Desktop::start(vec![directory.path().to_owned()], true, false, false);
+    let opened = desktop.tool("open_files", json!({"paths":[path.clone()]}));
+    let id = opened["files"][0]["dataset_id"].as_u64().unwrap();
+    // The stored chromatograms are listed with their transitions.
+    let metadata = desktop.tool("dataset_metadata", json!({"dataset_id":id}));
+    assert_eq!(metadata["has_spectra"], false);
+    let stored = metadata["chromatograms"].as_array().unwrap();
+    assert_eq!(stored.len(), 2, "{metadata}");
+    assert_eq!(stored[0]["label"], "TIC");
+    assert_eq!(stored[1]["label"], "SRM 100 → 50");
+    assert_eq!(stored[1]["precursor_mz"], 100.0);
+    assert_eq!(stored[1]["product_mz"], 50.0);
+    // Extracting one needs its index; the spectrum filters stay at their neutral values.
+    let extracted = desktop.tool(
+        "extract_chromatogram",
+        json!({"dataset_id":id,"kind":"tic","polarity":"positive","ms_level":1,"smoothing":0,"native_chromatogram":1,"display":true}),
+    );
+    assert_eq!(
+        extracted["parameters"]["native_chromatogram"], 1,
+        "{extracted}"
+    );
+    assert_eq!(extracted["displayed"], true);
+    assert_eq!(extracted["point_count"], stored[1]["point_count"]);
+    let data = desktop.tool(
+        "chromatogram_data",
+        json!({"dataset_id":id,"offset":0,"limit":10000}),
+    );
+    let points: Vec<[f64; 2]> = serde_json::from_value(data["points"].clone()).unwrap();
+    // Exactly what the GUI's own code reads from the file.
+    let params: crate::processing::ProcessingParams =
+        serde_json::from_value(extracted["parameters"].clone()).unwrap();
+    let mut reader = crate::parser::MzData::new();
+    reader.open_msfile(&path).unwrap();
+    let (expected, _) = crate::processing::process_chromatogram(&mut reader, &params).unwrap();
+    assert_eq!(points, expected);
+    // The window shows the stored trace, as if the person had picked it.
+    assert_eq!(desktop.app.user_input.native_chromatogram, Some(1));
+    // Spectrum filters make no sense for a stored trace and are refused, not ignored.
+    for extra in [
+        json!({"mass":100.0,"tolerance_ppm":5.0}),
+        json!({"mz_range":[1.0,2.0]}),
+        json!({"precursor_mz":100.0}),
+        json!({"kind":"bpc"}),
+    ] {
+        let mut arguments = json!({"dataset_id":id,"kind":"tic","polarity":"positive","ms_level":1,"smoothing":0,"native_chromatogram":1});
+        arguments
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        let error = desktop.tool_error("extract_chromatogram", arguments);
+        assert!(
+            error["message"]
+                .as_str()
+                .unwrap()
+                .contains("stored chromatogram"),
+            "{error}"
+        );
+    }
+    let error = desktop.tool_error(
+        "extract_chromatogram",
+        json!({"dataset_id":id,"kind":"tic","polarity":"positive","ms_level":1,"smoothing":0,"native_chromatogram":7}),
+    );
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("stores no chromatogram 7"),
+        "{error}"
+    );
+    desktop.finish();
+}
