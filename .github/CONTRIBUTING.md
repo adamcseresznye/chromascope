@@ -50,6 +50,9 @@ All pull requests will be reviewed by a maintainer. Please ensure that your code
 - Adheres to our coding standards.
 - Passes all tests.
 - Includes any necessary documentation updates.
+- Gives every new control in the window the MCP tool that does the same: the tool, its entry in
+  `src/gui/actions.rs` and a test that calls it over the MCP protocol. A feature is not finished
+  without them, and `cargo test --features mcp` (`tests/mcp_parity.rs`) fails until they exist.
 
 Once your pull request is reviewed and approved, it will be merged into the main branch.
 

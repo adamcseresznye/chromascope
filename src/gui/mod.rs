@@ -103,6 +103,7 @@ use std::sync::mpsc;
 use eframe::egui;
 use log::{error, warn};
 
+pub mod actions;
 mod ai_review;
 mod annotation;
 mod calibration;
