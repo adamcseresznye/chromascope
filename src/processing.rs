@@ -347,6 +347,16 @@ pub fn process_chromatogram(
             )));
         }
     }
+    if let Some(target) = params.precursor_mz {
+        if chromatogram.index.is_empty() {
+            return Err(ChromascopeError::MzDataError(format!(
+                "No MS{} scan has a precursor within {} Da of m/z {target}. Precursors are matched \
+                 to the file's isolation targets within that fixed window; pick one listed for this file.",
+                params.ms_level,
+                crate::parser::PRECURSOR_MATCH_TOLERANCE_DA
+            )));
+        }
+    }
     // Step 2: Prepare for visualization (aggregate duplicates, format)
     let prepared = prepare_chromatogram_for_plot(&chromatogram)?;
 

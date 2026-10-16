@@ -26,6 +26,35 @@ use std::cmp::Ordering;
 use std::fs::File;
 use std::path::PathBuf;
 
+/// How close, in Da, a scan's precursor m/z must be to the precursor m/z a trace asks for.
+///
+/// The window is absolute, not ppm: a precursor-filtered trace selects among the isolation
+/// targets the instrument chose, which differ by much more than 0.01 Da in practice, while
+/// the value stored for the same target can differ slightly between scans. It is applied to
+/// the first selected ion of the first precursor, or to the isolation-window target when the
+/// scan records no ion. A request that matches no scan within it is an error
+/// (see `processing::process_chromatogram`), never an empty or zero trace.
+pub const PRECURSOR_MATCH_TOLERANCE_DA: f64 = 0.01;
+
+/// Whether a scan precursor at `scan_mz` belongs to a trace requested for precursor `target`.
+pub fn precursor_within_tolerance(scan_mz: f64, target: f64) -> bool {
+    (scan_mz - target).abs() < PRECURSOR_MATCH_TOLERANCE_DA
+}
+
+/// The m/z that identifies a scan's precursor, if it has one.
+fn scan_precursor_mz(description: &mzdata::spectrum::SpectrumDescription) -> Option<f64> {
+    description.precursor.first().map(|p| {
+        p.ions
+            .first()
+            .map(|ion| ion.mz)
+            .unwrap_or(f64::from(p.isolation_window.target))
+    })
+}
+
+fn precursor_matches(description: &mzdata::spectrum::SpectrumDescription, target: f64) -> bool {
+    scan_precursor_mz(description).is_some_and(|mz| precursor_within_tolerance(mz, target))
+}
+
 enum DataReader {
     Plain(Box<MZReader<File>>),
     Gzip(Box<MZReader<mzdata::io::RestartableGzDecoder<std::io::BufReader<File>>>>),
@@ -1007,18 +1036,7 @@ impl MzData {
             acquisition_filter.is_none_or(|mode| mode.matches(&s.description))
                 && s.description.ms_level == ms_level
                 && s.description.polarity == polarity
-                && precursor_mz.is_none_or(|target| {
-                    s.description
-                        .precursor
-                        .first()
-                        .map(|p| {
-                            p.ions
-                                .first()
-                                .map(|ion| ion.mz)
-                                .unwrap_or(f64::from(p.isolation_window.target))
-                        })
-                        .is_some_and(|mz| (mz - target).abs() < 0.01)
-                })
+                && precursor_mz.is_none_or(|target| precursor_matches(&s.description, target))
         };
         let metadata = |s: &mzdata::spectrum::MultiLayerSpectrum| -> Option<(f32, f32)> {
             let value = |name| {
@@ -1181,19 +1199,7 @@ impl MzData {
                 acquisition_filter.is_none_or(|mode| mode.matches(&s.description))
                     && s.description.ms_level == ms_level
                     && s.description.polarity == polarity
-                    && precursor_mz.is_none_or(|target| {
-                        s.description
-                            .precursor
-                            .first()
-                            .map(|p| {
-                                p.ions
-                                    .first()
-                                    .map(|ion| ion.mz)
-                                    .unwrap_or(f64::from(p.isolation_window.target))
-                            })
-                            .map(|mz| (mz - target).abs() < 0.01)
-                            .unwrap_or(false)
-                    })
+                    && precursor_mz.is_none_or(|target| precursor_matches(&s.description, target))
             });
 
         // Decode one spectrum at a time.
@@ -1839,6 +1845,160 @@ mod tests {
         assert!(!chrom.intensity.is_empty());
         assert!(chrom.mz.is_empty()); // TIC has no m/z
         assert_eq!(chrom.retention_time.len(), chrom.index.len());
+    }
+
+    // ========== Precursor match window ==========
+
+    #[test]
+    fn precursor_window_is_ten_milli_dalton_and_exclusive() {
+        assert_eq!(PRECURSOR_MATCH_TOLERANCE_DA, 0.01);
+        assert!(precursor_within_tolerance(500.0, 500.0));
+        assert!(precursor_within_tolerance(500.0099, 500.0));
+        assert!(precursor_within_tolerance(499.9901, 500.0));
+        assert!(!precursor_within_tolerance(500.0101, 500.0));
+        assert!(!precursor_within_tolerance(499.9899, 500.0));
+        assert!(!precursor_within_tolerance(f64::NAN, 500.0));
+    }
+
+    /// Minimal DDA run: one MS1 survey and three MS2 scans. The first precursor is isolated at
+    /// 500.25 but its selected ion is recorded as 500.254, the second at 600.0.
+    fn write_dda_mzml(dir: &tempfile::TempDir, name: &str) -> PathBuf {
+        use base64::{engine::general_purpose::STANDARD as B64, Engine};
+        let encode = |bytes: Vec<u8>| B64.encode(bytes);
+        let mz = encode(
+            [100.0f64, 200.0]
+                .iter()
+                .flat_map(|v| v.to_le_bytes())
+                .collect(),
+        );
+        let intensity = encode(
+            [5.0f32, 50.0]
+                .iter()
+                .flat_map(|v| v.to_le_bytes())
+                .collect(),
+        );
+        let spectrum = |index: usize, level: u8, rt: f64, precursor: Option<(f64, f64)>| {
+            let precursor = precursor.map_or(String::new(), |(target, ion)| {
+                format!(
+                    r#"<precursorList count="1"><precursor><isolationWindow>
+            <cvParam cvRef="MS" accession="MS:1000827" name="isolation window target m/z" value="{target}" unitCvRef="MS" unitAccession="MS:1000040" unitName="m/z"/>
+          </isolationWindow><selectedIonList count="1"><selectedIon>
+            <cvParam cvRef="MS" accession="MS:1000744" name="selected ion m/z" value="{ion}" unitCvRef="MS" unitAccession="MS:1000040" unitName="m/z"/>
+          </selectedIon></selectedIonList><activation>
+            <cvParam cvRef="MS" accession="MS:1000133" name="collision-induced dissociation" value=""/>
+          </activation></precursor></precursorList>"#
+                )
+            });
+            format!(
+                r#"      <spectrum index="{index}" id="scan={scan}" defaultArrayLength="2">
+        <cvParam cvRef="MS" accession="MS:1000511" name="ms level" value="{level}"/>
+        <cvParam cvRef="MS" accession="MS:1000130" name="positive scan" value=""/>
+        <cvParam cvRef="MS" accession="MS:1000127" name="centroid spectrum" value=""/>
+        <scanList count="1">
+          <scan>
+            <cvParam cvRef="MS" accession="MS:1000016" name="scan start time" value="{rt}" unitCvRef="UO" unitAccession="UO:0000031" unitName="minute"/>
+          </scan>
+        </scanList>
+        {precursor}
+        <binaryDataArrayList count="2">
+          <binaryDataArray encodedLength="{mz_len}">
+            <cvParam cvRef="MS" accession="MS:1000523" name="64-bit float" value=""/>
+            <cvParam cvRef="MS" accession="MS:1000576" name="no compression" value=""/>
+            <cvParam cvRef="MS" accession="MS:1000514" name="m/z array" value="" unitCvRef="MS" unitAccession="MS:1000040" unitName="m/z"/>
+            <binary>{mz}</binary>
+          </binaryDataArray>
+          <binaryDataArray encodedLength="{int_len}">
+            <cvParam cvRef="MS" accession="MS:1000521" name="32-bit float" value=""/>
+            <cvParam cvRef="MS" accession="MS:1000576" name="no compression" value=""/>
+            <cvParam cvRef="MS" accession="MS:1000515" name="intensity array" value="" unitCvRef="MS" unitAccession="MS:1000131" unitName="number of detector counts"/>
+            <binary>{intensity}</binary>
+          </binaryDataArray>
+        </binaryDataArrayList>
+      </spectrum>
+"#,
+                scan = index + 1,
+                mz_len = mz.len(),
+                int_len = intensity.len(),
+            )
+        };
+        let text = format!(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<mzML xmlns="http://psi.hupo.org/ms/mzml" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://psi.hupo.org/ms/mzml http://psidev.info/files/ms/mzML/xsd/mzML1.1.0.xsd" id="synth-dda" version="1.1.0">
+  <run id="synth-dda">
+    <spectrumList count="4">
+{}{}{}{}    </spectrumList>
+  </run>
+</mzML>
+"#,
+            spectrum(0, 1, 1.0, None),
+            spectrum(1, 2, 1.1, Some((500.25, 500.254))),
+            spectrum(2, 2, 1.2, Some((600.0, 600.0))),
+            spectrum(3, 2, 2.1, Some((500.25, 500.254))),
+        );
+        let path = dir.path().join(name);
+        std::fs::write(&path, text).unwrap();
+        path
+    }
+
+    #[test]
+    fn precursor_filter_uses_the_window_and_a_miss_is_an_error_not_an_empty_trace() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut mzdata = MzData::new();
+        mzdata
+            .open_msfile(&write_dda_mzml(&dir, "dda.mzML"))
+            .unwrap();
+        let polarity = ScanPolarity::Positive;
+        let listed: Vec<f64> = mzdata
+            .available_scan_filters
+            .iter()
+            .filter_map(|(level, _, precursor, _, _)| precursor.filter(|_| *level == 2))
+            .collect();
+        assert_eq!(listed, vec![500.254, 600.0], "the file's MS2 filters");
+
+        // The listed precursor is the selected ion (500.254); the isolation target (500.25) is
+        // 0.004 Da away and so is anything within the window of the ion.
+        let mut scans = |target: f64| {
+            mzdata
+                .get_tic(2, polarity, None, Some(target))
+                .unwrap()
+                .index
+        };
+        assert_eq!(scans(500.254), vec![1, 3]);
+        assert_eq!(scans(500.25), vec![1, 3], "the isolation target");
+        assert_eq!(scans(500.254 + 0.009), vec![1, 3]);
+        assert_eq!(scans(500.254 - 0.009), vec![1, 3]);
+        assert!(scans(500.254 + 0.011).is_empty(), "outside the window");
+        assert_eq!(scans(600.0), vec![2]);
+        let xic = mzdata
+            .get_xic(200.0, 2, polarity, 10.0, Some(500.254 + 0.011))
+            .unwrap();
+        assert!(xic.index.is_empty(), "the XIC path uses the same window");
+        let xic = mzdata
+            .get_xic(200.0, 2, polarity, 10.0, Some(500.25))
+            .unwrap();
+        assert_eq!(xic.index, vec![1, 3]);
+
+        // Through the processing pipeline a miss is an explanatory error, not a flat trace.
+        let params = |precursor_mz| crate::processing::ProcessingParams {
+            acquisition: None,
+            plot_type: crate::plotting_parameters::PlotType::Tic,
+            ms_level: 2,
+            polarity,
+            smoothing: 0,
+            xic_params: None,
+            mz_range: None,
+            precursor_mz: Some(precursor_mz),
+            native_chromatogram: None,
+        };
+        let (plot, _) =
+            crate::processing::process_chromatogram(&mut mzdata, &params(500.25)).unwrap();
+        assert_eq!(plot.len(), 2);
+        let error = crate::processing::process_chromatogram(&mut mzdata, &params(550.0))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("within 0.01 Da"), "got: {error}");
+        assert!(error.contains("550"), "got: {error}");
+        assert!(error.contains("MS2"), "got: {error}");
     }
 
     // ========== Tests for smooth_chromatogram() ==========

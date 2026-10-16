@@ -227,6 +227,10 @@ fn documentation_matches_the_shipped_app() {
     assert!(changelog.contains(&format!("## [{version}]")));
     assert!(changelog.contains("## [0.2.0]") && changelog.contains("## [0.1.0]"));
 
+    // Numerical behaviour that users can run into is written down.
+    let guide = read("docs/USER_GUIDE.md");
+    assert!(guide.contains("within **0.01 Da**"));
+
     let status = read("docs/FEATURE_STATUS.md");
     assert!(!status.contains("Reports and AI activity"));
     assert!(!status.contains("Project reports and delivery"));
