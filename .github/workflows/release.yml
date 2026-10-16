@@ -36,9 +36,35 @@ jobs:
           fi
           echo "version=$V" >> "$GITHUB_OUTPUT"
 
+  # No installer is built, and nothing is published, unless the tests pass on the release commit.
+  test:
+    name: Test before release
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux GUI dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Test default build
+        run: cargo test --locked
+
+      - name: Test GUI-free MCP and CLI
+        run: cargo test --locked --no-default-features --features mcp-headless
+
   linux:
     name: Linux ${{ matrix.arch }}
-    needs: version
+    needs: [version, test]
     strategy:
       fail-fast: false
       matrix:
@@ -128,7 +154,7 @@ jobs:
 
   windows:
     name: Windows ${{ matrix.arch }}
-    needs: version
+    needs: [version, test]
     strategy:
       fail-fast: false
       matrix:
@@ -192,7 +218,7 @@ jobs:
 
   macos:
     name: macOS universal
-    needs: version
+    needs: [version, test]
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -223,7 +249,8 @@ jobs:
 
           # Merge the two architectures. lipo invalidates signatures and Apple silicon refuses
           # unsigned code, so every result gets an ad-hoc signature. Without an Apple Developer
-          # ID the app is not notarised: users open it once via right-click > Open.
+          # ID the app is not notarised: users open it once via System Settings > Privacy & Security > Open Anyway
+          # (macOS 15 and later no longer offer right-click > Open).
           for b in $BINS; do
             lipo -create "target/aarch64-apple-darwin/release/$b" "target/x86_64-apple-darwin/release/$b" -output "universal/$b"
             codesign --force -s - "universal/$b"

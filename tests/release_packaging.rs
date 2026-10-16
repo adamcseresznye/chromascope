@@ -125,3 +125,63 @@ fn appimagetool_is_pinned_and_verified() {
         assert!(hash.bytes().all(|b| b.is_ascii_hexdigit()));
     }
 }
+
+/// The text of one top-level job (`  name:` under `jobs:`), up to the next job.
+fn job<'a>(workflow: &'a str, name: &str) -> &'a str {
+    let header = format!("\n  {name}:\n");
+    let start = workflow
+        .find(&header)
+        .unwrap_or_else(|| panic!("job {name} not found"))
+        + 1;
+    let mut end = workflow.len();
+    let mut offset = start;
+    for (index, line) in workflow[start..].split_inclusive('\n').enumerate() {
+        // A line indented by exactly two spaces that ends in ':' opens the next job.
+        let opens_job = line.starts_with("  ")
+            && !line.starts_with("   ")
+            && !line.trim_start().starts_with('#')
+            && line.trim_end().ends_with(':');
+        if index > 0 && opens_job {
+            end = offset;
+            break;
+        }
+        offset += line.len();
+    }
+    &workflow[start..end]
+}
+
+#[test]
+fn release_is_gated_on_tests_and_ci_covers_other_platforms_and_the_minimum_rust() {
+    let release = read(".github/workflows/release.yml");
+    let tests = job(&release, "test");
+    assert!(tests.contains("cargo test --locked\n"));
+    assert!(tests.contains("--no-default-features --features mcp-headless"));
+    for build in ["linux", "windows", "macos"] {
+        assert!(
+            job(&release, build).contains("needs: [version, test]"),
+            "{build} must wait for the test job"
+        );
+    }
+    // The publishing job waits for the builds, which wait for the tests.
+    assert!(job(&release, "release").contains("needs: [linux, windows, macos]"));
+    assert!(!tests.contains("continue-on-error"));
+
+    let ci = read(".github/workflows/CI.yml");
+    let platforms = job(&ci, "platforms");
+    assert!(platforms.contains("windows-latest") && platforms.contains("macos-latest"));
+    assert!(platforms.contains("cargo test --locked\n"));
+    // CI compiles on exactly the Rust version Cargo.toml promises.
+    let cargo = read("Cargo.toml");
+    let msrv = cargo
+        .lines()
+        .find_map(|l| l.strip_prefix("rust-version = \""))
+        .and_then(|l| l.strip_suffix('"'))
+        .expect("rust-version in Cargo.toml");
+    let msrv_job = job(&ci, "msrv");
+    assert!(
+        msrv_job.contains(&format!("dtolnay/rust-toolchain@{msrv}\n")),
+        "msrv job must install Rust {msrv}"
+    );
+    assert!(msrv_job.contains("cargo check --locked --all-targets --all-features"));
+    assert!(msrv_job.contains(&format!("({msrv})")));
+}

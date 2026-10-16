@@ -73,3 +73,56 @@ jobs:
         run: |
           rm -rf target/ci-reference-verification
           python tests/reference/verify_references.py target/ci-reference-verification
+
+  # The Linux job above covers the hosted-runner basics; these legs catch platform-specific
+  # failures (path handling, file locking, Apple/Windows toolchains) before a release does.
+  platforms:
+    name: Test on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Set up Python (used by the example-script tests)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Test default build
+        run: cargo test --locked
+
+      - name: Test GUI-free MCP and CLI
+        run: cargo test --locked --no-default-features --features mcp-headless
+
+  # `rust-version` in Cargo.toml is a promise to users who build from source; only a compile on
+  # that exact toolchain keeps it true. tests/release_packaging.rs checks the two numbers agree.
+  msrv:
+    name: Minimum supported Rust (1.88)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Install Rust 1.88
+        uses: dtolnay/rust-toolchain@1.88
+
+      - name: Install Linux GUI dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Compile every target with all features
+        run: cargo check --locked --all-targets --all-features
