@@ -56,6 +56,10 @@ jobs:
         with:
           python-version: '3.13'
 
+      # Same pins as CI: the statistics tests call the local NumPy/SciPy runtime.
+      - name: Install pinned statistics dependencies
+        run: python -m pip install numpy==2.3.3 scipy==1.16.2
+
       - name: Test default build
         run: cargo test --locked
 
