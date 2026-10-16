@@ -43,6 +43,54 @@ pub fn write_atomic(path: impl AsRef<Path>, bytes: impl AsRef<[u8]>) -> io::Resu
     result
 }
 
+/// Writes `bytes` to a file that must not exist yet, atomically.
+///
+/// The content goes to a temporary file next to `path` first, and the file is published under
+/// its name only when that is complete, so a reader never sees half a file. An existing file is
+/// never replaced: the call fails with [`io::ErrorKind::AlreadyExists`] and leaves it as it is.
+/// This is what exports (which must never overwrite) use; [`write_atomic`] is for saves that
+/// replace the user's own previous version.
+pub fn write_atomic_new(path: impl AsRef<Path>, bytes: impl AsRef<[u8]>) -> io::Result<()> {
+    let path = path.as_ref();
+    let name = path
+        .file_name()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no file name"))?;
+    let dir = match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => Path::new("."),
+    };
+    if path.exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "the file already exists; overwriting is prohibited",
+        ));
+    }
+    let temp = temp_path(dir, name);
+    let result = (|| {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)?;
+        file.write_all(bytes.as_ref())?;
+        file.sync_all()?;
+        drop(file);
+        // A hard link publishes the finished file and fails if the name is taken, so two
+        // writers cannot both win. Where the file system has no hard links, fall back to a
+        // rename after a second look.
+        match fs::hard_link(&temp, path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Err(e),
+            Err(_) if path.exists() => Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "the file already exists; overwriting is prohibited",
+            )),
+            Err(_) => rename_with_retry(&temp, path),
+        }
+    })();
+    let _ = fs::remove_file(&temp);
+    result
+}
+
 fn temp_path(dir: &Path, name: &std::ffi::OsStr) -> PathBuf {
     let mut temp_name = std::ffi::OsString::from(".");
     temp_name.push(name);
@@ -103,6 +151,25 @@ mod tests {
         write_atomic(&path, b"x").unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"x");
         assert!(leftovers(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn new_files_are_written_whole_and_never_replace_an_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("export.csv");
+        write_atomic_new(&path, "first").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "first");
+        let again = write_atomic_new(&path, "second").unwrap_err();
+        assert_eq!(again.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "first");
+        // A file that appears while the content is being prepared is not replaced either.
+        let racing = dir.path().join("racing.csv");
+        fs::write(&racing, "theirs").unwrap();
+        assert!(write_atomic_new(&racing, "ours").is_err());
+        assert_eq!(fs::read_to_string(&racing).unwrap(), "theirs");
+        assert!(leftovers(dir.path()).is_empty());
+        assert!(write_atomic_new(dir.path().join("nope").join("f"), b"data").is_err());
+        assert!(write_atomic_new(Path::new(""), b"data").is_err());
     }
 
     #[test]

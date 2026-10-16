@@ -980,14 +980,25 @@ fn capture_session(app: &MzViewerApp, ctx: &Context) -> Session {
 pub(super) fn project_snapshot(app: &MzViewerApp, ctx: &Context) -> serde_json::Value {
     serde_json::to_value(capture_session(app, ctx)).unwrap()
 }
-fn save_session(app: &mut MzViewerApp, ctx: &Context) {
+/// A session can only be saved while nothing is loading or extracting.
+fn session_busy(app: &MzViewerApp) -> Result<(), String> {
     if app.files.values().any(|f| f.is_loading)
         || app.async_state.is_processing
         || app.state_changed == StateChange::Changed
     {
-        app.show_error_dialog(
-            "Wait for imports and trace updates to finish before saving a session.".into(),
-        );
+        return Err("Wait for imports and trace updates to finish before saving a session.".into());
+    }
+    Ok(())
+}
+/// The bytes of the session file for the current workspace (what Save viewer session writes).
+#[cfg(feature = "mcp")]
+pub(super) fn session_bytes(app: &MzViewerApp, ctx: &Context) -> Result<Vec<u8>, String> {
+    session_busy(app)?;
+    serde_json::to_vec_pretty(&capture_session(app, ctx)).map_err(|e| e.to_string())
+}
+fn save_session(app: &mut MzViewerApp, ctx: &Context) {
+    if let Err(e) = session_busy(app) {
+        app.show_error_dialog(e);
         return;
     }
     let Some(path) = rfd::FileDialog::new()
@@ -1005,6 +1016,12 @@ fn save_session(app: &mut MzViewerApp, ctx: &Context) {
         app.show_error_dialog(e);
     }
 }
+/// A session file, parsed and checked.
+fn parse_session(bytes: &[u8]) -> Result<Session, String> {
+    let session = serde_json::from_slice::<Session>(bytes).map_err(|e| e.to_string())?;
+    session.validate()?;
+    Ok(session)
+}
 fn open_session(app: &mut MzViewerApp, ctx: &Context) {
     let Some(path) = rfd::FileDialog::new()
         .add_filter("Chromascope session", &["chromascope"])
@@ -1014,17 +1031,35 @@ fn open_session(app: &mut MzViewerApp, ctx: &Context) {
     };
     match std::fs::read(path)
         .map_err(|e| e.to_string())
-        .and_then(|b| serde_json::from_slice::<Session>(&b).map_err(|e| e.to_string()))
+        .and_then(|b| parse_session(&b))
     {
-        Ok(s) => {
-            if let Err(e) = s.validate() {
-                app.show_error_dialog(e);
-                return;
-            }
-            restore_session(app, ctx, s);
-        }
+        Ok(s) => restore_session(app, ctx, s),
         Err(e) => app.show_error_dialog(format!("Cannot open session: {e}")),
     }
+}
+/// Restores a session file. `authorize` is asked about every source dataset first; if it
+/// refuses any, nothing is changed. Returns how many datasets the session reopens.
+#[cfg(feature = "mcp")]
+pub(super) fn open_session_bytes(
+    app: &mut MzViewerApp,
+    ctx: &Context,
+    bytes: &[u8],
+    authorize: &dyn Fn(&str) -> Result<(), String>,
+) -> Result<usize, String> {
+    let session = parse_session(bytes)?;
+    for file in &session.files {
+        authorize(&file.source)?;
+    }
+    let count = session.files.len();
+    restore_session(app, ctx, session);
+    Ok(count)
+}
+/// Whether a restored session is still reopening datasets or putting its traces back.
+#[cfg(feature = "mcp")]
+pub(super) fn restore_in_progress(app: &MzViewerApp) -> bool {
+    !app.workspace.pending.is_empty()
+        || app.workspace.restore_input.is_some()
+        || app.files.values().any(|f| f.is_loading)
 }
 pub(super) fn restore_project_snapshot(
     app: &mut MzViewerApp,

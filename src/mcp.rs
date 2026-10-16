@@ -172,6 +172,12 @@ pub enum Command {
         visible: bool,
     },
     Measurements {},
+    SaveSession {
+        path: String,
+    },
+    LoadSession {
+        path: String,
+    },
     PlotImage {
         spectrum: bool,
     },
@@ -225,6 +231,16 @@ impl Command {
 pub const VENDOR_EXTENSIONS: &[&str] = &[
     "raw", "d", "wiff", "wiff2", "lcd", "baf", "tdf", "tsf", "yep", "mzxml", "mz5", "cdf", "mgf",
 ];
+fn has_extension(path: &Path, extension: &str) -> Result<(), String> {
+    let matches = path
+        .extension()
+        .is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case(extension));
+    if matches {
+        Ok(())
+    } else {
+        Err(format!("The file name must end in .{extension}"))
+    }
+}
 /// Whether `path` is an existing file or directory with a vendor extension.
 pub fn is_vendor_dataset(path: &Path) -> bool {
     path.exists()
@@ -298,6 +314,25 @@ impl AccessPolicy {
                 VENDOR_EXTENSIONS.join(", ")
             ))
         }
+    }
+    /// An existing file inside a root, with the given extension (without the dot): a session,
+    /// method, batch or preset to read.
+    pub fn file(&self, path: &str, extension: &str) -> Result<PathBuf, String> {
+        let path = Path::new(path).canonicalize().map_err(|e| e.to_string())?;
+        if !self.roots.iter().any(|r| path.starts_with(r)) {
+            return Err("Path is outside authorized roots".into());
+        }
+        if !path.is_file() {
+            return Err("Not a file".into());
+        }
+        has_extension(&path, extension)?;
+        Ok(path)
+    }
+    /// Like [`Self::output`], and the new file must have the given extension (without the dot).
+    pub fn output_as(&self, path: &str, extension: &str) -> Result<PathBuf, String> {
+        let target = self.output(path)?;
+        has_extension(&target, extension)?;
+        Ok(target)
     }
     pub fn directory(&self, path: &str) -> Result<PathBuf, String> {
         let path = Path::new(path).canonicalize().map_err(|e| e.to_string())?;
@@ -1320,6 +1355,30 @@ impl McpServer {
         .await
     }
     #[tool(
+        description = "Save the viewer workspace (open datasets, current and retained traces, measurements, view settings) as a new .chromascope session file, the same file the Save viewer session command writes; the file is written complete or not at all. Use it to keep a state you can return to with load_session. Fails while an import or extraction is running. Requires --allow-exports; the path must be a new file inside an --allow-root, and existing files are never overwritten.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn save_session(&self, Parameters(args): Parameters<SessionPathArgs>) -> CallToolResult {
+        self.dispatch(Command::SaveSession { path: args.path })
+            .await
+    }
+    #[tool(
+        description = "Replace the whole viewer workspace with a saved .chromascope session: datasets are reopened from their source files, traces, measurements and view settings restored. The reply comes when everything is loaded and names any run that could not be restored. Every source file the session names must lie inside an --allow-root, or nothing is changed. Requires --allow-changes; discards the current workspace, so save_session first if it matters.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn load_session(&self, Parameters(args): Parameters<SessionPathArgs>) -> CallToolResult {
+        self.dispatch(Command::LoadSession { path: args.path })
+            .await
+    }
+    #[tool(
         description = "Return the whole current state of the window: datasets, active dataset, processing parameters, plot bounds, layout, retained traces (with their trace_index), measurements, the history of operations and the units used. Use it at the start of a session and whenever you are unsure what the person is looking at. Read-only.",
         annotations(
             read_only_hint = true,
@@ -1450,6 +1509,13 @@ pub struct SetTraceVisibilityArgs {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct SessionPathArgs {
+    /// Path of the `.chromascope` session file.
+    pub path: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct BatchArgs {
     pub commands: Vec<Command>,
 }
@@ -1575,6 +1641,8 @@ mod tests {
         "retain_trace",
         "remove_trace",
         "set_trace_visibility",
+        "save_session",
+        "load_session",
         "integrate",
         "undo_integration",
         "export_figure",
@@ -1590,7 +1658,7 @@ mod tests {
     #[test]
     fn tool_descriptions_are_unique_nonempty_and_annotated() {
         let tools = McpServer::tool_router().list_all();
-        assert_eq!(tools.len(), 35, "35 typed tools; workbench is not listed");
+        assert_eq!(tools.len(), 37, "37 typed tools; workbench is not listed");
         assert!(
             tools.iter().all(|t| t.name != "workbench"),
             "workbench duplicated the typed tools and must not be listed"
@@ -1636,7 +1704,7 @@ mod tests {
             let gated =
                 description.contains("--allow-changes") || description.contains("--allow-exports");
             if !read_only && !matches!(&*tool.name, "open_files" | "batch") {
-                let flag = if tool.name.starts_with("export_") {
+                let flag = if tool.name.starts_with("export_") || tool.name.starts_with("save_") {
                     "--allow-exports"
                 } else {
                     "--allow-changes"
@@ -1675,11 +1743,11 @@ mod tests {
             let discovered=rpc(&mut write,&mut read,json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}})).await;
             let listed=discovered["result"]["tools"].as_array().unwrap();
             let desktop=McpServer::tool_router().list_all();
-            assert_eq!(desktop.len(),35);
+            assert_eq!(desktop.len(),37);
             assert!(desktop.iter().all(|d|listed.iter().any(|t|t["name"]==d.name.as_ref())),"every viewer tool is listed");
             let engine=crate::engine_mcp::EngineMcp::new(vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))]).unwrap().tool_names();
             let visible=engine.iter().filter(|n|crate::EXPERIMENTAL||!matches!(n.as_str(),"start_untargeted"|"untargeted_status"|"cancel_untargeted"|"untargeted_features")).count();
-            assert_eq!(listed.len(),35+visible,"viewer tools plus the shared engine tools");
+            assert_eq!(listed.len(),37+visible,"viewer tools plus the shared engine tools");
             assert!(listed.iter().all(|t|t["name"]!="workbench"));
             assert!(listed.iter().all(|t|t["annotations"]["readOnlyHint"].is_boolean()&&t["annotations"]["destructiveHint"].is_boolean()),"every tool must carry both hints on the wire");
             let find=|name:&str|listed.iter().find(|t|t["name"]==name).unwrap();

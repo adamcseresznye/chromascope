@@ -904,3 +904,143 @@ fn retained_traces_can_be_kept_hidden_and_removed_over_mcp() {
     }
     desktop.finish();
 }
+
+#[test]
+fn a_session_is_saved_and_restored_over_mcp() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut desktop = Desktop::start(vec![temp.path().to_owned()], true, true, false);
+    let id = desktop.open_fixture();
+    desktop.tool(
+        "extract_chromatogram",
+        json!({"dataset_id":id,"kind":"tic","polarity":"positive","ms_level":1,"smoothing":0,"display":true}),
+    );
+    let data = desktop.tool(
+        "chromatogram_data",
+        json!({"dataset_id":id,"offset":0,"limit":10000}),
+    );
+    let points: Vec<[f64; 2]> = serde_json::from_value(data["points"].clone()).unwrap();
+    desktop.tool(
+        "integrate",
+        json!({"dataset_id":id,"start_minutes":points[0][0],"end_minutes":points[points.len() - 1][0],"apply":true}),
+    );
+    desktop.tool("set_layout", json!({"mode":"overlay"}));
+    let path = temp.path().join("work.chromascope");
+    let saved = desktop.tool("save_session", json!({"path":path}));
+    assert_eq!(saved["datasets"], 1);
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(serde_json::from_str::<Value>(&text).unwrap()["version"], 1);
+    // Saving again never replaces the file; a wrong extension or a missing flag is refused.
+    let again = desktop.tool_error("save_session", json!({"path":path}));
+    assert!(
+        again["message"]
+            .as_str()
+            .unwrap()
+            .contains("already exists"),
+        "{again}"
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+    let wrong = desktop.tool_error(
+        "save_session",
+        json!({"path":temp.path().join("work.json")}),
+    );
+    assert!(
+        wrong["message"].as_str().unwrap().contains(".chromascope"),
+        "{wrong}"
+    );
+    assert!(std::fs::read_dir(temp.path()).unwrap().all(|e| !e
+        .unwrap()
+        .file_name()
+        .to_string_lossy()
+        .ends_with(".tmp")));
+    // A different window loads it back: the dataset, the trace, the measurement, the layout.
+    let mut other = Desktop::start(vec![temp.path().to_owned()], true, true, false);
+    let restored = other.tool("load_session", json!({"path":path}));
+    assert_eq!(restored["restored"], true, "{restored}");
+    assert_eq!(restored["datasets"].as_array().unwrap().len(), 1);
+    assert_eq!(restored["measurements"], 1);
+    assert_eq!(restored["layout"]["mode"], "overlay");
+    let state = other.tool("gui_state", json!({}));
+    let restored_id = state["datasets"][0]["dataset_id"].as_u64().unwrap();
+    assert_eq!(
+        state["datasets"][0]["processing"]["plot_type"], "Tic",
+        "{state}"
+    );
+    assert_eq!(
+        state["measurements"][0]["area"],
+        desktop.app.workspace.measurements[0].area
+    );
+    // The restored window works: extraction and numbers are those of the original.
+    other.tool(
+        "extract_chromatogram",
+        json!({"dataset_id":restored_id,"kind":"tic","polarity":"positive","ms_level":1,"smoothing":0}),
+    );
+    let again = other.tool(
+        "chromatogram_data",
+        json!({"dataset_id":restored_id,"offset":0,"limit":10000}),
+    );
+    assert_eq!(again["points"], data["points"]);
+    // Without --allow-exports nothing is written; without --allow-changes nothing is replaced.
+    let mut guarded = Desktop::start(vec![temp.path().to_owned()], false, false, false);
+    let error = guarded.tool_error(
+        "save_session",
+        json!({"path":temp.path().join("never.chromascope")}),
+    );
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("--allow-exports"),
+        "{error}"
+    );
+    let error = guarded.tool_error("load_session", json!({"path":path}));
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("--allow-changes"),
+        "{error}"
+    );
+    assert!(guarded.app.files.is_empty());
+    // A session that names a source outside the roots is refused before anything changes.
+    let mut outside: Value = serde_json::from_str(&text).unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let foreign = elsewhere.path().join("foreign.mzML");
+    std::fs::copy(fixture_mzml(), &foreign).unwrap();
+    outside["files"][0]["source"] = json!(foreign);
+    let forged = temp.path().join("forged.chromascope");
+    std::fs::write(&forged, serde_json::to_vec(&outside).unwrap()).unwrap();
+    let mut victim = Desktop::start(vec![temp.path().to_owned()], true, true, false);
+    let kept = victim.open_fixture();
+    let error = victim.tool_error("load_session", json!({"path":forged}));
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("outside authorized roots"),
+        "{error}"
+    );
+    assert_eq!(victim.app.files.len(), 1, "the workspace is untouched");
+    assert!(victim.app.files.contains_key(&(kept as usize)));
+    // A damaged or unsupported file is an error, not a half-restored window.
+    let broken = temp.path().join("broken.chromascope");
+    std::fs::write(&broken, b"{ not json").unwrap();
+    assert_ne!(
+        victim.tool_error("load_session", json!({"path":broken}))["message"],
+        Value::Null
+    );
+    outside["version"] = json!(9);
+    let future = temp.path().join("future.chromascope");
+    std::fs::write(&future, serde_json::to_vec(&outside).unwrap()).unwrap();
+    let error = victim.tool_error("load_session", json!({"path":future}));
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("Unsupported session version"),
+        "{error}"
+    );
+    assert_eq!(victim.app.files.len(), 1);
+    for d in [desktop, other, guarded, victim] {
+        d.finish();
+    }
+}

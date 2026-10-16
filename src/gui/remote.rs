@@ -12,18 +12,38 @@ use rmcp::model::CallToolResult;
 use serde_json::{json, Value};
 
 pub(crate) struct PendingOperation {
-    receiver: std::sync::mpsc::Receiver<Result<BackgroundResult, String>>,
+    source: PendingSource,
     reply: tokio::sync::oneshot::Sender<CallToolResult>,
     request: Value,
     selection: Option<usize>,
     input: UserInput,
 }
+/// What a pending operation waits for.
+enum PendingSource {
+    /// A worker thread's result.
+    Worker(std::sync::mpsc::Receiver<Result<BackgroundResult, String>>),
+    /// The window itself finishing something it started (a session being restored, a project
+    /// being opened), which goes on over several frames.
+    Window {
+        wait: Wait,
+        started: std::time::Instant,
+    },
+}
+/// Window work an operation waits for before it replies.
+pub(crate) enum Wait {
+    /// The datasets and traces of a loaded session.
+    Session,
+}
+/// How long the window may take to finish what a client waits for.
+const WAIT_LIMIT: std::time::Duration = std::time::Duration::from_secs(600);
 /// Runs of one imported input, and the temporary folder that keeps a converted run alive.
 type Imported = (
     Vec<processing::LoadedRun>,
     Option<std::sync::Arc<tempfile::TempDir>>,
 );
 enum BackgroundResult {
+    /// A result that is already complete.
+    Value(Value),
     Opened(Vec<(std::path::PathBuf, Result<Imported, String>)>),
     Extracted {
         dataset_id: usize,
@@ -267,15 +287,28 @@ impl MzViewerApp {
         self.drain_internal(&mut bridge);
         self.refresh_stable_ids(&mut bridge);
         if let Some(pending) = bridge.pending.take() {
-            let result = match pending.receiver.try_recv() {
-                Ok(result) => result,
-                Err(std::sync::mpsc::TryRecvError::Empty) => {
-                    bridge.pending = Some(pending);
-                    self.remote = Some(bridge);
-                    ctx.request_repaint_after(std::time::Duration::from_millis(50));
-                    return;
+            let result = match &pending.source {
+                PendingSource::Worker(receiver) => match receiver.try_recv() {
+                    Ok(result) => result,
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        bridge.pending = Some(pending);
+                        self.remote = Some(bridge);
+                        ctx.request_repaint_after(std::time::Duration::from_millis(50));
+                        return;
+                    }
+                    Err(_) => Err("Analytical worker stopped before returning a result".into()),
+                },
+                PendingSource::Window { wait, started } => {
+                    match self.check_wait(wait, *started, &bridge) {
+                        None => {
+                            bridge.pending = Some(pending);
+                            self.remote = Some(bridge);
+                            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+                            return;
+                        }
+                        Some(done) => done.map(BackgroundResult::Value),
+                    }
                 }
-                Err(_) => Err("Analytical worker stopped before returning a result".into()),
             };
             if !pending.reply.is_closed() {
                 let result = result.and_then(|r| self.apply_background(r, &pending, &mut bridge));
@@ -293,10 +326,34 @@ impl MzViewerApp {
                     ctx.request_repaint();
                     return;
                 }
+                match self.start_window_wait(&command, &mut bridge, ctx) {
+                    Ok(Some(wait)) => {
+                        bridge.pending = Some(PendingOperation {
+                            source: PendingSource::Window {
+                                wait,
+                                started: std::time::Instant::now(),
+                            },
+                            reply: envelope.reply,
+                            request: entry,
+                            selection: self.active_file_id,
+                            input: self.user_input.clone(),
+                        });
+                        self.remote = Some(bridge);
+                        ctx.request_repaint_after(std::time::Duration::from_millis(50));
+                        return;
+                    }
+                    Err(message) => {
+                        Self::reply_remote(Err(message), entry, envelope.reply, &mut bridge);
+                        self.remote = Some(bridge);
+                        ctx.request_repaint();
+                        return;
+                    }
+                    Ok(None) => {}
+                }
                 match self.start_background(&command, &bridge, ctx) {
                     Ok(Some(receiver)) => {
                         bridge.pending = Some(PendingOperation {
-                            receiver,
+                            source: PendingSource::Worker(receiver),
                             reply: envelope.reply,
                             request: entry,
                             selection: self.active_file_id,
@@ -320,6 +377,50 @@ impl MzViewerApp {
             ctx.request_repaint();
         }
         self.remote = Some(bridge);
+    }
+    /// Starts the operations whose reply depends on the window finishing work over several
+    /// frames, after the same permission checks as every other command.
+    fn start_window_wait(
+        &mut self,
+        command: &Command,
+        b: &mut GuiBridge,
+        ctx: &egui::Context,
+    ) -> Result<Option<Wait>, String> {
+        match command {
+            Command::LoadSession { path } => {
+                self.remote_validate(command, b)?;
+                files::load_session(self, ctx, b, path).map(|()| Some(Wait::Session))
+            }
+            _ => Ok(None),
+        }
+    }
+    /// `None` while the window is still working; the reply once it is done or failed.
+    fn check_wait(
+        &self,
+        wait: &Wait,
+        started: std::time::Instant,
+        bridge: &GuiBridge,
+    ) -> Option<Result<Value, String>> {
+        let done = match wait {
+            Wait::Session => !workspace::restore_in_progress(self),
+        };
+        if !done {
+            return (started.elapsed() > WAIT_LIMIT).then(|| {
+                Err("The window did not finish in ten minutes; check gui_state".to_owned())
+            });
+        }
+        Some(Ok(match wait {
+            Wait::Session => {
+                let state = self.remote_state(bridge);
+                json!({
+                    "restored":true,
+                    "datasets":state["datasets"],
+                    "measurements":self.workspace.measurements.len(),
+                    "layout":ops::layout(self),
+                    "warning":self.error_message,
+                })
+            }
+        }))
     }
     /// Starts hashing every dataset that has no stable id yet and collects finished hashes.
     fn refresh_stable_ids(&self, bridge: &mut GuiBridge) {
@@ -540,6 +641,7 @@ impl MzViewerApp {
         b: &mut GuiBridge,
     ) -> Result<CallToolResult, String> {
         let value = match result {
+            BackgroundResult::Value(value) => value,
             BackgroundResult::Opened(imported) => self.register_imports(imported),
             BackgroundResult::Extracted {
                 dataset_id,
@@ -667,6 +769,7 @@ impl MzViewerApp {
         let changes = matches!(
             c,
             Command::SelectDataset { .. }
+                | Command::LoadSession { .. }
                 | Command::SetLayout { .. }
                 | Command::RetainTrace { .. }
                 | Command::RemoveTrace { .. }
@@ -837,6 +940,10 @@ impl MzViewerApp {
                 trace_index,
                 visible,
             } => ops::set_trace_visibility(self, dataset_id.index(), trace_index, visible)?,
+            Command::SaveSession { path } => files::save_session(self, ctx, b, &path)?,
+            Command::LoadSession { .. } => {
+                return Err("load_session replies when the workspace is restored, so it cannot run inside a batch; call it on its own".into())
+            }
             Command::ListScans {
                 dataset_id,
                 offset,
@@ -865,14 +972,7 @@ impl MzViewerApp {
             Command::ExportQuantification { path } => {
                 let path = b.policy.output(&path)?;
                 let csv = super::quant::remote_csv(self)?;
-                use std::io::Write;
-                std::fs::OpenOptions::new()
-                    .create_new(true)
-                    .write(true)
-                    .open(&path)
-                    .map_err(err)?
-                    .write_all(csv.as_bytes())
-                    .map_err(err)?;
+                crate::atomic_write::write_atomic_new(&path, csv).map_err(err)?;
                 json!({"path":path})
             }
             Command::ResetQuantification { result_index } => {
@@ -906,14 +1006,7 @@ impl MzViewerApp {
                     workspace::figure_svg(self)
                 }
                 .ok_or("No displayed plot")?;
-                use std::io::Write;
-                std::fs::OpenOptions::new()
-                    .create_new(true)
-                    .write(true)
-                    .open(&path)
-                    .map_err(err)?
-                    .write_all(svg.as_bytes())
-                    .map_err(err)?;
+                crate::atomic_write::write_atomic_new(&path, svg).map_err(err)?;
                 json!({"path":path,"format":"image/svg+xml"})
             }
             Command::ListDatasets {} => {
@@ -1149,7 +1242,8 @@ impl MzViewerApp {
             } => {
                 let dataset_id = dataset_id.index();
                 let path = b.policy.output(&path)?;
-                // Generate with existing CSV exporters; create_new prevents a check/write overwrite race.
+                // Generate with the existing CSV exporters, then publish the finished file without
+                // ever replacing one.
                 let temp = tempfile::NamedTempFile::new().map_err(err)?;
                 if spectrum {
                     let s = self
@@ -1162,16 +1256,8 @@ impl MzViewerApp {
                     let r = b.results.get(&dataset_id).ok_or("Extract first")?;
                     crate::export::export_chromatogram_csv(&r.0, temp.path()).map_err(err)?;
                 }
-                let mut out = std::fs::OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .open(&path)
-                    .map_err(err)?;
-                std::io::copy(
-                    &mut std::fs::File::open(temp.path()).map_err(err)?,
-                    &mut out,
-                )
-                .map_err(err)?;
+                let csv = std::fs::read(temp.path()).map_err(err)?;
+                crate::atomic_write::write_atomic_new(&path, csv).map_err(err)?;
                 json!({"path":path})
             }
             Command::ApplyPreset { toml } => {
@@ -1349,6 +1435,7 @@ impl MzViewerApp {
     }
 }
 
+mod files;
 mod ops;
 #[cfg(test)]
 mod protocol_tests;

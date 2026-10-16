@@ -12,6 +12,8 @@ const USER_SAVE_FILES: &[&str] = &[
     "src/gui/delivery.rs",
     "src/gui/examples.rs",
     "src/gui/project_workbench.rs",
+    "src/gui/remote.rs",       // the MCP exports
+    "src/gui/remote/files.rs", // MCP session, method, batch and preset saves
 ];
 
 fn production_code(path: &str) -> String {
