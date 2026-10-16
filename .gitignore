@@ -21,10 +21,24 @@ docs/*
 !docs/IMPLEMENTATION_ROADMAP.md
 !docs/VALIDATION_REPORT.md
 !docs/SESSION_HANDOFF.md
-# mass spectrometry files
-.mzML
-.raw
-.mzXML
+# Mass spectrometry data: never commit acquisitions by accident. Patterns match at any depth;
+# a plain ".mzML" would only match a file with exactly that name. The small authored fixtures
+# are re-included below (Git ignores new files there unless they match a "!" rule).
+*.mzML
+*.mzml
+*.mzML.gz
+*.mzml.gz
+*.mzXML
+*.mzxml
+*.raw
+*.RAW
+*.wiff
+*.wiff2
+*.wiff.scan
+# Vendor "directory" data (Agilent .d, Waters .raw, Bruker .d)
+*.d/
+!test_file/*.mzML
+!tests/fixtures/**/*.mzML
 
 !docs/MCP_ANALYSIS.md
 !docs/FEATURE_STATUS.md
