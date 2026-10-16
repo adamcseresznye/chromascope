@@ -211,10 +211,11 @@ fn documentation_matches_the_shipped_app() {
     assert!(workflow.contains("Open Anyway"));
     assert!(!workflow.contains("users open it once via right-click"));
 
-    let notes = read("docs/RELEASE_NOTES.md");
-    assert!(!notes.contains("uncommitted working tree"));
-    assert!(!notes.contains("no tag"));
-    assert!(notes.contains("0.3.0"));
+    // The release notes used to be a file of their own; the changelog and the README carry them now.
+    let changelog = read("CHANGELOG.md");
+    assert!(!changelog.contains("uncommitted working tree"));
+    assert!(!changelog.contains("no tag"));
+    assert!(changelog.contains("0.3.0"));
 
     // The changelog has a section for the version in Cargo.toml.
     let version = read("Cargo.toml")
@@ -223,16 +224,13 @@ fn documentation_matches_the_shipped_app() {
         .and_then(|l| l.strip_suffix('"'))
         .expect("version in Cargo.toml")
         .to_owned();
-    let changelog = read("CHANGELOG.md");
     assert!(changelog.contains(&format!("## [{version}]")));
     assert!(changelog.contains("## [0.2.0]") && changelog.contains("## [0.1.0]"));
 
     // Numerical behaviour that users can run into is written down.
-    let guide = read("docs/USER_GUIDE.md");
-    assert!(guide.contains("within **0.01 Da**"));
-    assert!(guide.contains("double precision and rounds once"));
-
-    let status = read("docs/FEATURE_STATUS.md");
-    assert!(!status.contains("Reports and AI activity"));
-    assert!(!status.contains("Project reports and delivery"));
+    assert!(readme.contains("within **0.01 Da**"));
+    assert!(readme.contains("double precision and rounds once"));
+    // Names the app no longer uses stay out of the README, which now holds the feature overview.
+    assert!(!readme.contains("Reports and AI activity"));
+    assert!(!readme.contains("Project reports and delivery"));
 }

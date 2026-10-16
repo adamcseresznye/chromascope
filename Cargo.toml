@@ -11,7 +11,7 @@ homepage = "https://github.com/adamcseresznye/chromascope"
 readme = "README.md"
 keywords = ["mass-spectrometry", "lc-ms", "chromatography", "mzml", "mcp"]
 categories = ["science", "visualization"]
-include = ["LICENSE", "**/*.rs", "src/adapters/*.py", "Cargo.toml", "assets/icon.png", "assets/fonts/**", "presets/**", "README.md", "THIRD_PARTY_LICENSES.txt", "docs/**", "examples/**"]
+include = ["LICENSE", "**/*.rs", "src/adapters/*.py", "Cargo.toml", "assets/icon.png", "assets/fonts/**", "presets/**", "README.md", "THIRD_PARTY_LICENSES.txt", "CHANGELOG.md", "src/interoperability.md", "examples/**"]
 rust-version = "1.88"
 
 [features]

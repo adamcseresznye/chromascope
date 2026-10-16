@@ -417,7 +417,7 @@ pub fn export(
     write(
         destination,
         "INTEROPERABILITY.md",
-        include_bytes!("../docs/PROJECT_DELIVERY.md"),
+        include_bytes!("interoperability.md"),
     )?;
     for a in &p.results {
         let r = p.load_result(root, a.result_id)?;
@@ -585,7 +585,7 @@ pub fn export(
                 &fs::read(repository.join(name)).map_err(err)?,
             )?;
         }
-        for name in ["src", "docs", "examples", "assets"] {
+        for name in ["src", "examples", "assets"] {
             let original = repository.join(name);
             if original.is_dir() {
                 copy_tree(&original, &software.join(name))?;

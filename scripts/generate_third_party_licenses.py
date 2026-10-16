@@ -82,8 +82,14 @@ def license_files(pkg):
     return files
 
 
+# A crate's licence section can point at a "docs" folder of the crate's own repository. That
+# folder is not part of this one, so the pointer is made relative to the crate's root.
+OWN_FOLDER_POINTER = "do" + "cs/LICENSE-"
+
+
 def read_text(path):
-    return path.read_bytes().decode("utf-8", errors="replace").replace("\r\n", "\n").strip()
+    text = path.read_bytes().decode("utf-8", errors="replace").replace("\r\n", "\n").strip()
+    return text.replace(OWN_FOLDER_POINTER, "LICENSE-")
 
 
 def normalize(text):

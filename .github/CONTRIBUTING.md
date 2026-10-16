@@ -59,8 +59,3 @@ Once your pull request is reviewed and approved, it will be merged into the main
 ## Community and Behavioral Expectations
 
 We strive to create a welcoming and inclusive community. Please be respectful and considerate in your interactions. Follow our Code of Conduct to ensure a positive experience for everyone.
-
-## Additional Resources
-
-- [Project Documentation](https://adamcseresznye.github.io/chromascope/docs/chromascope/index.html)
-

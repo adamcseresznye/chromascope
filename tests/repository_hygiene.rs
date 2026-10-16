@@ -288,3 +288,203 @@ fn window_titles_use_sentence_case() {
     assert!(all.contains("Window::new(\"Plot properties\")"));
     assert!(all.contains("Window::new(\"m/z range filter\")"));
 }
+
+/// Text of a tracked file that is not binary, or `None` for binary and unreadable files.
+fn tracked_text(file: &str) -> Option<String> {
+    let bytes = fs::read(root().join(file)).ok()?;
+    if bytes.contains(&0) {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&bytes).replace("\r\n", "\n"))
+}
+
+/// `text` without the web addresses in it: a web address is not a path in this repository.
+fn without_urls(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(at) = ["http://", "https://"]
+        .iter()
+        .filter_map(|scheme| rest.find(scheme))
+        .min()
+    {
+        out.push_str(&rest[..at]);
+        let end = rest[at..]
+            .find(|c: char| c.is_whitespace() || "()<>\"'`[]".contains(c))
+            .map_or(rest.len(), |n| at + n);
+        rest = &rest[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
+#[test]
+fn no_tracked_file_refers_to_the_docs_folder() {
+    // The folder is kept on the maintainer's disk only (it is ignored), so nothing a clone contains
+    // may point into it. Built at run time so that this file does not contain what it forbids.
+    let needle = ["do", "cs/"].concat();
+    let Some(files) = tracked_files() else {
+        eprintln!("git is not available: tracked files were not scanned");
+        return;
+    };
+    assert!(files.len() > 100, "unexpectedly few tracked files");
+    let mut offenders = Vec::new();
+    for file in files.iter().filter(|f| f.as_str() != ".gitignore") {
+        assert!(
+            !file.starts_with(&needle),
+            "{file} is tracked: the whole folder must stay out of the repository"
+        );
+        let Some(text) = tracked_text(file) else {
+            continue;
+        };
+        for (number, line) in text.lines().enumerate() {
+            if without_urls(line).contains(&needle) {
+                offenders.push(format!("{file}:{}: {}", number + 1, line.trim()));
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "references to the untracked folder:\n{}",
+        offenders.join("\n")
+    );
+    // Every ignore rule for the folder is the single one line.
+    let ignore = read(".gitignore");
+    let rules: Vec<&str> = ignore.lines().filter(|l| l.contains("docs")).collect();
+    assert_eq!(rules, [needle.as_str()], "one rule keeps the folder out");
+}
+
+/// The anchor GitHub gives a heading: lowercase, punctuation dropped, spaces turned into hyphens.
+fn heading_anchor(heading: &str) -> String {
+    heading
+        .trim()
+        .to_lowercase()
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == ' ' || *c == '-' || *c == '_')
+        .map(|c| if c == ' ' { '-' } else { c })
+        .collect()
+}
+
+/// Anchors of the headings of a Markdown text, with GitHub's `-1`, `-2` suffix for repeats.
+fn anchors(markdown: &str) -> Vec<String> {
+    let mut seen: std::collections::HashMap<String, usize> = Default::default();
+    let mut out = Vec::new();
+    let mut fenced = false;
+    for line in markdown.lines() {
+        if line.trim_start().starts_with("```") {
+            fenced = !fenced;
+        } else if !fenced && line.starts_with('#') {
+            let base = heading_anchor(line.trim_start_matches('#'));
+            let n = seen.entry(base.clone()).or_default();
+            out.push(if *n == 0 { base } else { format!("{base}-{n}") });
+            *n += 1;
+        }
+    }
+    out
+}
+
+/// Targets of the Markdown links `[text](target)` and images in `markdown`, outside code fences.
+fn link_targets(markdown: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut fenced = false;
+    for line in markdown.lines() {
+        if line.trim_start().starts_with("```") {
+            fenced = !fenced;
+            continue;
+        }
+        if fenced {
+            continue;
+        }
+        let mut rest = line;
+        while let Some(at) = rest.find("](") {
+            rest = &rest[at + 2..];
+            if let Some(end) = rest.find(')') {
+                out.push(rest[..end].trim().to_owned());
+                rest = &rest[end..];
+            }
+        }
+    }
+    out
+}
+
+/// `base` joined with a relative `target`, with `.` and `..` resolved; `None` if it leaves the repository.
+fn resolve(base: &str, target: &str) -> Option<String> {
+    let mut parts: Vec<&str> = base.split('/').collect();
+    parts.pop(); // the file name
+    for part in target.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            other => parts.push(other),
+        }
+    }
+    Some(parts.join("/"))
+}
+
+#[test]
+fn every_relative_markdown_link_points_to_a_tracked_file() {
+    let Some(files) = tracked_files() else {
+        eprintln!("git is not available: links were not checked");
+        return;
+    };
+    let markdown: Vec<&String> = files.iter().filter(|f| f.ends_with(".md")).collect();
+    assert!(markdown.len() >= 5, "unexpectedly few Markdown files");
+    let mut checked = 0;
+    let mut broken = Vec::new();
+    for file in markdown {
+        let text = tracked_text(file).unwrap();
+        for target in link_targets(&text) {
+            if target.contains("://") || target.starts_with("mailto:") {
+                continue;
+            }
+            let (path, anchor) = match target.split_once('#') {
+                Some((p, a)) => (p, Some(a)),
+                None => (target.as_str(), None),
+            };
+            let resolved = if path.is_empty() {
+                Some(file.clone())
+            } else {
+                resolve(file, path.split('?').next().unwrap())
+            };
+            let Some(resolved) = resolved.filter(|r| files.contains(r)) else {
+                broken.push(format!("{file}: ({target}) is not a tracked file"));
+                continue;
+            };
+            checked += 1;
+            if let Some(anchor) = anchor.filter(|_| resolved.ends_with(".md")) {
+                let headings = anchors(&tracked_text(&resolved).unwrap());
+                if !headings.iter().any(|h| h == anchor) {
+                    broken.push(format!("{file}: ({target}) has no heading {anchor:?}"));
+                }
+            }
+        }
+    }
+    assert!(
+        checked >= 10,
+        "too few relative links were found: {checked}"
+    );
+    assert!(broken.is_empty(), "broken links:\n{}", broken.join("\n"));
+}
+
+#[test]
+fn the_link_checker_notices_what_it_should() {
+    // The two guards above are only worth something if their helpers see what they claim to.
+    let d = ["do", "cs/"].concat();
+    assert_eq!(
+        without_urls(&format!(
+            "see https://a.example/{d}x and (http://b.example/{d}y) {d}z"
+        )),
+        format!("see  and () {d}z")
+    );
+    assert_eq!(
+        link_targets("[a](x.md) ![b](img/p.png#c)\n```\n[no](ignored.md)\n```\n[c](../y.md#h)"),
+        ["x.md", "img/p.png#c", "../y.md#h"]
+    );
+    assert_eq!(resolve("a/b/c.md", "../d.md").as_deref(), Some("a/d.md"));
+    assert_eq!(resolve("c.md", "../d.md"), None);
+    assert_eq!(
+        anchors("# A title\n## Sub: part\n```\n# not a heading\n```\n## Sub: part"),
+        ["a-title", "sub-part", "sub-part-1"]
+    );
+}
