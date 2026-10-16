@@ -210,7 +210,9 @@ jobs:
           MSI_VERSION="${VERSION%%-*}"
           dotnet tool install --global wix --version 5.0.2
           export PATH="$PATH:$HOME/.dotnet/tools"
-          wix build -arch "$ARCH" \
+          # -pdbtype none: otherwise wix leaves a .wixpdb debug file next to the MSI, and every
+          # file in release-assets is uploaded and later published.
+          wix build -arch "$ARCH" -pdbtype none \
             -d Version="$MSI_VERSION" -d BinDir=bin -d LicenseDir=. -d IconFile=packaging/icons/chromascope.ico \
             -o "$OUT/$NAME.msi" packaging/windows/chromascope.wxs
 
