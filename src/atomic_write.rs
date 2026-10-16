@@ -35,7 +35,7 @@ pub fn write_atomic(path: impl AsRef<Path>, bytes: impl AsRef<[u8]>) -> io::Resu
             // Best effort: keep the mode of the file being replaced.
             let _ = fs::set_permissions(&temp, meta.permissions());
         }
-        rename_over(&temp, path)
+        rename_with_retry(&temp, path)
     })();
     if result.is_err() {
         let _ = fs::remove_file(&temp);
@@ -50,14 +50,20 @@ fn temp_path(dir: &Path, name: &std::ffi::OsStr) -> PathBuf {
     dir.join(temp_name)
 }
 
-/// Renames `from` over `to`. Windows refuses with "Access is denied" while an indexer, antivirus
-/// scanner or sync client briefly holds the target open, so retry a few times before giving up.
-fn rename_over(from: &Path, to: &Path) -> io::Result<()> {
+/// Renames `from` to `to` (a file or a directory), retrying while Windows reports a transient lock.
+///
+/// Windows refuses with "Access is denied" or a sharing violation while an indexer, antivirus
+/// scanner or sync client briefly holds the source or target open, typically right after the
+/// files were created. The delivery tests that move a freshly exported bundle hit this about one
+/// run in three on a developer machine. Other errors, and every error on other platforms, are
+/// returned at once.
+pub fn rename_with_retry(from: impl AsRef<Path>, to: impl AsRef<Path>) -> io::Result<()> {
+    let (from, to) = (from.as_ref(), to.as_ref());
     let mut last = None;
-    for attempt in 0..8u64 {
+    for attempt in 0..12u64 {
         match fs::rename(from, to) {
             Ok(()) => return Ok(()),
-            Err(e) if e.kind() == io::ErrorKind::PermissionDenied && cfg!(windows) => {
+            Err(e) if is_transient_lock(&e) => {
                 last = Some(e);
                 std::thread::sleep(std::time::Duration::from_millis(25 * (attempt + 1)));
             }
@@ -65,6 +71,13 @@ fn rename_over(from: &Path, to: &Path) -> io::Result<()> {
         }
     }
     Err(last.unwrap_or_else(|| io::Error::other("rename failed")))
+}
+
+fn is_transient_lock(error: &io::Error) -> bool {
+    // ERROR_SHARING_VIOLATION (32) and ERROR_LOCK_VIOLATION (33) have no stable ErrorKind.
+    cfg!(windows)
+        && (error.kind() == io::ErrorKind::PermissionDenied
+            || matches!(error.raw_os_error(), Some(32 | 33)))
 }
 
 #[cfg(test)]
@@ -104,6 +117,42 @@ mod tests {
         assert!(leftovers(dir.path()).is_empty());
         // Missing parent directory is an error, not a silent success.
         assert!(write_atomic(dir.path().join("nope").join("f"), b"data").is_err());
+    }
+
+    #[test]
+    fn rename_with_retry_waits_for_a_directory_that_is_briefly_locked() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = dir.path().join("bundle");
+        fs::create_dir(&bundle).unwrap();
+        let file = bundle.join("report.json");
+        fs::write(&file, b"{}").unwrap();
+        // An open handle without delete sharing blocks a directory rename on Windows, like a
+        // virus scanner that has just opened a new file. It is released while we retry.
+        let mut open = OpenOptions::new();
+        open.read(true);
+        #[cfg(windows)]
+        {
+            // Rust opens files with FILE_SHARE_DELETE by default; a scanner does not.
+            use std::os::windows::fs::OpenOptionsExt;
+            open.share_mode(1); // FILE_SHARE_READ only
+        }
+        let handle = open.open(&file).unwrap();
+        #[cfg(windows)]
+        assert!(
+            fs::rename(&bundle, dir.path().join("probe")).is_err(),
+            "the open handle must block a plain rename, or this test proves nothing"
+        );
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(120));
+            drop(handle);
+        });
+        let moved = dir.path().join("moved");
+        rename_with_retry(&bundle, &moved).unwrap();
+        release.join().unwrap();
+        assert!(moved.join("report.json").exists());
+        assert!(!bundle.exists());
+        // A missing source is a real error and must not be retried into success.
+        assert!(rename_with_retry(&bundle, dir.path().join("again")).is_err());
     }
 
     #[test]

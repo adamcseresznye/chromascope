@@ -15,6 +15,12 @@ fn request(operation: Operation) -> Request {
         operation,
     }
 }
+/// Renames a file or directory, tolerating the short locks Windows scanners and indexers put on
+/// files that were just written (see `atomic_write::rename_with_retry`).
+fn move_path(from: &Path, to: &Path) {
+    chromascope::atomic_write::rename_with_retry(from, to)
+        .unwrap_or_else(|e| panic!("move {} to {}: {e}", from.display(), to.display()));
+}
 fn fixture() -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("test_file/data_dependent_02.mzML")
 }
@@ -41,7 +47,7 @@ fn portable_roundtrip_replay_history_and_corruption() {
     delivery::export(&root, &bundle, &Config::default(), true).unwrap();
     delivery::verify_bundle(&bundle).unwrap();
     let moved = temp.path().join("moved");
-    fs::rename(&bundle, &moved).unwrap();
+    move_path(&bundle, &moved);
     let reopened = Project::open(&moved).unwrap();
     assert_eq!(reopened.id, p.id);
     assert_eq!(reopened.revision, 1);
@@ -74,7 +80,7 @@ fn missing_source_inspection_and_no_overwrite() {
     let mut p = Project::create(&root).unwrap();
     p.register(&source).unwrap();
     p.commit(&root, 0).unwrap();
-    fs::rename(&source, temp.path().join("detached.mzML")).unwrap();
+    move_path(&source, &temp.path().join("detached.mzML"));
     let report = delivery::report(&root, &Config::default()).unwrap();
     assert_eq!(
         report["source_verification"][0]["state"],
@@ -185,7 +191,7 @@ fn raw_extraction_reproduces_after_portable_relocation() {
         .unwrap()
         .verified_source(dataset)
         .unwrap();
-    fs::rename(source, out.join("missing.mzML")).unwrap();
+    move_path(&source, &out.join("missing.mzML"));
     assert!(Project::open(&out).is_ok());
     assert!(delivery::reprocess(&out, id).is_err());
     assert!(delivery::verify_bundle(&out).is_err());
