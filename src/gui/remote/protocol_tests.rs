@@ -419,3 +419,123 @@ fn desktop_integrate_uses_the_engine_path_and_result_shape() {
     );
     desktop.finish();
 }
+
+/// `(dataset_id, stable_id)` of every open dataset, once the window has hashed them all.
+fn stable_ids(desktop: &mut Desktop) -> Vec<(u64, String)> {
+    for _ in 0..2000 {
+        let listed = desktop.tool("list_datasets", json!({}));
+        let datasets = listed["datasets"].as_array().unwrap();
+        if datasets.iter().all(|d| d["stable_id"].is_string()) {
+            return datasets
+                .iter()
+                .map(|d| {
+                    (
+                        d["dataset_id"].as_u64().unwrap(),
+                        d["stable_id"].as_str().unwrap().to_owned(),
+                    )
+                })
+                .collect();
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    panic!("stable ids were not computed");
+}
+
+#[test]
+fn stable_dataset_ids_name_the_same_data_after_a_restart() {
+    use sha2::{Digest, Sha256};
+    let temp = tempfile::tempdir().unwrap();
+    let batch = raw_request(temp.path());
+    let (first, second) = (
+        batch.samples[3].source.clone(),
+        batch.samples[5].source.clone(),
+    );
+    let sha = |path: &str| format!("sha256:{:x}", Sha256::digest(std::fs::read(path).unwrap()));
+    // One session opens first, then second; the next session opens them the other way round.
+    let mut one = Desktop::start(vec![temp.path().to_owned()], true, false, false);
+    one.tool(
+        "open_files",
+        json!({"paths":[first.clone(), second.clone()]}),
+    );
+    let ids = stable_ids(&mut one);
+    assert_eq!(ids.len(), 2);
+    assert_eq!(
+        ids[0].1,
+        sha(&first),
+        "the stable id is the SHA-256 of the source file"
+    );
+    assert_eq!(ids[1].1, sha(&second));
+    let mut two = Desktop::start(vec![temp.path().to_owned()], true, false, false);
+    two.tool(
+        "open_files",
+        json!({"paths":[second.clone(), first.clone()]}),
+    );
+    let swapped = stable_ids(&mut two);
+    assert_eq!(
+        swapped[0].1,
+        sha(&second),
+        "the numbers differ between sessions"
+    );
+    for desktop in [&mut one, &mut two] {
+        for (path, reference) in [(&first, sha(&first)), (&second, sha(&second))] {
+            let by_stable = desktop.tool("dataset_metadata", json!({"dataset_id":reference}));
+            assert!(
+                by_stable["path"].as_str().unwrap().ends_with(
+                    std::path::Path::new(path)
+                        .file_name()
+                        .unwrap()
+                        .to_str()
+                        .unwrap()
+                ),
+                "{by_stable}"
+            );
+            // Bare hex and upper case name the same dataset; so does the plain number.
+            let bare = reference.trim_start_matches("sha256:").to_ascii_uppercase();
+            let by_bare = desktop.tool("dataset_metadata", json!({"dataset_id":bare}));
+            assert_eq!(by_bare["dataset_id"], by_stable["dataset_id"]);
+            let by_number = desktop.tool(
+                "dataset_metadata",
+                json!({"dataset_id":by_stable["dataset_id"]}),
+            );
+            assert_eq!(by_number["path"], by_stable["path"]);
+        }
+    }
+    // Inside a batch, and for the commands that take a list.
+    let in_batch = one.tool(
+        "batch",
+        json!({"commands":[{"operation":"dataset_metadata","dataset_id":sha(&second)}]}),
+    );
+    assert_eq!(
+        in_batch["outcomes"][0]["result"]["structuredContent"]["scan_count"], 5,
+        "{in_batch}"
+    );
+    // Unknown ids and ambiguous ids are explained, never guessed.
+    let missing = one.tool_error(
+        "dataset_metadata",
+        json!({"dataset_id":sha(batch.samples[0].source.as_str())}),
+    );
+    assert!(
+        missing["message"]
+            .as_str()
+            .unwrap()
+            .contains("No open dataset has stable id"),
+        "{missing}"
+    );
+    let garbage = one.tool_error("dataset_metadata", json!({"dataset_id":"not-an-id"}));
+    assert!(
+        garbage["message"].as_str().unwrap().contains("stable id"),
+        "{garbage}"
+    );
+    one.tool("open_files", json!({"paths":[first.clone()]}));
+    stable_ids(&mut one);
+    let ambiguous = one.tool_error("dataset_metadata", json!({"dataset_id":sha(&first)}));
+    assert!(
+        ambiguous["message"]
+            .as_str()
+            .unwrap()
+            .contains("matches 2 open datasets"),
+        "{ambiguous}"
+    );
+    one.finish();
+    two.finish();
+}

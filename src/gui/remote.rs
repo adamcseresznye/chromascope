@@ -1,7 +1,7 @@
 //! Commands are applied exclusively on the egui owner thread.
 use super::{plotting, state::*, workspace, MzViewerApp};
 use crate::{
-    mcp::{Command, GuiBridge},
+    mcp::{Command, DatasetRef, GuiBridge},
     parser::MzData,
     plotting_parameters::PlotType,
     processing::{self, ProcessingParams},
@@ -27,6 +27,35 @@ enum BackgroundResult {
         chrom: crate::parser::ChromatogramData,
         params: ProcessingParams,
     },
+}
+
+/// The stable id of one open dataset: the SHA-256 of its source file, computed off the window
+/// thread the first time the dataset is seen.
+pub(crate) enum StableState {
+    Hashing(std::sync::mpsc::Receiver<Result<String, String>>),
+    Ready(String),
+    Failed(String),
+}
+impl StableState {
+    fn json(&self) -> Value {
+        match self {
+            Self::Hashing(_) => json!({"stable_id":null,"stable_id_state":"computing"}),
+            Self::Ready(hash) => {
+                json!({"stable_id":format!("sha256:{hash}"),"stable_id_state":"ready"})
+            }
+            Self::Failed(error) => {
+                json!({"stable_id":null,"stable_id_state":format!("failed: {error}")})
+            }
+        }
+    }
+}
+/// The file whose bytes identify a dataset: the original single source file when there is one
+/// (a vendor `.raw` file, an mzML), otherwise the file the window reads (a converted run).
+fn identity_path(file: &OpenFile) -> std::path::PathBuf {
+    match file.cache.source_path.as_deref() {
+        Some(source) if std::path::Path::new(source).is_file() => source.into(),
+        _ => (&file.path).into(),
+    }
 }
 
 fn range(r: [f64; 2]) -> Result<[f64; 2], String> {
@@ -169,6 +198,7 @@ impl MzViewerApp {
             return;
         };
         self.drain_internal(&mut bridge);
+        self.refresh_stable_ids(&mut bridge);
         if let Some(pending) = bridge.pending.take() {
             let result = match pending.receiver.try_recv() {
                 Ok(result) => result,
@@ -188,8 +218,14 @@ impl MzViewerApp {
         // One command per frame preserves fairness with local input.
         if let Ok(envelope) = bridge.receiver.try_recv() {
             if !envelope.reply.is_closed() {
-                let command = envelope.command;
+                let mut command = envelope.command;
                 let entry = serde_json::to_value(&command).unwrap_or(Value::Null);
+                if let Err(message) = self.resolve_dataset_refs(&mut command, &bridge) {
+                    Self::reply_remote(Err(message), entry, envelope.reply, &mut bridge);
+                    self.remote = Some(bridge);
+                    ctx.request_repaint();
+                    return;
+                }
                 match self.start_background(&command, &bridge, ctx) {
                     Ok(Some(receiver)) => {
                         bridge.pending = Some(PendingOperation {
@@ -217,6 +253,83 @@ impl MzViewerApp {
             ctx.request_repaint();
         }
         self.remote = Some(bridge);
+    }
+    /// Starts hashing every dataset that has no stable id yet and collects finished hashes.
+    fn refresh_stable_ids(&self, bridge: &mut GuiBridge) {
+        bridge.stable.retain(|id, _| self.files.contains_key(id));
+        for (id, file) in &self.files {
+            if file.is_loading || bridge.stable.contains_key(id) {
+                continue;
+            }
+            let path = identity_path(file);
+            let (sender, receiver) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = sender.send(
+                    crate::project::source_identity(&path)
+                        .map(|(hash, _)| hash)
+                        .map_err(|e| e.message),
+                );
+            });
+            bridge.stable.insert(*id, StableState::Hashing(receiver));
+        }
+        for state in bridge.stable.values_mut() {
+            let next = match state {
+                StableState::Hashing(receiver) => match receiver.try_recv() {
+                    Ok(Ok(hash)) => Some(StableState::Ready(hash)),
+                    Ok(Err(error)) => Some(StableState::Failed(error)),
+                    Err(std::sync::mpsc::TryRecvError::Empty) => None,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        Some(StableState::Failed("the hashing worker stopped".into()))
+                    }
+                },
+                _ => None,
+            };
+            if let Some(next) = next {
+                *state = next;
+            }
+        }
+    }
+    /// Replaces every stable id of `command` by the window's number for that dataset.
+    fn resolve_dataset_refs(
+        &self,
+        command: &mut Command,
+        bridge: &GuiBridge,
+    ) -> Result<(), String> {
+        for reference in command.dataset_refs_mut() {
+            if let DatasetRef::Stable(text) = reference {
+                let index = self.resolve_stable(text, bridge)?;
+                *reference = DatasetRef::Index(index);
+            }
+        }
+        Ok(())
+    }
+    fn resolve_stable(&self, text: &str, bridge: &GuiBridge) -> Result<usize, String> {
+        let trimmed = text.trim();
+        let bare = trimmed.strip_prefix("sha256:").unwrap_or(trimmed);
+        let wanted = match uuid::Uuid::parse_str(bare) {
+            Ok(uuid) => self
+                .project
+                .source_sha256(uuid)
+                .ok_or_else(|| format!("The open project has no dataset {uuid}"))?,
+            Err(_) => bare.to_ascii_lowercase(),
+        };
+        let mut found: Vec<usize> = bridge
+            .stable
+            .iter()
+            .filter(|(_, state)| matches!(state, StableState::Ready(hash) if *hash == wanted))
+            .map(|(id, _)| *id)
+            .collect();
+        found.sort_unstable();
+        match found.as_slice() {
+            [one] => Ok(*one),
+            [] => Err(format!(
+                "No open dataset has stable id {text}. Call list_datasets: a dataset gets its stable id a moment after it opens, and only datasets that are open can be named."
+            )),
+            many => Err(format!(
+                "Stable id {text} matches {} open datasets ({many:?}): the same file is open more than once. Use dataset_id.",
+                many.len()
+            )),
+        }
     }
     /// Applies what the server threads tell the window: activity of the headless engine tools
     /// and finished analyses. Neither can be sent by a client.
@@ -336,6 +449,7 @@ impl MzViewerApp {
                 display,
                 ..
             } => {
+                let dataset_id = &dataset_id.index();
                 let file = self.files.get(dataset_id).ok_or("Unknown dataset")?;
                 let path = b.policy.input(&file.path)?;
                 let bounds = file.data.bounds;
@@ -441,8 +555,8 @@ impl MzViewerApp {
     }
     fn remote_validate(&self, c: &Command, b: &GuiBridge) -> Result<(), String> {
         let dataset = match c {
-            Command::SelectTrace { dataset_id, .. } => Some(*dataset_id),
-            Command::ListScans { dataset_id, .. } => Some(*dataset_id),
+            Command::SelectTrace { dataset_id, .. } => Some(dataset_id.index()),
+            Command::ListScans { dataset_id, .. } => Some(dataset_id.index()),
             Command::DatasetMetadata { dataset_id }
             | Command::ScanMetadata { dataset_id, .. }
             | Command::SelectDataset { dataset_id }
@@ -451,7 +565,7 @@ impl MzViewerApp {
             | Command::Spectrum { dataset_id, .. }
             | Command::SetVisibility { dataset_id, .. }
             | Command::Integrate { dataset_id, .. }
-            | Command::ExportCsv { dataset_id, .. } => Some(*dataset_id),
+            | Command::ExportCsv { dataset_id, .. } => Some(dataset_id.index()),
             _ => None,
         };
         if let Some(id) = dataset {
@@ -461,7 +575,7 @@ impl MzViewerApp {
         if let Command::StartQuantification { dataset_ids, .. } = c {
             for id in dataset_ids {
                 b.policy
-                    .input(&self.files.get(id).ok_or("Unknown dataset")?.path)?;
+                    .input(&self.files.get(&id.index()).ok_or("Unknown dataset")?.path)?;
             }
         }
         if matches!(c, Command::ApplyPreset { .. }) {
@@ -499,7 +613,14 @@ impl MzViewerApp {
     }
 
     fn remote_state(&self, b: &GuiBridge) -> Value {
-        let mut datasets: Vec<_> = self.files.values().map(|f| json!({"dataset_id":f.id,"name":f.name,"path":f.path,"loading":f.is_loading,"visible":f.display.visible,"processing":f.cache.last_processing_params})).collect();
+        let mut datasets: Vec<_> = self.files.values().map(|f| {
+            let mut entry = json!({"dataset_id":f.id,"name":f.name,"path":f.path,"loading":f.is_loading,"visible":f.display.visible,"processing":f.cache.last_processing_params});
+            let stable = b.stable.get(&f.id).map_or(json!({"stable_id":null,"stable_id_state":"computing"}), StableState::json);
+            if let (Some(entry), Some(stable)) = (entry.as_object_mut(), stable.as_object()) {
+                entry.extend(stable.clone());
+            }
+            entry
+        }).collect();
         datasets.sort_by_key(|f| f["dataset_id"].as_u64());
         json!({"datasets":datasets,"active_dataset_id":self.active_file_id,"parameters":self.user_input,"chromatogram_bounds":self.workspace.bounds,"spectrum_bounds":self.workspace.spectrum_bounds,"overlay":self.workspace.overlay,"measurements":self.workspace.measurements,"retained_traces":self.workspace.traces.iter().map(|(id,traces)|json!({"dataset_id":id,"traces":traces.iter().map(|t|json!({"name":t.name,"parameters":t.params,"point_count":t.points.len(),"visible":t.visible})).collect::<Vec<_>>()})).collect::<Vec<_>>(),"history":b.history,"units":{"retention_time":"minutes","mz":"m/z","intensity":"arbitrary units","area":"intensity*minutes"}})
     }
@@ -509,6 +630,8 @@ impl MzViewerApp {
         b: &mut GuiBridge,
         ctx: &egui::Context,
     ) -> Result<CallToolResult, String> {
+        let mut c = c;
+        self.resolve_dataset_refs(&mut c, b)?;
         self.remote_validate(&c, b)?;
         let value = match c {
             Command::ListMzmlFiles { directory } => {
@@ -584,6 +707,7 @@ impl MzViewerApp {
                 dataset_id,
                 trace_index,
             } => {
+                let dataset_id = dataset_id.index();
                 if self
                     .workspace
                     .traces
@@ -610,6 +734,7 @@ impl MzViewerApp {
                 offset,
                 limit,
             } => {
+                let dataset_id = dataset_id.index();
                 page(offset, limit)?;
                 if limit > 1000 {
                     return Err("Scan metadata page limit is 1000".into());
@@ -732,14 +857,17 @@ impl MzViewerApp {
                 json!({"files":outcomes})
             }
             Command::DatasetMetadata { dataset_id } => {
+                let dataset_id = dataset_id.index();
                 let f = self.files.get(&dataset_id).ok_or("Unknown dataset")?;
                 let d = f.data.bounds;
                 json!({"dataset_id":dataset_id,"path":f.path,"scan_count":d.scan_count,"retention_time_minutes":[d.min_rt,d.max_rt],"mz_range":[d.min_mz,d.max_mz],"scan_filters":f.data.available_scan_filters.iter().map(|(ms,p,pre,lo,hi)|json!({"ms_level":ms,"polarity":format!("{p:?}"),"precursor_mz":pre,"mz_range":[lo,hi]})).collect::<Vec<_>>()})
             }
             Command::ScanMetadata { dataset_id, index } => {
+                let dataset_id = dataset_id.index();
                 json!({"dataset_id":dataset_id,"index":index,"metadata":self.files.get_mut(&dataset_id).ok_or("Unknown dataset")?.data.scan_metadata(index).map_err(err)?})
             }
             Command::SelectDataset { dataset_id } => {
+                let dataset_id = dataset_id.index();
                 let f = self.files.get(&dataset_id).ok_or("Unknown dataset")?;
                 self.active_file_id = Some(dataset_id);
                 self.user_input.file_path = Some(f.path.clone());
@@ -748,11 +876,12 @@ impl MzViewerApp {
                 self.integration = Default::default();
                 json!({"active_dataset_id":dataset_id})
             }
-            command @ Command::ExtractChromatogram {
-                dataset_id,
+            ref command @ Command::ExtractChromatogram {
+                ref dataset_id,
                 display,
                 ..
             } => {
+                let dataset_id = dataset_id.index();
                 let f = self.files.get_mut(&dataset_id).ok_or("Unknown dataset")?;
                 let params = extraction_parameters(command.clone(), &f.data.bounds)?;
                 let (points, chrom) =
@@ -770,6 +899,7 @@ impl MzViewerApp {
                 offset,
                 limit,
             } => {
+                let dataset_id = dataset_id.index();
                 page(offset, limit)?;
                 let (points, _, params) = b
                     .results
@@ -785,6 +915,7 @@ impl MzViewerApp {
                 offset,
                 limit,
             } => {
+                let dataset_id = dataset_id.index();
                 page(offset, limit)?;
                 if index.is_some() == retention_time_minutes.is_some() {
                     return Err("Specify exactly one of index or retention_time_minutes".into());
@@ -848,6 +979,7 @@ impl MzViewerApp {
                 dataset_id,
                 visible,
             } => {
+                let dataset_id = dataset_id.index();
                 self.files
                     .get_mut(&dataset_id)
                     .ok_or("Unknown dataset")?
@@ -861,6 +993,7 @@ impl MzViewerApp {
                 end_minutes,
                 apply,
             } => {
+                let dataset_id = dataset_id.index();
                 range([start_minutes, end_minutes])?;
                 let (points, _, params) = b
                     .results
@@ -935,6 +1068,7 @@ impl MzViewerApp {
                 spectrum,
                 path,
             } => {
+                let dataset_id = dataset_id.index();
                 let path = b.policy.output(&path)?;
                 // Generate with existing CSV exporters; create_new prevents a check/write overwrite race.
                 let temp = tempfile::NamedTempFile::new().map_err(err)?;
@@ -969,7 +1103,11 @@ impl MzViewerApp {
                 method_toml,
                 dataset_ids,
             } => {
-                super::quant::remote_start(self, &method_toml, dataset_ids)?;
+                super::quant::remote_start(
+                    self,
+                    &method_toml,
+                    dataset_ids.iter().map(DatasetRef::index).collect(),
+                )?;
                 super::quant::remote_status(self)
             }
             Command::QuantificationStatus {} => {
@@ -1161,7 +1299,7 @@ mod tests {
     }
     fn extract(display: bool) -> Command {
         Command::ExtractChromatogram {
-            dataset_id: 0,
+            dataset_id: 0.into(),
             kind: "tic".into(),
             polarity: "positive".into(),
             ms_level: 1,
@@ -1180,7 +1318,7 @@ mod tests {
         use crate::validation::MassTolerance;
         let bounds = crate::validation::DataBounds::unrestricted();
         let xic = |ppm: Option<f64>, mda: Option<f64>| Command::ExtractChromatogram {
-            dataset_id: 0,
+            dataset_id: 0.into(),
             kind: "xic".into(),
             polarity: "positive".into(),
             ms_level: 1,
@@ -1227,7 +1365,7 @@ mod tests {
         let r = app
             .remote_command(
                 Command::Spectrum {
-                    dataset_id: 0,
+                    dataset_id: 0.into(),
                     index: None,
                     retention_time_minutes: Some(points[0][0]),
                     display: false,
@@ -1251,7 +1389,7 @@ mod tests {
         let z = points[points.len() - 1][0];
         let expected = processing::integrate_peak(points, a, z).unwrap();
         let c = Command::Integrate {
-            dataset_id: 0,
+            dataset_id: 0.into(),
             start_minutes: a,
             end_minutes: z,
             apply: true,
@@ -1276,7 +1414,7 @@ mod tests {
         app.remote_command(extract(true), &mut b, &ctx).unwrap();
         app.remote_command(
             Command::Spectrum {
-                dataset_id: 0,
+                dataset_id: 0.into(),
                 index: Some(0),
                 retention_time_minutes: None,
                 display: true,
@@ -1320,7 +1458,7 @@ mod tests {
         assert!(app
             .remote_command(
                 Command::ChromatogramData {
-                    dataset_id: 0,
+                    dataset_id: 0.into(),
                     offset: 0,
                     limit: 10001
                 },
@@ -1333,7 +1471,7 @@ mod tests {
         assert!(app
             .remote_command(
                 Command::Spectrum {
-                    dataset_id: 0,
+                    dataset_id: 0.into(),
                     index: Some(usize::MAX),
                     retention_time_minutes: None,
                     display: false,
@@ -1355,7 +1493,12 @@ mod tests {
         let r = app
             .remote_command(
                 Command::Batch {
-                    commands: vec![extract(false), Command::DatasetMetadata { dataset_id: 999 }],
+                    commands: vec![
+                        extract(false),
+                        Command::DatasetMetadata {
+                            dataset_id: 999.into(),
+                        },
+                    ],
                 },
                 &mut b,
                 &ctx,
@@ -1461,7 +1604,7 @@ mod tests {
             .remote_command(
                 Command::StartQuantification {
                     method_toml: method,
-                    dataset_ids: vec![0],
+                    dataset_ids: vec![0.into()],
                 },
                 &mut b,
                 &ctx,
@@ -1564,7 +1707,7 @@ mod tests {
         let data = app
             .remote_command(
                 Command::ListScans {
-                    dataset_id: 0,
+                    dataset_id: 0.into(),
                     offset: 0,
                     limit: 2,
                 },
@@ -1599,7 +1742,7 @@ mod tests {
             .to_string_lossy()
             .into_owned();
         let command = Command::ExportCsv {
-            dataset_id: 0,
+            dataset_id: 0.into(),
             spectrum: false,
             path: target.clone(),
         };

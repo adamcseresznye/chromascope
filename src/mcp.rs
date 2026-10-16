@@ -13,6 +13,35 @@ use std::{
 };
 use tokio::sync::oneshot;
 
+/// One dataset of the window: by the number it has in the running window, or by an id that
+/// survives restarts.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(untagged)]
+pub enum DatasetRef {
+    /// The `dataset_id` number from `list_datasets`. Valid only while the window stays open:
+    /// numbers are handed out in the order files are opened.
+    Index(usize),
+    /// The `stable_id` from `list_datasets`: `sha256:` plus the SHA-256 of the dataset's source
+    /// file (the bare hex also works), or the UUID of a dataset of the open project. It names the
+    /// same data after a restart, whatever number the window gave it.
+    Stable(String),
+}
+impl From<usize> for DatasetRef {
+    fn from(index: usize) -> Self {
+        Self::Index(index)
+    }
+}
+impl DatasetRef {
+    /// The window's number for this dataset. A stable id has no number until the window has
+    /// resolved it, so it maps to a number no dataset has.
+    pub fn index(&self) -> usize {
+        match self {
+            Self::Index(index) => *index,
+            Self::Stable(_) => usize::MAX,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields, tag = "operation", rename_all = "snake_case")]
 pub enum Command {
@@ -27,11 +56,11 @@ pub enum Command {
         line_width: Option<f32>,
     },
     SelectTrace {
-        dataset_id: usize,
+        dataset_id: DatasetRef,
         trace_index: usize,
     },
     ListScans {
-        dataset_id: usize,
+        dataset_id: DatasetRef,
         offset: usize,
         limit: usize,
     },
@@ -59,17 +88,17 @@ pub enum Command {
         paths: Vec<String>,
     },
     DatasetMetadata {
-        dataset_id: usize,
+        dataset_id: DatasetRef,
     },
     ScanMetadata {
-        dataset_id: usize,
+        dataset_id: DatasetRef,
         index: usize,
     },
     SelectDataset {
-        dataset_id: usize,
+        dataset_id: DatasetRef,
     },
     ExtractChromatogram {
-        dataset_id: usize,
+        dataset_id: DatasetRef,
         kind: String,
         polarity: String,
         ms_level: u8,
@@ -85,12 +114,12 @@ pub enum Command {
         display: bool,
     },
     ChromatogramData {
-        dataset_id: usize,
+        dataset_id: DatasetRef,
         offset: usize,
         limit: usize,
     },
     Spectrum {
-        dataset_id: usize,
+        dataset_id: DatasetRef,
         index: Option<usize>,
         retention_time_minutes: Option<f64>,
         #[serde(default)]
@@ -104,11 +133,11 @@ pub enum Command {
         overlay: Option<bool>,
     },
     SetVisibility {
-        dataset_id: usize,
+        dataset_id: DatasetRef,
         visible: bool,
     },
     Integrate {
-        dataset_id: usize,
+        dataset_id: DatasetRef,
         start_minutes: f64,
         end_minutes: f64,
         #[serde(default)]
@@ -120,7 +149,7 @@ pub enum Command {
         spectrum: bool,
     },
     ExportCsv {
-        dataset_id: usize,
+        dataset_id: DatasetRef,
         spectrum: bool,
         path: String,
     },
@@ -129,7 +158,7 @@ pub enum Command {
     },
     StartQuantification {
         method_toml: String,
-        dataset_ids: Vec<usize>,
+        dataset_ids: Vec<DatasetRef>,
     },
     QuantificationStatus {},
     CancelQuantification {},
@@ -140,6 +169,27 @@ pub enum Command {
         #[serde(default)]
         reviewed: bool,
     },
+}
+impl Command {
+    /// The dataset references of this command (those of commands nested in a batch are resolved
+    /// when each one runs, so datasets opened earlier in the batch can be named).
+    pub(crate) fn dataset_refs_mut(&mut self) -> Vec<&mut DatasetRef> {
+        match self {
+            Command::SelectTrace { dataset_id, .. }
+            | Command::ListScans { dataset_id, .. }
+            | Command::DatasetMetadata { dataset_id }
+            | Command::ScanMetadata { dataset_id, .. }
+            | Command::SelectDataset { dataset_id }
+            | Command::ExtractChromatogram { dataset_id, .. }
+            | Command::ChromatogramData { dataset_id, .. }
+            | Command::Spectrum { dataset_id, .. }
+            | Command::SetVisibility { dataset_id, .. }
+            | Command::Integrate { dataset_id, .. }
+            | Command::ExportCsv { dataset_id, .. } => vec![dataset_id],
+            Command::StartQuantification { dataset_ids, .. } => dataset_ids.iter_mut().collect(),
+            _ => vec![],
+        }
+    }
 }
 #[derive(Debug, Clone)]
 pub struct AccessPolicy {
@@ -251,6 +301,8 @@ pub struct GuiBridge {
     pub receiver: mpsc::Receiver<Envelope>,
     pub(crate) internal: mpsc::Receiver<Internal>,
     pub(crate) routed: RouteMap,
+    /// Stable ids of the open datasets, computed in the background (see `DatasetRef`).
+    pub(crate) stable: HashMap<usize, crate::gui::remote::StableState>,
     pub policy: AccessPolicy,
     pub history: Vec<Value>,
     pub(crate) undo: Vec<(usize, usize, crate::gui::state::IntegrationState)>,
@@ -299,6 +351,7 @@ impl McpServer {
                 receiver,
                 internal: internal_receiver,
                 routed,
+                stable: HashMap::new(),
                 policy,
                 history: vec![],
                 undo: vec![],
@@ -494,26 +547,26 @@ pub struct OpenFilesArgs {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DatasetMetadataArgs {
-    pub dataset_id: usize,
+    pub dataset_id: DatasetRef,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ScanMetadataArgs {
-    pub dataset_id: usize,
+    pub dataset_id: DatasetRef,
     pub index: usize,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SelectDatasetArgs {
-    pub dataset_id: usize,
+    pub dataset_id: DatasetRef,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ExtractChromatogramArgs {
-    pub dataset_id: usize,
+    pub dataset_id: DatasetRef,
     pub kind: String,
     pub polarity: String,
     pub ms_level: u8,
@@ -534,7 +587,7 @@ pub struct ExtractChromatogramArgs {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ChromatogramDataArgs {
-    pub dataset_id: usize,
+    pub dataset_id: DatasetRef,
     pub offset: usize,
     pub limit: usize,
 }
@@ -542,7 +595,7 @@ pub struct ChromatogramDataArgs {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SpectrumArgs {
-    pub dataset_id: usize,
+    pub dataset_id: DatasetRef,
     pub index: Option<usize>,
     pub retention_time_minutes: Option<f64>,
     #[serde(default)]
@@ -562,14 +615,14 @@ pub struct SetViewArgs {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SetVisibilityArgs {
-    pub dataset_id: usize,
+    pub dataset_id: DatasetRef,
     pub visible: bool,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct IntegrateArgs {
-    pub dataset_id: usize,
+    pub dataset_id: DatasetRef,
     pub start_minutes: f64,
     pub end_minutes: f64,
     #[serde(default)]
@@ -579,7 +632,7 @@ pub struct IntegrateArgs {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ExportCsvArgs {
-    pub dataset_id: usize,
+    pub dataset_id: DatasetRef,
     pub spectrum: bool,
     pub path: String,
 }
@@ -594,7 +647,7 @@ pub struct ApplyPresetArgs {
 #[serde(deny_unknown_fields)]
 pub struct StartQuantificationArgs {
     pub method_toml: String,
-    pub dataset_ids: Vec<usize>,
+    pub dataset_ids: Vec<DatasetRef>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -1105,7 +1158,7 @@ impl McpServer {
         .await
     }
     #[tool(
-        description = "List the datasets loaded in the window: dataset_id, name, path, loading state, visibility, last extraction parameters and which one is active. Use it to look up a dataset_id after open_files or after the app was restarted (ids are only valid for the running window). Read-only.",
+        description = "List the datasets loaded in the window: dataset_id, name, path, loading state, visibility, last extraction parameters and which one is active. Each dataset has a dataset_id number (valid while the window stays open) and a stable_id (the SHA-256 of its source file, valid after a restart); pass either as dataset_id to every other tool. Use it to look up ids after open_files or in a new session. Read-only.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1221,7 +1274,7 @@ pub struct ListMzmlFilesArgs {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ListScansArgs {
-    pub dataset_id: usize,
+    pub dataset_id: DatasetRef,
     pub offset: usize,
     pub limit: usize,
 }
@@ -1255,7 +1308,7 @@ pub struct SetDisplayArgs {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SelectTraceArgs {
-    pub dataset_id: usize,
+    pub dataset_id: DatasetRef,
     pub trace_index: usize,
 }
 

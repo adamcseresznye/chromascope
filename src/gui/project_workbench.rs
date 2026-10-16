@@ -501,6 +501,15 @@ impl State {
     pub(super) fn revision(&self) -> Option<u64> {
         self.project.as_ref().map(|p| p.revision)
     }
+    /// The SHA-256 of a registered dataset of the open project, by the project's dataset UUID.
+    pub(super) fn source_sha256(&self, id: uuid::Uuid) -> Option<String> {
+        self.project
+            .as_ref()?
+            .sources
+            .iter()
+            .find(|source| source.id.0 == id)
+            .map(|source| source.sha256.clone())
+    }
     pub(super) fn has_project(&self) -> bool {
         self.project.is_some()
     }
