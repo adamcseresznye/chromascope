@@ -182,6 +182,14 @@ pub enum Command {
         path: String,
         toml: String,
     },
+    CreateProject {
+        path: String,
+    },
+    OpenProject {
+        path: String,
+    },
+    SaveProject {},
+    RefreshProject {},
     SaveMethod {
         path: String,
         method_toml: Option<String>,
@@ -370,6 +378,24 @@ impl AccessPolicy {
         if !self.allow_exports {
             return Err("Exports require --allow-exports".into());
         }
+        self.new_file(path)
+    }
+    /// A new file with the given extension, inside a root (no permission flag is checked).
+    pub fn new_file_as(&self, path: &str, extension: &str) -> Result<PathBuf, String> {
+        let target = self.new_file(path)?;
+        has_extension(&target, extension)?;
+        Ok(target)
+    }
+    /// Project operations (create, save) need the operator's explicit permission.
+    pub fn require_project_writes(&self) -> Result<(), String> {
+        if self.allow_project_writes {
+            Ok(())
+        } else {
+            Err("Project writes require --allow-project-writes".into())
+        }
+    }
+    /// A file that does not exist yet, inside a root (no permission flag is checked).
+    pub fn new_file(&self, path: &str) -> Result<PathBuf, String> {
         let path = Path::new(path);
         let parent = path
             .parent()
@@ -1423,6 +1449,55 @@ impl McpServer {
         .await
     }
     #[tool(
+        description = "Create a project from the current workspace: a new project file and its _data folder, holding the open datasets (registered with their SHA-256), the Quantification and QC results, AI review proposals and the first revision, as the Create project command does. Use it to keep an analysis that open_project, inspect_project and build_bundle can return to. Fails while an import or analysis runs, and when a dataset of the workspace lies outside the --allow-roots. Requires --allow-project-writes; the path must be a new .json file inside an --allow-root.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn create_project(
+        &self,
+        Parameters(args): Parameters<CreateProjectArgs>,
+    ) -> CallToolResult {
+        self.dispatch(Command::CreateProject { path: args.path })
+            .await
+    }
+    #[tool(
+        description = "Open a project in the window as the Open project command does: its datasets are reopened, saved Quantification, QC and review results restored, and the reply comes when everything is loaded. Every dataset the project registers must lie inside an --allow-root, or nothing is changed. Use inspect_project to read a project without opening it. Requires --allow-changes; replaces the current workspace, so save_session or save_project first if it matters.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn open_project(&self, Parameters(args): Parameters<OpenProjectArgs>) -> CallToolResult {
+        self.dispatch(Command::OpenProject { path: args.path })
+            .await
+    }
+    #[tool(
+        description = "Save the open project as a new revision holding the current workspace and results, as Save project does; earlier revisions stay restorable. Fails when no project is open, when the project changed since it was opened, while work is running, and when a dataset of the workspace lies outside the --allow-roots. Requires --allow-project-writes.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn save_project(&self) -> CallToolResult {
+        self.dispatch(Command::SaveProject {}).await
+    }
+    #[tool(
+        description = "Reload the open project's results and review proposals into the window, as Refresh project activity does, so work another session committed or queued (for instance with commit_analysis or queue_review_proposal) appears in the Quantification tab and the AI activity view. Requires --allow-changes; fails when no project is open.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn refresh_project(&self) -> CallToolResult {
+        self.dispatch(Command::RefreshProject {}).await
+    }
+    #[tool(
         description = "Save a quantification method as a new .toml file: the method in the Quantification tab (the same file Save method writes), or with method_toml a method you give as text, checked first. Use it to keep a method for open_method or start_quantification. Requires --allow-exports; the path must be a new .toml file inside an --allow-root, and existing files are never overwritten.",
         annotations(
             read_only_hint = false,
@@ -1651,6 +1726,20 @@ pub struct SavePresetArgs {
 }
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct CreateProjectArgs {
+    /// New project file (.json) inside an --allow-root; the project's data goes in the
+    /// `<name>_data` folder next to it.
+    pub path: String,
+}
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OpenProjectArgs {
+    /// The project file (.json) the person opens, or its `<name>_data` folder, inside an
+    /// --allow-root.
+    pub path: String,
+}
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SaveMethodArgs {
     /// New .toml file inside an --allow-root.
     pub path: String,
@@ -1807,6 +1896,10 @@ mod tests {
         "remove_trace",
         "set_trace_visibility",
         "save_preset",
+        "create_project",
+        "open_project",
+        "save_project",
+        "refresh_project",
         "save_method",
         "open_method",
         "save_batch",
@@ -1828,7 +1921,7 @@ mod tests {
     #[test]
     fn tool_descriptions_are_unique_nonempty_and_annotated() {
         let tools = McpServer::tool_router().list_all();
-        assert_eq!(tools.len(), 44, "44 typed tools; workbench is not listed");
+        assert_eq!(tools.len(), 48, "48 typed tools; workbench is not listed");
         assert!(
             tools.iter().all(|t| t.name != "workbench"),
             "workbench duplicated the typed tools and must not be listed"
@@ -1871,10 +1964,13 @@ mod tests {
                 assert_eq!(hints.destructive_hint, Some(false), "{}", tool.name);
             }
             // Tools gated by a launch flag must say which one.
-            let gated =
-                description.contains("--allow-changes") || description.contains("--allow-exports");
+            let gated = description.contains("--allow-changes")
+                || description.contains("--allow-exports")
+                || description.contains("--allow-project-writes");
             if !read_only && !matches!(&*tool.name, "open_files" | "batch") {
-                let flag = if tool.name.starts_with("export_") || tool.name.starts_with("save_") {
+                let flag = if matches!(&*tool.name, "create_project" | "save_project") {
+                    "--allow-project-writes"
+                } else if tool.name.starts_with("export_") || tool.name.starts_with("save_") {
                     "--allow-exports"
                 } else {
                     "--allow-changes"
@@ -1913,11 +2009,11 @@ mod tests {
             let discovered=rpc(&mut write,&mut read,json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}})).await;
             let listed=discovered["result"]["tools"].as_array().unwrap();
             let desktop=McpServer::tool_router().list_all();
-            assert_eq!(desktop.len(),44);
+            assert_eq!(desktop.len(),48);
             assert!(desktop.iter().all(|d|listed.iter().any(|t|t["name"]==d.name.as_ref())),"every viewer tool is listed");
             let engine=crate::engine_mcp::EngineMcp::new(vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))]).unwrap().tool_names();
             let visible=engine.iter().filter(|n|crate::EXPERIMENTAL||!matches!(n.as_str(),"start_untargeted"|"untargeted_status"|"cancel_untargeted"|"untargeted_features")).count();
-            assert_eq!(listed.len(),44+visible,"viewer tools plus the shared engine tools");
+            assert_eq!(listed.len(),48+visible,"viewer tools plus the shared engine tools");
             assert!(listed.iter().all(|t|t["name"]!="workbench"));
             assert!(listed.iter().all(|t|t["annotations"]["readOnlyHint"].is_boolean()&&t["annotations"]["destructiveHint"].is_boolean()),"every tool must carry both hints on the wire");
             let find=|name:&str|listed.iter().find(|t|t["name"]==name).unwrap();

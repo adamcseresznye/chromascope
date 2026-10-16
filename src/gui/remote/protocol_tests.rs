@@ -1465,3 +1465,142 @@ fn batches_are_saved_and_loaded_over_mcp_with_their_manual_corrections() {
         d.finish();
     }
 }
+
+#[test]
+fn a_project_is_created_saved_reopened_and_refreshed_over_mcp() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut desktop = Desktop::start(vec![temp.path().to_owned()], true, true, true);
+    let id = desktop.open_fixture();
+    let method = fixture_method(&mut desktop, id, "Project over MCP");
+    let status = run_batch(&mut desktop, id, &method);
+    // Create: the pointer file and the data folder appear, revision 1 holds the workspace.
+    let pointer = temp.path().join("study.json");
+    let created = desktop.tool("create_project", json!({"path":pointer}));
+    assert_eq!(created["open"], true, "{created}");
+    assert_eq!(created["revision"], 1);
+    assert_eq!(created["datasets"].as_array().unwrap().len(), 1);
+    let pointer_text: Value = serde_json::from_slice(&std::fs::read(&pointer).unwrap()).unwrap();
+    assert_eq!(pointer_text["chromascope_project"], 1);
+    let data = temp.path().join("study_data");
+    assert!(data.is_dir());
+    // The engine's own tool reads the same project.
+    let inspected = desktop.tool("inspect_project", json!({"directory":data}));
+    assert_eq!(inspected["revision"], 1);
+    assert_eq!(inspected["sources"].as_array().unwrap().len(), 1);
+    // The project's dataset UUID names the open dataset, like its stable id does.
+    let uuid = inspected["sources"][0]["id"].as_str().unwrap().to_owned();
+    stable_ids(&mut desktop);
+    let by_uuid = desktop.tool("dataset_metadata", json!({"dataset_id":uuid}));
+    assert_eq!(by_uuid["dataset_id"], id);
+    // Save adds a revision; creating over an existing project is refused.
+    desktop.tool("set_layout", json!({"mode":"overlay"}));
+    let saved = desktop.tool("save_project", json!({}));
+    assert_eq!(saved["revision"], 2, "{saved}");
+    assert_eq!(
+        desktop.tool("inspect_project", json!({"directory":data}))["revision"],
+        2
+    );
+    let again = desktop.tool_error("create_project", json!({"path":pointer}));
+    assert!(
+        again["message"]
+            .as_str()
+            .unwrap()
+            .contains("already exists"),
+        "{again}"
+    );
+    // Another window opens it: dataset reopened, results and layout restored.
+    let mut other = Desktop::start(vec![temp.path().to_owned()], true, true, false);
+    let opened = other.tool("open_project", json!({"path":pointer}));
+    assert_eq!(
+        (opened["open"].as_bool(), opened["revision"].as_u64()),
+        (Some(true), Some(2)),
+        "{opened}"
+    );
+    assert_eq!(other.app.files.len(), 1);
+    assert!(other.app.files.values().all(|f| !f.is_loading));
+    let restored = other.tool("quantification_status", json!({}));
+    assert_eq!(restored["results"][0]["peak"], status["results"][0]["peak"]);
+    assert_eq!(
+        other.tool("gui_state", json!({}))["layout"]["mode"],
+        "overlay"
+    );
+    // Refresh reloads from disk; the data folder itself can be named instead of the pointer.
+    assert_eq!(other.tool("refresh_project", json!({}))["revision"], 2);
+    let mut third = Desktop::start(vec![temp.path().to_owned()], true, true, false);
+    assert_eq!(
+        third.tool("open_project", json!({"path":data}))["revision"],
+        2
+    );
+    // Without a project there is nothing to refresh or save.
+    let mut empty = Desktop::start(vec![temp.path().to_owned()], true, true, true);
+    assert!(empty.tool_error("refresh_project", json!({}))["message"]
+        .as_str()
+        .unwrap()
+        .contains("No project"));
+    assert!(empty.tool_error("save_project", json!({}))["message"]
+        .as_str()
+        .unwrap()
+        .contains("No project is open"));
+    // Permissions: project writes to create or save, changes to open or refresh.
+    let mut guarded = Desktop::start(vec![temp.path().to_owned()], false, true, false);
+    for (tool, arguments, flag) in [
+        (
+            "create_project",
+            json!({"path":temp.path().join("never.json")}),
+            "--allow-project-writes",
+        ),
+        ("save_project", json!({}), "--allow-project-writes"),
+        ("open_project", json!({"path":pointer}), "--allow-changes"),
+        ("refresh_project", json!({}), "--allow-changes"),
+    ] {
+        let error = guarded.tool_error(tool, arguments);
+        assert!(
+            error["message"].as_str().unwrap().contains(flag),
+            "{tool}: {error}"
+        );
+    }
+    assert!(!temp.path().join("never.json").exists());
+    // A dataset outside the roots stays out of projects, in both directions.
+    let only_temp = AccessPolicy::new(vec![temp.path().to_owned()], true, true)
+        .unwrap()
+        .with_project_writes(true);
+    desktop.app.remote.as_mut().unwrap().policy = only_temp.clone();
+    let error = desktop.tool_error("save_project", json!({}));
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("may not register"),
+        "{error}"
+    );
+    assert_eq!(
+        desktop.tool("inspect_project", json!({"directory":data}))["revision"],
+        2
+    );
+    let error = desktop.tool_error(
+        "create_project",
+        json!({"path":temp.path().join("second.json")}),
+    );
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("may not register"),
+        "{error}"
+    );
+    assert!(!temp.path().join("second.json").exists() && !temp.path().join("second_data").exists());
+    let mut closed = Desktop::start(vec![temp.path().to_owned()], true, true, false);
+    closed.app.remote.as_mut().unwrap().policy = only_temp;
+    let error = closed.tool_error("open_project", json!({"path":pointer}));
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("outside authorized roots"),
+        "{error}"
+    );
+    assert!(closed.app.files.is_empty());
+    for d in [desktop, other, third, empty, guarded, closed] {
+        d.finish();
+    }
+}

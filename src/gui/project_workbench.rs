@@ -13,10 +13,13 @@ pub(super) struct State {
     pending: Option<std::sync::mpsc::Receiver<Completion>>,
     pending_root: Option<PathBuf>,
     opening: bool,
+    /// Counts the project operations that finished successfully, so a caller can tell whether
+    /// the one it started did.
+    completions: u64,
 }
 /// The file the user picks is a small pointer; the project's revisions and results live in the
 /// `<name>_data` folder next to it. A bare revision file (older projects) opens its own folder.
-fn data_root(file: &Path) -> Result<PathBuf, String> {
+pub(super) fn data_root(file: &Path) -> Result<PathBuf, String> {
     let parent = file.parent().unwrap_or(Path::new("."));
     if file
         .file_name()
@@ -41,6 +44,14 @@ fn snapshot(app: &MzViewerApp, ctx: &egui::Context) -> Value {
     value["quant"]["selected_samples"] = serde_json::json!([]);
     value["quant"]["seen_samples"] = serde_json::json!([]);
     value
+}
+/// The source datasets a save or create would register: every existing file the workspace
+/// names as a source.
+#[cfg(feature = "mcp")]
+pub(super) fn workspace_sources(app: &MzViewerApp, ctx: &egui::Context) -> Vec<PathBuf> {
+    let mut paths = vec![];
+    source_paths(&snapshot(app, ctx), &mut paths);
+    paths
 }
 fn source_paths(value: &Value, paths: &mut Vec<PathBuf>) {
     match value {
@@ -306,6 +317,7 @@ pub(super) fn poll(app: &mut MzViewerApp, ctx: &egui::Context) {
                             state.root = root;
                         }
                         state.project = Some(project);
+                        state.completions += 1;
                         app.delivery.set_project(&state.root);
                     }
                     Err(error) => state.message = error.to_string(),
@@ -369,33 +381,58 @@ pub(super) fn open_project(app: &mut MzViewerApp) {
             }
         })
     {
-        let worker_root = root.clone();
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let result = (|| {
-                let project = Project::open(&worker_root)?;
-                let mut workspace = project.load_workspace(&worker_root)?;
-                if let Some(value) = &mut workspace {
-                    relocate_snapshot(value, &project)?;
-                }
-                if let Some(value) = &workspace {
-                    verify_snapshot(value)?;
-                }
-                let results = project
-                    .results
-                    .iter()
-                    .map(|artifact| project.load_result(&worker_root, artifact.result_id))
-                    .collect::<crate::domain::Result<Vec<_>>>()?;
-                Ok((project, workspace, results))
-            })();
-            let _ = tx.send(result);
-        });
-        app.project.pending_root = Some(root);
-        app.project.pending = Some(rx);
+        begin_open(app, root);
     }
 }
-/// Save the open project as a new revision, or create one (file dialog) when none is open.
-pub(super) fn save_project(app: &mut MzViewerApp, ctx: &egui::Context) {
+/// Opens the project in `root` (its data folder): verification runs on a worker thread and the
+/// window takes the project over when it finishes.
+pub(super) fn begin_open(app: &mut MzViewerApp, root: PathBuf) {
+    app.project.opening = true;
+    let worker_root = root.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let result = (|| {
+            let project = Project::open(&worker_root)?;
+            let mut workspace = project.load_workspace(&worker_root)?;
+            if let Some(value) = &mut workspace {
+                relocate_snapshot(value, &project)?;
+            }
+            if let Some(value) = &workspace {
+                verify_snapshot(value)?;
+            }
+            let results = project
+                .results
+                .iter()
+                .map(|artifact| project.load_result(&worker_root, artifact.result_id))
+                .collect::<crate::domain::Result<Vec<_>>>()?;
+            Ok((project, workspace, results))
+        })();
+        let _ = tx.send(result);
+    });
+    app.project.pending_root = Some(root);
+    app.project.pending = Some(rx);
+}
+/// Reloads the open project's results and review proposals into the window.
+pub(super) fn begin_refresh(app: &mut MzViewerApp) {
+    let root = app.project.root.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let result = (|| {
+            let project = Project::open(&root)?;
+            let results = project
+                .results
+                .iter()
+                .map(|artifact| project.load_result(&root, artifact.result_id))
+                .collect::<crate::domain::Result<Vec<_>>>()?;
+            Ok((project, None, results))
+        })();
+        let _ = tx.send(result);
+    });
+    app.project.opening = false;
+    app.project.pending = Some(rx);
+}
+/// Saves the open project as a new revision (worker thread).
+pub(super) fn begin_save(app: &mut MzViewerApp, ctx: &egui::Context) {
     app.project.opening = false;
     let value = snapshot(app, ctx);
     if let Some(project) = &app.project.project {
@@ -406,37 +443,57 @@ pub(super) fn save_project(app: &mut MzViewerApp, ctx: &egui::Context) {
             let _ = tx.send(store(&root, expected, value));
         });
         app.project.pending = Some(rx);
+    }
+}
+/// Creates a project from the current workspace: `file` is the small pointer file the person
+/// opens later, the project itself lives in the `<name>_data` folder next to it. Returns that
+/// folder.
+pub(super) fn begin_create(
+    app: &mut MzViewerApp,
+    ctx: &egui::Context,
+    file: PathBuf,
+) -> Result<PathBuf, String> {
+    app.project.opening = false;
+    let value = snapshot(app, ctx);
+    let file = file.with_extension("json");
+    let stem = file
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+    let root = file.with_file_name(format!("{stem}_data"));
+    if file.exists() || root.exists() {
+        return Err(format!("'{stem}' already exists here; choose another name"));
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    let (worker_root, pointer) = (root.clone(), file);
+    std::thread::spawn(move || {
+        let _ = tx.send(Project::create(&worker_root).and_then(|_| {
+            let data = worker_root.file_name().unwrap().to_string_lossy();
+            crate::atomic_write::write_atomic(
+                &pointer,
+                serde_json::json!({"chromascope_project": 1, "data": data}).to_string(),
+            )
+            .map_err(|e| EngineError::new("corrupt_project", e))?;
+            store(&worker_root, 0, value)
+        }));
+    });
+    app.project.pending_root = Some(root.clone());
+    app.project.pending = Some(rx);
+    Ok(root)
+}
+/// Save the open project as a new revision, or create one (file dialog) when none is open.
+pub(super) fn save_project(app: &mut MzViewerApp, ctx: &egui::Context) {
+    if app.project.project.is_some() {
+        begin_save(app, ctx);
     } else if let Some(file) = rfd::FileDialog::new()
         .set_title("Name your project")
         .set_file_name("my-project.json")
         .add_filter("Chromascope project", &["json"])
         .save_file()
     {
-        let file = file.with_extension("json");
-        let stem = file
-            .file_stem()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .into_owned();
-        let root = file.with_file_name(format!("{stem}_data"));
-        if file.exists() || root.exists() {
-            app.project.message = format!("'{stem}' already exists here; choose another name");
-        } else {
-            let (tx, rx) = std::sync::mpsc::channel();
-            let (worker_root, pointer) = (root.clone(), file);
-            std::thread::spawn(move || {
-                let _ = tx.send(Project::create(&worker_root).and_then(|_| {
-                    let data = worker_root.file_name().unwrap().to_string_lossy();
-                    crate::atomic_write::write_atomic(
-                        &pointer,
-                        serde_json::json!({"chromascope_project": 1, "data": data}).to_string(),
-                    )
-                    .map_err(|e| EngineError::new("corrupt_project", e))?;
-                    store(&worker_root, 0, value)
-                }));
-            });
-            app.project.pending_root = Some(root);
-            app.project.pending = Some(rx);
+        if let Err(message) = begin_create(app, ctx, file) {
+            app.project.message = message;
         }
     }
 }
@@ -460,22 +517,7 @@ pub(super) fn controls(app: &mut MzViewerApp, ui: &mut egui::Ui) {
                 )
                 .clicked()
             {
-                let root = app.project.root.clone();
-                let (tx, rx) = std::sync::mpsc::channel();
-                std::thread::spawn(move || {
-                    let result = (|| {
-                        let project = Project::open(&root)?;
-                        let results = project
-                            .results
-                            .iter()
-                            .map(|artifact| project.load_result(&root, artifact.result_id))
-                            .collect::<crate::domain::Result<Vec<_>>>()?;
-                        Ok((project, None, results))
-                    })();
-                    let _ = tx.send(result);
-                });
-                app.project.opening = false;
-                app.project.pending = Some(rx);
+                begin_refresh(app);
             }
             if ui
                 .button(if app.project.project.is_some() {
@@ -510,6 +552,40 @@ impl State {
             .iter()
             .find(|source| source.id.0 == id)
             .map(|source| source.sha256.clone())
+    }
+    /// A project operation (open, save, create, refresh) is still running.
+    #[cfg(feature = "mcp")]
+    pub(super) fn is_busy(&self) -> bool {
+        self.pending.is_some()
+    }
+    #[cfg(feature = "mcp")]
+    pub(super) fn completions(&self) -> u64 {
+        self.completions
+    }
+    #[cfg(feature = "mcp")]
+    pub(super) fn message(&self) -> &str {
+        &self.message
+    }
+    /// The data folder of the open project.
+    #[cfg(feature = "mcp")]
+    pub(super) fn open_root(&self) -> Option<&Path> {
+        self.project.as_ref().map(|_| self.root.as_path())
+    }
+    /// What `inspect_project` reports of the open project.
+    #[cfg(feature = "mcp")]
+    pub(super) fn summary(&self) -> serde_json::Value {
+        match &self.project {
+            Some(project) => serde_json::json!({
+                "open":true,
+                "root":self.root,
+                "id":project.id.0,
+                "revision":project.revision,
+                "datasets":project.sources.iter().map(|s| serde_json::json!({"dataset_id":s.id.0,"path":s.path,"sha256":s.sha256})).collect::<Vec<_>>(),
+                "results":project.results.len(),
+                "message":self.message,
+            }),
+            None => serde_json::json!({"open":false,"message":self.message}),
+        }
     }
     pub(super) fn has_project(&self) -> bool {
         self.project.is_some()

@@ -33,6 +33,9 @@ enum PendingSource {
 pub(crate) enum Wait {
     /// The datasets and traces of a loaded session.
     Session,
+    /// A project operation: done when the number of successful ones has grown past `before`
+    /// and the window has finished reopening datasets.
+    Project { before: u64 },
 }
 /// How long the window may take to finish what a client waits for.
 const WAIT_LIMIT: std::time::Duration = std::time::Duration::from_secs(600);
@@ -391,6 +394,16 @@ impl MzViewerApp {
                 self.remote_validate(command, b)?;
                 files::load_session(self, ctx, b, path).map(|()| Some(Wait::Session))
             }
+            Command::CreateProject { path } => projects::create(self, ctx, b, path).map(Some),
+            Command::OpenProject { path } => {
+                self.remote_validate(command, b)?;
+                projects::open(self, b, path).map(Some)
+            }
+            Command::SaveProject {} => projects::save(self, ctx, b).map(Some),
+            Command::RefreshProject {} => {
+                self.remote_validate(command, b)?;
+                projects::refresh(self, b).map(Some)
+            }
             _ => Ok(None),
         }
     }
@@ -401,8 +414,16 @@ impl MzViewerApp {
         started: std::time::Instant,
         bridge: &GuiBridge,
     ) -> Option<Result<Value, String>> {
+        if let Wait::Project { before } = wait {
+            return match projects::finished(self, *before) {
+                None => (started.elapsed() > WAIT_LIMIT).then(|| {
+                    Err("The window did not finish in ten minutes; check gui_state".to_owned())
+                }),
+                done => done,
+            };
+        }
         let done = match wait {
-            Wait::Session => !workspace::restore_in_progress(self),
+            Wait::Session | Wait::Project { .. } => !workspace::restore_in_progress(self),
         };
         if !done {
             return (started.elapsed() > WAIT_LIMIT).then(|| {
@@ -410,6 +431,7 @@ impl MzViewerApp {
             });
         }
         Some(Ok(match wait {
+            Wait::Project { .. } => unreachable!("handled above"),
             Wait::Session => {
                 let state = self.remote_state(bridge);
                 json!({
@@ -770,6 +792,8 @@ impl MzViewerApp {
             c,
             Command::SelectDataset { .. }
                 | Command::LoadSession { .. }
+                | Command::OpenProject { .. }
+                | Command::RefreshProject {}
                 | Command::OpenMethod { .. }
                 | Command::LoadBatch { .. }
                 | Command::SetLayout { .. }
@@ -955,8 +979,12 @@ impl MzViewerApp {
             Command::SaveBatch { path } => files::save_batch(self, b, &path)?,
             Command::LoadBatch { path } => files::load_batch(self, b, &path)?,
             Command::SaveSession { path } => files::save_session(self, ctx, b, &path)?,
-            Command::LoadSession { .. } => {
-                return Err("load_session replies when the workspace is restored, so it cannot run inside a batch; call it on its own".into())
+            Command::LoadSession { .. }
+            | Command::CreateProject { .. }
+            | Command::OpenProject { .. }
+            | Command::SaveProject {}
+            | Command::RefreshProject {} => {
+                return Err("This operation replies when the window has finished, so it cannot run inside a batch; call it on its own".into())
             }
             Command::ListScans {
                 dataset_id,
@@ -1451,6 +1479,7 @@ impl MzViewerApp {
 
 mod files;
 mod ops;
+mod projects;
 #[cfg(test)]
 mod protocol_tests;
 #[cfg(test)]
