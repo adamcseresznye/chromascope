@@ -36,6 +36,8 @@ Not shown in the video: the same engine also runs targeted quantification and QC
 
 ### Quick start
 
+Download an installer or archive for your system from the [Releases page](https://github.com/adamcseresznye/chromascope/releases) (see [Installation](#installation) for what to expect on first launch), or build from source:
+
 ```sh
 cargo build --locked --release --bin chromascope
 target/release/chromascope        # chromascope.exe on Windows
@@ -43,7 +45,7 @@ target/release/chromascope        # chromascope.exe on Windows
 
 Open an mzML file from **File**, pick **XIC**, and double-click a trace to see its spectrum. To let an AI client drive it, see [MCP setup](#mcp-setup-and-ai-assisted-analysis). Other builds (CLI-only, headless MCP) are listed under [Installation](#installation).
 
-> **Status:** development build, Cargo version `0.3.0`, preparing a release (2026-10-09). It is not instrument-validated. See the [feature matrix](docs/FEATURE_STATUS.md), [release notes](docs/RELEASE_NOTES.md), [validation report](docs/VALIDATION_REPORT.md) and [backlog](docs/RELEASE_BACKLOG.md).
+> **Status:** version `0.3.0`. Not instrument-validated. Installers and archives are published on the [Releases page](https://github.com/adamcseresznye/chromascope/releases). See the [feature matrix](docs/FEATURE_STATUS.md), [release notes](docs/RELEASE_NOTES.md), [changelog](CHANGELOG.md), [validation report](docs/VALIDATION_REPORT.md) and [backlog](docs/RELEASE_BACKLOG.md).
 
 ## Architecture
 
@@ -63,7 +65,21 @@ flowchart LR
 
 ## Installation
 
-The package declares **Rust 1.88** as its minimum; this local pass uses Rust 1.99.0. Build with a compatible Rust toolchain, a platform C/C++ linker/toolchain and the checked-in lockfile:
+### Installers and archives
+
+Each release provides the desktop app together with the command-line interface and both MCP servers (`chromascope-cli`, `chromascope-mcp`, `chromascope-engine-mcp`). The builds are **not code-signed**, so each operating system shows a warning the first time.
+
+| System | Download | First launch |
+|---|---|---|
+| **Windows** (x64, arm64, x86) | `chromascope-<version>-windows-<arch>.msi`, or `…-portable.zip` that needs no install | The MSI installs for **all users**, so Windows asks for administrator approval. SmartScreen reports an unknown publisher: choose **More info → Run anyway**. The installer adds its folder to `PATH`, so open a new terminal to use `chromascope-cli`. |
+| **macOS** (Apple silicon and Intel) | `chromascope-<version>-macos-universal.dmg`, or the `.zip` | Drag **Chromascope** to **Applications**. The app is not notarised: open it once, dismiss the warning, then go to **System Settings → Privacy & Security** and choose **Open Anyway** (macOS 15 and later no longer offer right-click → Open). |
+| **Linux** (x86_64, aarch64) | `chromascope-<version>-linux-<arch>.deb`, `.rpm`, `.AppImage` or `.tar.gz` | `sudo apt install ./chromascope-…deb`, `sudo dnf install ./chromascope-…rpm`, or `chmod +x` the AppImage (it needs FUSE, or run it with `--appimage-extract-and-run`). |
+
+Every package contains the GPL-3.0 [LICENSE](LICENSE) and `THIRD_PARTY_LICENSES.txt`, the licence notices of the embedded fonts and the Rust dependencies. The release page also lists `SHA256SUMS.txt`. Release asset names changed from v0.2.0, which published only the GUI binary: use the new names above.
+
+### Building from source
+
+The package declares **Rust 1.88** as its minimum, and CI compiles every target on exactly that version. Build with a compatible Rust toolchain, a platform C/C++ linker/toolchain and the checked-in lockfile:
 
 ```sh
 cargo build --locked --release --bin chromascope
@@ -72,7 +88,7 @@ cargo build --locked --release --no-default-features --features mcp-headless --b
 cargo build --locked --release --features mcp --bin chromascope-mcp
 ```
 
-Run executables under `target/release/` (`.exe` on Windows). Default features enable the desktop. Linux GUI builds need platform development libraries; existing CI installs `libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev`. See [installation details](docs/USER_GUIDE.md#installation). Local Windows checks do not establish native macOS/Linux or Rust 1.88 compatibility. The validation report distinguishes executed build profiles from these installation commands.
+Run executables under `target/release/` (`.exe` on Windows). Default features enable the desktop. Linux GUI builds need platform development libraries; existing CI installs `libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev`. See [installation details](docs/USER_GUIDE.md#installation).
 
 mzML and mzML.gz open directly. Vendor import requires separately installed compatible ProteoWizard `msconvert` and supported vendor runtime/licenses; no universal vendor support is claimed.
 
@@ -87,9 +103,9 @@ Nothing auto-installs. Missing/incompatible runtimes return explicit errors with
 1. Select **Data explorer** and open data with the file controls. Choose TIC/BPC/XIC and acquisition, polarity and mass filters. Retain traces for overlay/grid/stacked comparison. Double-click a trace for its spectrum; right-drag to integrate; middle-drag to box zoom. Integration uses full resolution rather than display decimation.
 2. Select **Quantification and QC** for batch methods, peak diagnostics, boundary review and CSV. Expand **Targeted concentrations, calibration and QC** for standards/blanks/QC/unknowns, internal standards, qualifiers, calibration and dilution. Inspect flags and missing states before export.
 3. Within targeted quantification, expand **Batch QC and method validation**. Load a study/report or prepare batch evidence, supply explicit rules, evaluate, inspect pass/fail/indeterminate results and acknowledge with reasons. Acknowledgement cannot make a failing rule pass.
-4. Select **Reports…** to open **Project reports and delivery** to inspect a CLI-created project, verify sources, configure a new draft report/bundle and reprocess retained results without replacing them.
+4. Select **Audit package** to inspect the open project, verify its sources, configure a new draft report or portable bundle and reprocess retained results without replacing them.
 
-The [user guide](docs/USER_GUIDE.md) covers established viewer controls; [examples](examples/README.md) and [project delivery](docs/PROJECT_DELIVERY.md) cover newer workspaces. **AI activity…** shows desktop MCP session activity and launch permissions when connected. Some advanced settings use structured JSON editors. Native dialogs and end-to-end desktop workflows still need platform smoke testing.
+The [user guide](docs/USER_GUIDE.md) covers established viewer controls; [examples](examples/README.md) and [project delivery](docs/PROJECT_DELIVERY.md) cover newer workspaces. **AI activity** shows desktop MCP session activity and launch permissions when connected. Some advanced settings use structured JSON editors. Native dialogs and end-to-end desktop workflows still need platform smoke testing.
 
 ## Verified media references
 
@@ -137,7 +153,7 @@ Configure a compatible client with an absolute executable and existing authorize
 
 `analysis_capabilities` supplies generated request/response schemas and recipes. Use `discover_datasets`, `start_analysis`, `analysis_status`, paged `analysis_result`, `cancel_analysis`, `session_audit` and `prepare_analysis_report`. Jobs/audit are session-local; export before shutdown. `commit_analysis` additionally requires `--allow-project-writes`, an existing project/dataset, expected revision, actor and reason. Attributed actors are not authenticated human approvals. See [headless MCP contracts](docs/MCP_ANALYSIS.md).
 
-For visual automation, `chromascope-mcp` hosts the desktop and preserves the original 32-tool bridge. Change/export flags, roots and setup are in the [desktop MCP guide](docs/MCP.md) and [client example](examples/mcp-client.json).
+For visual automation, `chromascope-mcp` hosts the desktop and keeps the original viewer and batch tools (31 tools). Change/export flags, roots and setup are in the [desktop MCP guide](docs/MCP.md) and [client example](examples/mcp-client.json).
 
 ```powershell
 python examples/mcp_targeted_workflow.py YOUR_TARGETED_REQUEST.json NEW_AI_DRAFT --server target/debug/chromascope-engine-mcp.exe --qc-rules YOUR_RULES.json
@@ -169,6 +185,6 @@ cargo build --locked --all-features --bins
 python tests/reference/verify_references.py NEW_REFERENCE_DIRECTORY
 ```
 
-Tests cover kernels, real adapter/protocol/project integration, authored mzML and independent numerical references. Vendor/OpenMS/performance prerequisites are opt-in. Exact executed results and omitted gates are in [VALIDATION_REPORT.md](docs/VALIDATION_REPORT.md). CI now declares a pinned scientific reference runtime and GUI-free/interface checks; platform/MSRV expansion and hosted execution remain open.
+Tests cover kernels, real adapter/protocol/project integration, authored mzML and independent numerical references. Vendor/OpenMS/performance prerequisites are opt-in. Exact executed results and omitted gates are in [VALIDATION_REPORT.md](docs/VALIDATION_REPORT.md). CI declares a pinned scientific reference runtime, runs the tests on Linux, Windows and macOS, compiles every target on the minimum Rust version, and the release workflow runs the tests before it builds any installer.
 
-Licensed under [GPL-3.0-only](LICENSE). Dependencies include egui/eframe, mzdata, mzsignal, nalgebra and the Rust MCP SDK. Embedded Inter uses the [SIL Open Font License](assets/fonts/inter/LICENSE.txt). Retained MassBank records carry per-record attribution in [spectral_sources.json](tests/reference/spectral_sources.json). See [contributing](.github/CONTRIBUTING.md).
+Licensed under [GPL-3.0-only](LICENSE). Dependencies include egui/eframe, mzdata, mzsignal, nalgebra and the Rust MCP SDK. Embedded Inter and JetBrains Mono use the [SIL Open Font License](assets/fonts/inter/LICENSE.txt) ([JetBrains Mono](assets/fonts/jetbrains-mono/OFL.txt)); [THIRD_PARTY_LICENSES.txt](THIRD_PARTY_LICENSES.txt) lists every dependency's notice. Retained MassBank records carry per-record attribution in [spectral_sources.json](tests/reference/spectral_sources.json). See [contributing](.github/CONTRIBUTING.md).

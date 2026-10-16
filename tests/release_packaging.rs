@@ -185,3 +185,49 @@ fn release_is_gated_on_tests_and_ci_covers_other_platforms_and_the_minimum_rust(
     assert!(msrv_job.contains("cargo check --locked --all-targets --all-features"));
     assert!(msrv_job.contains(&format!("({msrv})")));
 }
+
+#[test]
+fn documentation_matches_the_shipped_app() {
+    let readme = read("README.md");
+    // The tab is called "Audit package"; "Reports…" and the old status line must be gone.
+    assert!(!readme.contains("**Reports…**"));
+    assert!(!readme.contains("preparing a release"));
+    assert!(readme.contains("**Audit package**"));
+    // Installation covers the installers and the first-launch warnings of every platform.
+    for needle in [
+        ".msi",
+        "administrator",
+        "SmartScreen",
+        "Open Anyway",
+        ".deb",
+        ".AppImage",
+        "THIRD_PARTY_LICENSES.txt",
+        "CHANGELOG.md",
+    ] {
+        assert!(readme.contains(needle), "README lacks {needle:?}");
+    }
+    // macOS 15+ removed right-click > Open: the workflow comment may only say so, not advise it.
+    let workflow = read(".github/workflows/release.yml");
+    assert!(workflow.contains("Open Anyway"));
+    assert!(!workflow.contains("users open it once via right-click"));
+
+    let notes = read("docs/RELEASE_NOTES.md");
+    assert!(!notes.contains("uncommitted working tree"));
+    assert!(!notes.contains("no tag"));
+    assert!(notes.contains("0.3.0"));
+
+    // The changelog has a section for the version in Cargo.toml.
+    let version = read("Cargo.toml")
+        .lines()
+        .find_map(|l| l.strip_prefix("version = \""))
+        .and_then(|l| l.strip_suffix('"'))
+        .expect("version in Cargo.toml")
+        .to_owned();
+    let changelog = read("CHANGELOG.md");
+    assert!(changelog.contains(&format!("## [{version}]")));
+    assert!(changelog.contains("## [0.2.0]") && changelog.contains("## [0.1.0]"));
+
+    let status = read("docs/FEATURE_STATUS.md");
+    assert!(!status.contains("Reports and AI activity"));
+    assert!(!status.contains("Project reports and delivery"));
+}
