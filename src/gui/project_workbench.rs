@@ -425,7 +425,7 @@ pub(super) fn save_project(app: &mut MzViewerApp, ctx: &egui::Context) {
             std::thread::spawn(move || {
                 let _ = tx.send(Project::create(&worker_root).and_then(|_| {
                     let data = worker_root.file_name().unwrap().to_string_lossy();
-                    std::fs::write(
+                    crate::atomic_write::write_atomic(
                         &pointer,
                         serde_json::json!({"chromascope_project": 1, "data": data}).to_string(),
                     )

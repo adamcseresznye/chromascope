@@ -614,7 +614,7 @@ fn save_method(q: &mut QuantState, save_as: bool) -> Result<(), String> {
     };
     if let Some(path) = path {
         let text = signature(&q.method);
-        std::fs::write(&path, &text).map_err(|e| e.to_string())?;
+        crate::atomic_write::write_atomic(&path, &text).map_err(|e| e.to_string())?;
         q.saved_method = text;
         q.method_path = Some(path);
         q.message = "Method saved.".into();
@@ -688,8 +688,11 @@ fn batch_file(q: &mut QuantState, save: bool) -> Result<(), String> {
                 results: q.results.clone(),
                 samples: q.batch_samples.clone(),
             };
-            std::fs::write(path, serde_json::to_vec(&batch).map_err(|e| e.to_string())?)
-                .map_err(|e| e.to_string())?;
+            crate::atomic_write::write_atomic(
+                path,
+                serde_json::to_vec(&batch).map_err(|e| e.to_string())?,
+            )
+            .map_err(|e| e.to_string())?;
             q.message = "Batch saved, including traces and manual corrections.".into();
         }
     } else if let Some(path) = dialog.pick_file() {
@@ -1009,7 +1012,7 @@ pub(super) fn show(app: &mut MzViewerApp, ctx: &egui::Context) {
                             .set_file_name("quantification.csv")
                             .save_file()
                         {
-                            match std::fs::write(path, csv(&q.results, &q.method)) {
+                            match crate::atomic_write::write_atomic(path, csv(&q.results, &q.method)) {
                                 Ok(()) => {
                                     q.message =
                                         "Results exported, including review status and method snapshots."

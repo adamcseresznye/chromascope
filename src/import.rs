@@ -92,7 +92,8 @@ pub fn save_msconvert(path: &Path) -> Result<(), String> {
     }
     let settings = settings_path().ok_or("Cannot locate the application settings directory.")?;
     fs::create_dir_all(settings.parent().unwrap()).map_err(|e| e.to_string())?;
-    fs::write(settings, path.to_string_lossy().as_bytes()).map_err(|e| e.to_string())
+    crate::atomic_write::write_atomic(settings, path.to_string_lossy().as_bytes())
+        .map_err(|e| e.to_string())
 }
 
 fn conversion_command(executable: &Path, source: &Path, output: &Path) -> Command {

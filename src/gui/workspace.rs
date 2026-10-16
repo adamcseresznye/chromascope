@@ -255,7 +255,7 @@ pub(super) fn remember(app: &mut MzViewerApp, path: PathBuf) {
     if let Some(p) = recent_path() {
         let result = (|| -> Result<(), Box<dyn std::error::Error>> {
             std::fs::create_dir_all(p.parent().unwrap())?;
-            std::fs::write(p, serde_json::to_vec(&app.workspace.recent)?)?;
+            crate::atomic_write::write_atomic(p, serde_json::to_vec(&app.workspace.recent)?)?;
             Ok(())
         })();
         if let Err(e) = result {
@@ -790,7 +790,7 @@ pub(super) fn results(app: &mut MzViewerApp, ctx: &Context) {
         ui.horizontal(|ui| {
             if ui.add_enabled(!app.workspace.measurements.is_empty(), egui::Button::new("Export CSV…")).clicked() {
                 if let Some(p) = rfd::FileDialog::new().add_filter("CSV", &["csv"]).set_file_name("integrations.csv").save_file() {
-                    if let Err(e) = std::fs::write(p,measurements_csv(&app.workspace.measurements)) { app.show_error_dialog(e.to_string()); }
+                    if let Err(e) = crate::atomic_write::write_atomic(p,measurements_csv(&app.workspace.measurements)) { app.show_error_dialog(e.to_string()); }
                 }
             }
         });
@@ -1000,7 +1000,7 @@ fn save_session(app: &mut MzViewerApp, ctx: &Context) {
     let session = capture_session(app, ctx);
     if let Err(e) = serde_json::to_vec_pretty(&session)
         .map_err(|e| e.to_string())
-        .and_then(|b| std::fs::write(path, b).map_err(|e| e.to_string()))
+        .and_then(|b| crate::atomic_write::write_atomic(path, b).map_err(|e| e.to_string()))
     {
         app.show_error_dialog(e);
     }
@@ -1472,7 +1472,7 @@ pub(super) fn export_figure(app: &mut MzViewerApp, spectrum: bool) {
         })
         .save_file()
     {
-        if let Err(e) = std::fs::write(p, svg) {
+        if let Err(e) = crate::atomic_write::write_atomic(p, svg) {
             app.show_error_dialog(e.to_string());
         }
     }

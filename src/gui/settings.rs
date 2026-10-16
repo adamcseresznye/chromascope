@@ -111,7 +111,7 @@ pub(super) fn save(ctx: &egui::Context) {
         .parent()
         .map_or(Ok(()), std::fs::create_dir_all)
         .and_then(|()| {
-            std::fs::write(
+            crate::atomic_write::write_atomic(
                 &path,
                 serde_json::to_vec_pretty(&settings).map_err(std::io::Error::other)?,
             )

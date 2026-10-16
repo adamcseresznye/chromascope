@@ -382,7 +382,7 @@ pub(super) fn write_warnings_file(
 ) -> Result<(), String> {
     let path = destination.join("review-warnings.json");
     let text = serde_json::to_string_pretty(warnings).map_err(|e| e.to_string())?;
-    std::fs::write(&path, text).map_err(|e| e.to_string())
+    crate::atomic_write::write_atomic(&path, text).map_err(|e| e.to_string())
 }
 
 impl State {

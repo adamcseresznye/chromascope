@@ -260,14 +260,7 @@ impl Default for EditorState {
     }
 }
 fn write_preset(path: &std::path::Path, text: &str) -> Result<(), String> {
-    use std::io::Write;
-    let mut file =
-        tempfile::NamedTempFile::new_in(path.parent().unwrap_or_else(|| std::path::Path::new(".")))
-            .map_err(|e| e.to_string())?;
-    file.write_all(text.as_bytes()).map_err(|e| e.to_string())?;
-    file.as_file().sync_all().map_err(|e| e.to_string())?;
-    file.persist(path).map_err(|e| e.to_string())?;
-    Ok(())
+    crate::atomic_write::write_atomic(path, text).map_err(|e| e.to_string())
 }
 fn recent_path() -> Option<PathBuf> {
     crate::import::settings_path().map(|p| p.with_file_name("recent-presets.json"))
@@ -280,7 +273,7 @@ impl EditorState {
         if let Some(p) = recent_path() {
             let result = (|| -> Result<(), String> {
                 std::fs::create_dir_all(p.parent().unwrap()).map_err(|e| e.to_string())?;
-                std::fs::write(
+                crate::atomic_write::write_atomic(
                     p,
                     serde_json::to_vec(&self.recent).map_err(|e| e.to_string())?,
                 )

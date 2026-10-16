@@ -9,6 +9,7 @@
 pub const EXPERIMENTAL: bool = cfg!(feature = "experimental");
 
 pub mod annotation;
+pub mod atomic_write;
 pub mod chromatography;
 pub mod confidence;
 pub mod delivery;

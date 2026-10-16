@@ -26,7 +26,7 @@ pub(super) fn menu(ui: &mut egui::Ui) -> Option<Result<PathBuf, String>> {
                     .save_file()
                 {
                     result = Some(
-                        std::fs::write(&path, text)
+                        crate::atomic_write::write_atomic(&path, text)
                             .map(|()| path)
                             .map_err(|e| format!("Cannot save example preset: {e}")),
                     );

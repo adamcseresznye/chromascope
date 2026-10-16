@@ -47,7 +47,7 @@ pub fn export_chromatogram_csv(data: &[[f64; 2]], path: &Path) -> Result<()> {
     }
 
     // Write to file in a single operation
-    std::fs::write(path, csv_content).map_err(ChromascopeError::IoError)?;
+    crate::atomic_write::write_atomic(path, csv_content).map_err(ChromascopeError::IoError)?;
 
     Ok(())
 }
@@ -77,7 +77,7 @@ pub fn export_spectrum_csv(spectrum: &crate::parser::MassSpectrum, path: &Path) 
         csv_content.push_str(&format!("{},{}\n", mz, intensity));
     }
 
-    std::fs::write(path, csv_content).map_err(ChromascopeError::IoError)?;
+    crate::atomic_write::write_atomic(path, csv_content).map_err(ChromascopeError::IoError)?;
     Ok(())
 }
 
