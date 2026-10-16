@@ -66,3 +66,82 @@ fn gitignore_keeps_mass_spectrometry_data_out_of_git_at_any_depth() {
         assert_eq!(ignored(path), Some(false), "{path} must not be ignored");
     }
 }
+
+/// Paths of every tracked file, or `None` when Git is unavailable.
+fn tracked_files() -> Option<Vec<String>> {
+    let output = Command::new("git")
+        .args(["ls-files", "-z"])
+        .current_dir(root())
+        .output()
+        .ok()
+        .filter(|o| o.status.success())?;
+    Some(
+        String::from_utf8_lossy(&output.stdout)
+            .split('\0')
+            .filter(|p| !p.is_empty())
+            .map(str::to_owned)
+            .collect(),
+    )
+}
+
+#[test]
+fn tracked_files_carry_no_account_name_or_local_machine_path() {
+    // Built at run time so that this file does not contain what it forbids.
+    let needles = [
+        ["s0212", "777"].concat(),
+        ["universiteit", " antwerpen"].concat(),
+        ["bureau", "blad"].concat(),
+    ];
+    let Some(files) = tracked_files() else {
+        eprintln!("git is not available: tracked files were not scanned");
+        return;
+    };
+    assert!(files.len() > 100, "unexpectedly few tracked files");
+    let binary = [
+        "png", "mp4", "ico", "icns", "gif", "ttf", "otf", "woff", "woff2",
+    ];
+    let mut offenders = Vec::new();
+    for file in &files {
+        let extension = Path::new(file)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if binary.contains(&extension.as_str()) {
+            continue;
+        }
+        let Ok(bytes) = fs::read(root().join(file)) else {
+            continue; // listed but deleted in the working tree
+        };
+        let text = String::from_utf8_lossy(&bytes).to_lowercase();
+        for needle in &needles {
+            if text.contains(needle.as_str()) {
+                offenders.push(format!("{file}: {needle}"));
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "personal data in tracked files:\n{}",
+        offenders.join("\n")
+    );
+}
+
+#[test]
+fn indexed_mzml_fixture_was_anonymised_without_moving_a_single_byte() {
+    // test_file/data_dependent_02.mzML is an indexed mzML: a <sourceFile location> of a different
+    // length would shift every byte offset in its index. The original path was replaced by a
+    // string of exactly the same length, so the file keeps the size it had before.
+    let bytes = fs::read(root().join("test_file/data_dependent_02.mzML")).unwrap();
+    assert_eq!(bytes.len(), 517_498, "same-length edit only");
+    let text = String::from_utf8_lossy(&bytes);
+    let location = text
+        .split("<sourceFile ")
+        .nth(1)
+        .and_then(|s| s.split("location=\"").nth(1))
+        .and_then(|s| s.split('"').next())
+        .expect("sourceFile location");
+    assert!(location.starts_with("file:///C:"));
+    assert_eq!(location.len(), 70, "length of the original location");
+    assert!(location.contains("anonymised"));
+}

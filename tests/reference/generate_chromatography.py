@@ -34,5 +34,5 @@ for i in range(len(x)):
     lo_i = min(max(i-3,0),len(x)-7)
     xx_i = irregular[lo_i:lo_i+7] - irregular[i]
     si.append(np.linalg.lstsq(np.vander(xx_i,3,increasing=True),yi[lo_i:lo_i+7],rcond=None)[0][0])
-result = dict(provenance=dict(generator=__file__, numpy=np.__version__, scipy=scipy.__version__, seed=143, license='CC0', sg='scipy.signal.savgol_filter(window=7,degree=2,mode=interp)', baseline='10 AsLS solves: scipy.sparse.linalg.spsolve, lambda=1e5,p=.01'), x=x.tolist(), raw=y.tolist(), smoothed=smoothed.tolist(), baseline=z.tolist(), interval=[lo,hi], area=float(np.trapezoid(yy,xx)), apex=float(x[apex]), irregular=irregular.tolist(), irregular_raw=yi.tolist(), irregular_smoothed=si)
+result = dict(provenance=dict(generator='tests/reference/generate_chromatography.py', numpy=np.__version__, scipy=scipy.__version__, seed=143, license='CC0', sg='scipy.signal.savgol_filter(window=7,degree=2,mode=interp)', baseline='10 AsLS solves: scipy.sparse.linalg.spsolve, lambda=1e5,p=.01'), x=x.tolist(), raw=y.tolist(), smoothed=smoothed.tolist(), baseline=z.tolist(), interval=[lo,hi], area=float(np.trapezoid(yy,xx)), apex=float(x[apex]), irregular=irregular.tolist(), irregular_raw=yi.tolist(), irregular_smoothed=si)
 Path(__file__).with_name('chromatography.json').write_text(json.dumps(result, indent=2)+'\n')

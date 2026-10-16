@@ -1,6 +1,6 @@
 {
   "provenance": {
-    "generator": "<repository>\\tests\\reference\\generate_chromatography.py",
+    "generator": "tests/reference/generate_chromatography.py",
     "numpy": "2.3.3",
     "scipy": "1.16.2",
     "seed": 143,

@@ -11,7 +11,7 @@
         <cvParam cvRef="MS" accession="MS:1000580" name="MSn spectrum" value=""/>
       </fileContent>
       <sourceFileList count="1">
-        <sourceFile id="RAW1" name="data_dependent_02.raw" location="file:///%USERPROFILE%\OneDrive\Bureaublad">
+        <sourceFile id="RAW1" name="data_dependent_02.raw" location="file:///C:\Example dataset\Instrument export\Raw files\path anonymised">
           <cvParam cvRef="MS" accession="MS:1000768" name="Thermo nativeID format" value=""/>
           <cvParam cvRef="MS" accession="MS:1000563" name="Thermo RAW format" value=""/>
           <cvParam cvRef="MS" accession="MS:1000569" name="SHA-1" value="3f5379c263de7d609a067d5189161e4501ae46e8"/>
