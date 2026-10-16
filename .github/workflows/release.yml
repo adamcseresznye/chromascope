@@ -23,6 +23,10 @@ jobs:
       version: ${{ steps.v.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+      - name: Check third-party licences are current
+        run: |
+          cargo fetch --locked
+          python3 scripts/generate_third_party_licenses.py --check
       - id: v
         run: |
           V=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
@@ -86,7 +90,7 @@ jobs:
           # Plain archive
           mkdir -p "stage/$NAME"
           for b in $BINS; do cp "$BIN/$b" "stage/$NAME/"; done
-          cp LICENSE README.md packaging/linux/chromascope.desktop packaging/icons/chromascope-512.png "stage/$NAME/"
+          cp LICENSE THIRD_PARTY_LICENSES.txt README.md packaging/linux/chromascope.desktop packaging/icons/chromascope-512.png "stage/$NAME/"
           tar -C stage -czf "$OUT/$NAME.tar.gz" "$NAME"
 
           # Debian / Ubuntu and Fedora / openSUSE packages (assets are listed in Cargo.toml)
@@ -96,12 +100,23 @@ jobs:
           # AppImage (uses the system's GL, X11 and Wayland libraries)
           mkdir -p appdir/usr/bin
           for b in $BINS; do cp "$BIN/$b" appdir/usr/bin/; done
+          mkdir -p appdir/usr/share/doc/chromascope
+          cp LICENSE THIRD_PARTY_LICENSES.txt README.md appdir/usr/share/doc/chromascope/
           cp packaging/linux/chromascope.desktop appdir/
           cp packaging/icons/chromascope-512.png appdir/chromascope.png
           cp packaging/icons/chromascope-512.png appdir/.DirIcon
           printf '%s\n' '#!/bin/sh' 'HERE="$(dirname "$(readlink -f "$0")")"' 'export PATH="$HERE/usr/bin:$PATH"' 'exec "$HERE/usr/bin/chromascope" "$@"' > appdir/AppRun
           chmod +x appdir/AppRun
-          curl -fsSL -o appimagetool "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-$ARCH.AppImage"
+          # appimagetool is pinned to a tagged release and verified against its published SHA-256
+          # (GitHub release asset digests for 1.9.1); update the tag and both hashes together.
+          APPIMAGETOOL_VERSION=1.9.1
+          case "$ARCH" in
+            x86_64)  APPIMAGETOOL_SHA256=ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0 ;;
+            aarch64) APPIMAGETOOL_SHA256=f0837e7448a0c1e4e650a93bb3e85802546e60654ef287576f46c71c126a9158 ;;
+            *) echo "::error::No pinned appimagetool for $ARCH"; exit 1 ;;
+          esac
+          curl -fsSL -o appimagetool "https://github.com/AppImage/appimagetool/releases/download/$APPIMAGETOOL_VERSION/appimagetool-$ARCH.AppImage"
+          echo "$APPIMAGETOOL_SHA256  appimagetool" | sha256sum -c -
           chmod +x appimagetool
           ARCH="$ARCH" APPIMAGE_EXTRACT_AND_RUN=1 ./appimagetool --no-appstream appdir "$OUT/$NAME.AppImage"
 
@@ -158,7 +173,7 @@ jobs:
             cp "$BIN/$b.exe" bin/
             cp "$BIN/$b.exe" "stage/$NAME/"
           done
-          cp LICENSE README.md "stage/$NAME/"
+          cp LICENSE THIRD_PARTY_LICENSES.txt README.md "stage/$NAME/"
           (cd stage && 7z a -tzip "../$OUT/$NAME-portable.zip" "$NAME")
 
           # MSI versions must be numeric (a.b.c); drop any pre-release suffix.
@@ -166,7 +181,7 @@ jobs:
           dotnet tool install --global wix --version 5.0.2
           export PATH="$PATH:$HOME/.dotnet/tools"
           wix build -arch "$ARCH" \
-            -d Version="$MSI_VERSION" -d BinDir=bin -d IconFile=packaging/icons/chromascope.ico \
+            -d Version="$MSI_VERSION" -d BinDir=bin -d LicenseDir=. -d IconFile=packaging/icons/chromascope.ico \
             -o "$OUT/$NAME.msi" packaging/windows/chromascope.wxs
 
       - uses: actions/upload-artifact@v4
@@ -216,7 +231,7 @@ jobs:
 
           # Archive with the command-line and MCP tools
           mkdir -p "stage/$NAME"
-          cp universal/* LICENSE README.md "stage/$NAME/"
+          cp universal/* LICENSE THIRD_PARTY_LICENSES.txt README.md "stage/$NAME/"
           (cd stage && zip -qr "../$OUT/$NAME.zip" "$NAME")
 
           # Disk image: the app bundle, the other tools and an Applications shortcut
@@ -225,9 +240,11 @@ jobs:
           mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "stage/dmg/Command line tools"
           cp universal/chromascope "$APP/Contents/MacOS/"
           cp packaging/icons/chromascope.icns "$APP/Contents/Resources/"
+          cp LICENSE THIRD_PARTY_LICENSES.txt "$APP/Contents/Resources/"
           sed "s/@VERSION@/$MAC_VERSION/g" packaging/macos/Info.plist > "$APP/Contents/Info.plist"
           codesign --force --deep -s - "$APP"
           cp universal/chromascope-cli universal/chromascope-mcp universal/chromascope-engine-mcp "stage/dmg/Command line tools/"
+          cp LICENSE THIRD_PARTY_LICENSES.txt stage/dmg/
           ln -s /Applications stage/dmg/Applications
           hdiutil create -volname Chromascope -srcfolder stage/dmg -ov -format UDZO "$OUT/$NAME.dmg"
 

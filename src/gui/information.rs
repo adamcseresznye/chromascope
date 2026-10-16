@@ -42,9 +42,14 @@ pub(super) fn show(app: &MzViewerApp, ctx: &Context) {
                 egui::CollapsingHeader::new("Credits & licenses").show(ui, |ui| {
                     ui.label("Built with Rust, egui/eframe, and mzdata.");
                     ui.hyperlink_to("Inter by Rasmus Andersson · SIL Open Font License", "https://rsms.me/inter/");
-                    egui::ScrollArea::vertical().max_height(150.0).show(ui, |ui| {
+                    egui::ScrollArea::vertical().id_salt("inter_license").max_height(150.0).show(ui, |ui| {
                         ui.small(include_str!("../../assets/fonts/inter/LICENSE.txt"));
                     });
+                    ui.hyperlink_to("JetBrains Mono by the JetBrains Mono Project Authors · SIL Open Font License", "https://github.com/JetBrains/JetBrainsMono");
+                    egui::ScrollArea::vertical().id_salt("jetbrains_mono_license").max_height(150.0).show(ui, |ui| {
+                        ui.small(include_str!("../../assets/fonts/jetbrains-mono/OFL.txt"));
+                    });
+                    ui.small("The licences of all Rust libraries are in THIRD_PARTY_LICENSES.txt, shipped with every download.");
                 });
             });
         ctx.data_mut(|d| d.insert_temp(about_id, open));
