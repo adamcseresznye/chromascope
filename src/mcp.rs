@@ -171,6 +171,10 @@ pub enum Command {
         trace_index: Option<usize>,
         visible: bool,
     },
+    RemoveMeasurement {
+        index: usize,
+    },
+    ClearIntegration {},
     Measurements {},
     ListPresets {
         directory: Option<String>,
@@ -1500,6 +1504,32 @@ impl McpServer {
         .await
     }
     #[tool(
+        description = "Delete one integration measurement from the window's results list, as the Remove selected measurement button of the Integration results does; give its position in the list measurements returns. The trace and any later measurements stay, and undo_integration can no longer undo an integration recorded before the removal. Use it to take back a measurement you did not mean to record. Requires --allow-changes.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn remove_measurement(
+        &self,
+        Parameters(args): Parameters<RemoveMeasurementArgs>,
+    ) -> CallToolResult {
+        self.dispatch(Command::RemoveMeasurement { index: args.index })
+            .await
+    }
+    #[tool(
+        description = "Clear the integration markers (start, end and area) from the active chromatogram without deleting any recorded measurement, as the Clear integration button and the Escape key do. Use it before taking a clean figure with chromatogram_image or export_figure. Requires --allow-changes.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn clear_integration(&self) -> CallToolResult {
+        self.dispatch(Command::ClearIntegration {}).await
+    }
+    #[tool(
         description = "Build the audit package of a project in a new folder, as Export audit package does: a readable report.html, the machine-readable evidence (revisions, results, CSV, SVG) and checksums.json, optionally with the raw sources. Open warnings in the window (unresolved peaks, unreviewed results, failed QC) stop the export until acknowledge_warnings is true; they are then saved in the bundle as review-warnings.json. Runs in the background and replies when done. Requires --allow-exports; the destination must be a new folder inside an --allow-root, existing folders are never overwritten.",
         annotations(
             read_only_hint = false,
@@ -1846,6 +1876,13 @@ pub struct SetSettingsArgs {
 }
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct RemoveMeasurementArgs {
+    /// Position in the list `measurements` returns (zero-based).
+    pub index: usize,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct BuildBundleArgs {
     /// New folder to create inside an --allow-root; it must not exist.
     pub destination: String,
@@ -2053,6 +2090,8 @@ mod tests {
         "save_preset",
         "build_bundle",
         "set_settings",
+        "remove_measurement",
+        "clear_integration",
         "create_project",
         "open_project",
         "save_project",
@@ -2078,7 +2117,7 @@ mod tests {
     #[test]
     fn tool_descriptions_are_unique_nonempty_and_annotated() {
         let tools = McpServer::tool_router().list_all();
-        assert_eq!(tools.len(), 53, "53 typed tools; workbench is not listed");
+        assert_eq!(tools.len(), 55, "55 typed tools; workbench is not listed");
         assert!(
             tools.iter().all(|t| t.name != "workbench"),
             "workbench duplicated the typed tools and must not be listed"
@@ -2169,11 +2208,11 @@ mod tests {
             let discovered=rpc(&mut write,&mut read,json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}})).await;
             let listed=discovered["result"]["tools"].as_array().unwrap();
             let desktop=McpServer::tool_router().list_all();
-            assert_eq!(desktop.len(),53);
+            assert_eq!(desktop.len(),55);
             assert!(desktop.iter().all(|d|listed.iter().any(|t|t["name"]==d.name.as_ref())),"every viewer tool is listed");
             let engine=crate::engine_mcp::EngineMcp::new(vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))]).unwrap().tool_names();
             let visible=engine.iter().filter(|n|crate::EXPERIMENTAL||!matches!(n.as_str(),"start_untargeted"|"untargeted_status"|"cancel_untargeted"|"untargeted_features")).count();
-            assert_eq!(listed.len(),53+visible,"viewer tools plus the shared engine tools");
+            assert_eq!(listed.len(),55+visible,"viewer tools plus the shared engine tools");
             assert!(listed.iter().all(|t|t["name"]!="workbench"));
             assert!(listed.iter().all(|t|t["annotations"]["readOnlyHint"].is_boolean()&&t["annotations"]["destructiveHint"].is_boolean()),"every tool must carry both hints on the wire");
             let find=|name:&str|listed.iter().find(|t|t["name"]==name).unwrap();

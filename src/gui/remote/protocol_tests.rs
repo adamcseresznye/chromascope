@@ -2019,3 +2019,77 @@ fn the_viewer_tools_that_predate_the_parity_work_run_over_the_protocol() {
     );
     desktop.finish();
 }
+
+#[test]
+fn measurements_can_be_removed_and_the_integration_cleared_over_mcp() {
+    let mut desktop = Desktop::start(vec![], true, false, false);
+    let id = desktop.open_fixture();
+    desktop.tool(
+        "extract_chromatogram",
+        json!({"dataset_id":id,"kind":"tic","polarity":"positive","ms_level":1,"smoothing":0,"display":true}),
+    );
+    let data = desktop.tool(
+        "chromatogram_data",
+        json!({"dataset_id":id,"offset":0,"limit":10000}),
+    );
+    let points: Vec<[f64; 2]> = serde_json::from_value(data["points"].clone()).unwrap();
+    let (a, m, z) = (
+        points[0][0],
+        points[points.len() / 2][0],
+        points[points.len() - 1][0],
+    );
+    for (start, end) in [(a, m), (m, z)] {
+        desktop.tool(
+            "integrate",
+            json!({"dataset_id":id,"start_minutes":start,"end_minutes":end,"apply":true}),
+        );
+    }
+    let listed = desktop.tool("measurements", json!({}));
+    let list = listed["measurements"].as_array().unwrap().clone();
+    assert_eq!(list.len(), 2);
+    // Clearing removes the markers, not the recorded measurements.
+    assert!(desktop.app.integration.result.is_some());
+    assert_eq!(
+        desktop.tool("clear_integration", json!({}))["cleared"],
+        true
+    );
+    assert!(desktop.app.integration.result.is_none() && desktop.app.integration.start_rt.is_none());
+    assert_eq!(desktop.app.workspace.measurements.len(), 2);
+    // Removing the first leaves the second, in order.
+    let removed = desktop.tool("remove_measurement", json!({"index":0}));
+    assert_eq!(removed["remaining"], 1);
+    assert_eq!(removed["removed"]["start"], list[0]["start"]);
+    assert_eq!(
+        desktop.tool("measurements", json!({}))["measurements"][0],
+        list[1]
+    );
+    // The undo entries described the earlier list; undo refuses rather than guess.
+    let error = desktop.tool_error("undo_integration", json!({}));
+    assert!(error["message"].is_string(), "{error}");
+    assert_eq!(desktop.app.workspace.measurements.len(), 1);
+    let error = desktop.tool_error("remove_measurement", json!({"index":5}));
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("Unknown measurement 5"),
+        "{error}"
+    );
+    // Both need --allow-changes.
+    let mut read_only = Desktop::start(vec![], false, false, false);
+    for (tool, arguments) in [
+        ("remove_measurement", json!({"index":0})),
+        ("clear_integration", json!({})),
+    ] {
+        let error = read_only.tool_error(tool, arguments);
+        assert!(
+            error["message"]
+                .as_str()
+                .unwrap()
+                .contains("--allow-changes"),
+            "{tool}: {error}"
+        );
+    }
+    desktop.finish();
+    read_only.finish();
+}

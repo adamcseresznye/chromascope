@@ -874,6 +874,8 @@ impl MzViewerApp {
         let changes = matches!(
             c,
             Command::SelectDataset { .. }
+                | Command::RemoveMeasurement { .. }
+                | Command::ClearIntegration {}
                 | Command::SetSettings { .. }
                 | Command::LoadSession { .. }
                 | Command::OpenProject { .. }
@@ -1056,6 +1058,22 @@ impl MzViewerApp {
                 interface_size,
                 mz_decimals,
             } => ops::set_settings(ctx, theme.as_deref(), interface_size, mz_decimals)?,
+            Command::RemoveMeasurement { index } => {
+                let total = self.workspace.measurements.len();
+                if index >= total {
+                    return Err(format!(
+                        "Unknown measurement {index}; the list holds {total}"
+                    ));
+                }
+                let removed = self.workspace.measurements.remove(index);
+                // Undo entries count the measurements that existed; they no longer match.
+                b.undo.clear();
+                json!({"removed":removed,"remaining":self.workspace.measurements.len()})
+            }
+            Command::ClearIntegration {} => {
+                self.integration = Default::default();
+                json!({"cleared":true})
+            }
             Command::ListPresets { directory } => files::list_presets(self, b, directory)?,
             Command::GetPreset { source } => files::get_preset(b, &source)?,
             Command::SavePreset { path, toml } => files::save_preset(self, b, &path, &toml)?,
