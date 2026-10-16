@@ -139,8 +139,7 @@ pub fn update_data_selection_panel(app: &mut MzViewerApp, ctx: &Context) {
                 ui.horizontal(|ui| {
                     for (factor, label) in [(0.9_f32, "90%"), (1.0, "100%"), (1.15, "115%"), (1.3, "130%")] {
                         if super::widgets::segment(ui, (zoom - factor).abs() < 0.01, None, label).clicked() {
-                            ctx.set_zoom_factor(factor);
-                            super::settings::save(ctx);
+                            super::settings::set_zoom(ctx, factor);
                         }
                     }
                 });

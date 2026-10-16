@@ -182,3 +182,71 @@ pub(super) fn set_trace_visibility(
     summary["visible"] = json!(visible);
     Ok(summary)
 }
+
+/// Interface sizes the View menu offers, in percent.
+const INTERFACE_SIZES: [u16; 4] = [90, 100, 115, 130];
+
+fn theme_name(preference: egui::ThemePreference) -> &'static str {
+    match preference {
+        egui::ThemePreference::System => "system",
+        egui::ThemePreference::Light => "light",
+        egui::ThemePreference::Dark => "dark",
+    }
+}
+
+/// The display preferences, as the View menu shows them.
+pub(super) fn settings(ctx: &egui::Context) -> Value {
+    json!({
+        "theme":theme_name(ctx.options(|o| o.theme_preference)),
+        "interface_size":(ctx.zoom_factor() * 100.0).round() as u16,
+        "mz_decimals":super::super::settings::mz_decimals(),
+        "choices":{
+            "theme":["system","light","dark"],
+            "interface_size":INTERFACE_SIZES,
+            "mz_decimals":super::super::settings::MZ_DECIMAL_CHOICES,
+        },
+    })
+}
+
+pub(super) fn set_settings(
+    ctx: &egui::Context,
+    theme: Option<&str>,
+    interface_size: Option<u16>,
+    mz_decimals: Option<u8>,
+) -> Result<Value, String> {
+    // Check everything first, so a bad value leaves all preferences as they were.
+    let theme = match theme {
+        None => None,
+        Some("system") => Some(egui::ThemePreference::System),
+        Some("light") => Some(egui::ThemePreference::Light),
+        Some("dark") => Some(egui::ThemePreference::Dark),
+        Some(_) => return Err("theme: system, light or dark".into()),
+    };
+    if interface_size.is_some_and(|size| !INTERFACE_SIZES.contains(&size)) {
+        return Err(format!(
+            "interface_size: one of {INTERFACE_SIZES:?} percent"
+        ));
+    }
+    if mz_decimals.is_some_and(|d| !super::super::settings::MZ_DECIMAL_CHOICES.contains(&d)) {
+        return Err(format!(
+            "mz_decimals: one of {:?}",
+            super::super::settings::MZ_DECIMAL_CHOICES
+        ));
+    }
+    if let Some(theme) = theme {
+        ctx.set_theme(theme);
+    }
+    if let Some(decimals) = mz_decimals {
+        super::super::settings::set_mz_decimals(ctx, decimals);
+    }
+    match interface_size {
+        Some(size) => super::super::settings::set_zoom(ctx, f32::from(size) / 100.0),
+        None => super::super::settings::save(ctx),
+    }
+    let mut now = settings(ctx);
+    if let Some(size) = interface_size {
+        // The window applies the new size at the start of its next frame; report it already.
+        now["interface_size"] = json!(size);
+    }
+    Ok(now)
+}

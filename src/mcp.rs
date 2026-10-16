@@ -182,6 +182,12 @@ pub enum Command {
         path: String,
         toml: String,
     },
+    GetSettings {},
+    SetSettings {
+        theme: Option<String>,
+        interface_size: Option<u16>,
+        mz_decimals: Option<u8>,
+    },
     BuildBundle {
         destination: String,
         project: Option<String>,
@@ -1467,6 +1473,33 @@ impl McpServer {
         .await
     }
     #[tool(
+        description = "Read the display preferences of the window: theme (system, light or dark), interface size in percent and the number of decimals shown for an m/z, with the values each can take. Use it before set_settings. Read-only.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn get_settings(&self) -> CallToolResult {
+        self.dispatch(Command::GetSettings {}).await
+    }
+    #[tool(
+        description = "Change the display preferences, as the View menu does, and keep them for the next start: theme (system, light, dark), interface size in percent (90, 100, 115, 130) and m/z decimals (2 to 6). Nothing but how the window looks changes: stored data and exports keep full precision. All values are checked before any is applied. Requires --allow-changes.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn set_settings(&self, Parameters(args): Parameters<SetSettingsArgs>) -> CallToolResult {
+        self.dispatch(Command::SetSettings {
+            theme: args.theme,
+            interface_size: args.interface_size,
+            mz_decimals: args.mz_decimals,
+        })
+        .await
+    }
+    #[tool(
         description = "Build the audit package of a project in a new folder, as Export audit package does: a readable report.html, the machine-readable evidence (revisions, results, CSV, SVG) and checksums.json, optionally with the raw sources. Open warnings in the window (unresolved peaks, unreviewed results, failed QC) stop the export until acknowledge_warnings is true; they are then saved in the bundle as review-warnings.json. Runs in the background and replies when done. Requires --allow-exports; the destination must be a new folder inside an --allow-root, existing folders are never overwritten.",
         annotations(
             read_only_hint = false,
@@ -1803,6 +1836,16 @@ pub struct SavePresetArgs {
 }
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct SetSettingsArgs {
+    /// `system`, `light` or `dark`.
+    pub theme: Option<String>,
+    /// Interface size in percent: 90, 100, 115 or 130.
+    pub interface_size: Option<u16>,
+    /// Decimals shown for every on-screen m/z: 2 to 6. Exports always keep full precision.
+    pub mz_decimals: Option<u8>,
+}
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct BuildBundleArgs {
     /// New folder to create inside an --allow-root; it must not exist.
     pub destination: String,
@@ -2009,6 +2052,7 @@ mod tests {
         "set_trace_visibility",
         "save_preset",
         "build_bundle",
+        "set_settings",
         "create_project",
         "open_project",
         "save_project",
@@ -2034,7 +2078,7 @@ mod tests {
     #[test]
     fn tool_descriptions_are_unique_nonempty_and_annotated() {
         let tools = McpServer::tool_router().list_all();
-        assert_eq!(tools.len(), 51, "51 typed tools; workbench is not listed");
+        assert_eq!(tools.len(), 53, "53 typed tools; workbench is not listed");
         assert!(
             tools.iter().all(|t| t.name != "workbench"),
             "workbench duplicated the typed tools and must not be listed"
@@ -2125,11 +2169,11 @@ mod tests {
             let discovered=rpc(&mut write,&mut read,json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}})).await;
             let listed=discovered["result"]["tools"].as_array().unwrap();
             let desktop=McpServer::tool_router().list_all();
-            assert_eq!(desktop.len(),51);
+            assert_eq!(desktop.len(),53);
             assert!(desktop.iter().all(|d|listed.iter().any(|t|t["name"]==d.name.as_ref())),"every viewer tool is listed");
             let engine=crate::engine_mcp::EngineMcp::new(vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))]).unwrap().tool_names();
             let visible=engine.iter().filter(|n|crate::EXPERIMENTAL||!matches!(n.as_str(),"start_untargeted"|"untargeted_status"|"cancel_untargeted"|"untargeted_features")).count();
-            assert_eq!(listed.len(),51+visible,"viewer tools plus the shared engine tools");
+            assert_eq!(listed.len(),53+visible,"viewer tools plus the shared engine tools");
             assert!(listed.iter().all(|t|t["name"]!="workbench"));
             assert!(listed.iter().all(|t|t["annotations"]["readOnlyHint"].is_boolean()&&t["annotations"]["destructiveHint"].is_boolean()),"every tool must carry both hints on the wire");
             let find=|name:&str|listed.iter().find(|t|t["name"]==name).unwrap();

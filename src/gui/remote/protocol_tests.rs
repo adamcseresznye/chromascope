@@ -1771,3 +1771,94 @@ fn bundles_are_built_verified_and_results_reprocessed_over_mcp() {
     desktop.finish();
     guarded.finish();
 }
+
+#[test]
+fn display_preferences_are_read_and_changed_over_mcp() {
+    let mut desktop = Desktop::start(vec![], true, false, false);
+    let before = desktop.tool("get_settings", json!({}));
+    assert_eq!(
+        before["choices"]["theme"],
+        json!(["system", "light", "dark"])
+    );
+    assert_eq!(
+        before["choices"]["interface_size"],
+        json!([90, 100, 115, 130])
+    );
+    assert_eq!(before["mz_decimals"], crate::gui::settings::mz_decimals());
+    // Theme and interface size change the window and are kept for the next start.
+    let changed = desktop.tool("set_settings", json!({"theme":"dark","interface_size":115}));
+    assert_eq!(
+        (
+            changed["theme"].as_str(),
+            changed["interface_size"].as_u64()
+        ),
+        (Some("dark"), Some(115)),
+        "{changed}"
+    );
+    assert_eq!(
+        desktop.ctx.options(|o| o.theme_preference),
+        egui::ThemePreference::Dark
+    );
+    // The window applies the new size at the start of its next frame.
+    let _ = desktop.ctx.run(egui::RawInput::default(), |_| {});
+    assert!((desktop.ctx.zoom_factor() - 1.15).abs() < 1e-6);
+    let file = crate::import::settings_path()
+        .unwrap()
+        .with_file_name("settings.json");
+    let saved: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    assert_eq!(saved["theme"], "dark");
+    assert!(
+        (saved["zoom"].as_f64().unwrap() - 1.15).abs() < 1e-6,
+        "{saved}"
+    );
+    assert_eq!(desktop.tool("get_settings", json!({}))["theme"], "dark");
+    // One bad value refuses the whole call: nothing else is applied.
+    for bad in [
+        json!({"theme":"light","interface_size":101}),
+        json!({"theme":"purple"}),
+        json!({"theme":"light","mz_decimals":9}),
+        json!({"interface_size":0}),
+    ] {
+        let error = desktop.tool_error("set_settings", bad);
+        assert!(error["message"].is_string());
+        let now = desktop.tool("get_settings", json!({}));
+        assert_eq!(
+            (now["theme"].as_str(), now["interface_size"].as_u64()),
+            (Some("dark"), Some(115)),
+            "{now}"
+        );
+    }
+    // The decimals shown for an m/z (restored at once: it is process-wide).
+    let original = crate::gui::settings::mz_decimals();
+    let other = if original == 5 { 3 } else { 5 };
+    let shown = desktop.tool("set_settings", json!({"mz_decimals":other}));
+    assert_eq!(shown["mz_decimals"], other);
+    assert_eq!(crate::gui::settings::mz_decimals(), other);
+    desktop.tool(
+        "set_settings",
+        json!({"mz_decimals":original,"theme":"system","interface_size":100}),
+    );
+    assert_eq!(crate::gui::settings::mz_decimals(), original);
+    let _ = desktop.ctx.run(egui::RawInput::default(), |_| {});
+    let restored = desktop.tool("get_settings", json!({}));
+    assert_eq!(
+        (
+            restored["theme"].as_str(),
+            restored["interface_size"].as_u64()
+        ),
+        (Some("system"), Some(100))
+    );
+    // Reading needs no permission; changing does.
+    let mut read_only = Desktop::start(vec![], false, false, false);
+    assert!(read_only.tool("get_settings", json!({}))["theme"].is_string());
+    let error = read_only.tool_error("set_settings", json!({"theme":"dark"}));
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("--allow-changes"),
+        "{error}"
+    );
+    desktop.finish();
+    read_only.finish();
+}

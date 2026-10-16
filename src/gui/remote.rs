@@ -874,6 +874,7 @@ impl MzViewerApp {
         let changes = matches!(
             c,
             Command::SelectDataset { .. }
+                | Command::SetSettings { .. }
                 | Command::LoadSession { .. }
                 | Command::OpenProject { .. }
                 | Command::RefreshProject {}
@@ -1049,6 +1050,12 @@ impl MzViewerApp {
                 trace_index,
                 visible,
             } => ops::set_trace_visibility(self, dataset_id.index(), trace_index, visible)?,
+            Command::GetSettings {} => ops::settings(ctx),
+            Command::SetSettings {
+                theme,
+                interface_size,
+                mz_decimals,
+            } => ops::set_settings(ctx, theme.as_deref(), interface_size, mz_decimals)?,
             Command::ListPresets { directory } => files::list_presets(self, b, directory)?,
             Command::GetPreset { source } => files::get_preset(b, &source)?,
             Command::SavePreset { path, toml } => files::save_preset(self, b, &path, &toml)?,

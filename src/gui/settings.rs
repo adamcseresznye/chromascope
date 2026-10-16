@@ -124,10 +124,22 @@ pub(super) fn load() -> Settings {
 
 /// Write the current theme, interface size and decimals.
 pub(super) fn save(ctx: &egui::Context) {
+    save_with_zoom(ctx, ctx.zoom_factor());
+}
+
+/// Change the interface size and remember it. egui applies a new zoom factor only at the start
+/// of the next frame, so reading it back right after setting it would store the previous size
+/// (and every later change would be one step behind): the new size is stored explicitly.
+pub(super) fn set_zoom(ctx: &egui::Context, factor: f32) {
+    ctx.set_zoom_factor(factor);
+    save_with_zoom(ctx, factor);
+}
+
+fn save_with_zoom(ctx: &egui::Context, zoom: f32) {
     let settings = Settings {
         mz_decimals: mz_decimals(),
         theme: ctx.options(|o| o.theme_preference).into(),
-        zoom: ctx.zoom_factor(),
+        zoom,
     };
     let Some(path) = path() else { return };
     let saved = path
