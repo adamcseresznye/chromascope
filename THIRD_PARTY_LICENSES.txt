@@ -473,7 +473,7 @@ Crate, version, SPDX licence expression and repository:
   quick-xml 0.38.4 - MIT - https://github.com/tafia/quick-xml
   quote 1.0.44 - MIT OR Apache-2.0 - https://github.com/dtolnay/quote
   r-efi 5.3.0 - MIT OR Apache-2.0 OR LGPL-2.1-or-later - https://github.com/r-efi/r-efi
-  rand 0.8.5 - MIT OR Apache-2.0 - https://github.com/rust-random/rand
+  rand 0.8.6 - MIT OR Apache-2.0 - https://github.com/rust-random/rand
   rand_chacha 0.3.1 - MIT OR Apache-2.0 - https://github.com/rust-random/rand
   rand_core 0.6.4 - MIT OR Apache-2.0 - https://github.com/rust-random/rand
   raw-window-handle 0.6.2 - MIT OR Apache-2.0 OR Zlib - https://github.com/rust-windowing/raw-window-handle
@@ -4324,7 +4324,7 @@ DEALINGS IN THE SOFTWARE.
 
 ==============================================================================
 Used by:
-  rand 0.8.5
+  rand 0.8.6
   rand_chacha 0.3.1
   rand_core 0.6.4
 
@@ -4344,7 +4344,7 @@ published under these same licenses.
 
 ==============================================================================
 Used by:
-  rand 0.8.5
+  rand 0.8.6
   rand_chacha 0.3.1
   rand_core 0.6.4
 
@@ -10732,7 +10732,7 @@ SOFTWARE.
 
 ==============================================================================
 Used by:
-  rand 0.8.5
+  rand 0.8.6
 
 Apache License
                         Version 2.0, January 2004
