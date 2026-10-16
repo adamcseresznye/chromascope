@@ -148,6 +148,29 @@ pub enum Command {
         apply: bool,
     },
     UndoIntegration {},
+    SetLayout {
+        mode: Option<String>,
+        auto_grid: Option<bool>,
+        rows: Option<usize>,
+        columns: Option<usize>,
+        page: Option<usize>,
+        show_files: Option<bool>,
+        show_inspector: Option<bool>,
+        show_spectrum: Option<bool>,
+        focus: Option<bool>,
+    },
+    RetainTrace {
+        dataset_id: DatasetRef,
+    },
+    RemoveTrace {
+        dataset_id: DatasetRef,
+        trace_index: Option<usize>,
+    },
+    SetTraceVisibility {
+        dataset_id: DatasetRef,
+        trace_index: Option<usize>,
+        visible: bool,
+    },
     Measurements {},
     PlotImage {
         spectrum: bool,
@@ -189,6 +212,9 @@ impl Command {
             | Command::Spectrum { dataset_id, .. }
             | Command::SetVisibility { dataset_id, .. }
             | Command::Integrate { dataset_id, .. }
+            | Command::RetainTrace { dataset_id }
+            | Command::RemoveTrace { dataset_id, .. }
+            | Command::SetTraceVisibility { dataset_id, .. }
             | Command::ExportCsv { dataset_id, .. } => vec![dataset_id],
             Command::StartQuantification { dataset_ids, .. } => dataset_ids.iter_mut().collect(),
             _ => vec![],
@@ -1213,7 +1239,88 @@ impl McpServer {
         self.dispatch(Command::ListDatasets {}).await
     }
     #[tool(
-        description = "Return the whole current state of the window: datasets, active dataset, processing parameters, plot bounds, retained traces, measurements, the history of operations and the units used. Use it at the start of a session and whenever you are unsure what the person is looking at. Read-only.",
+        description = "Change how the plots are arranged: overlay, grid (automatic or fixed rows and columns, with a page for a fixed grid that holds more traces) or compare (samples by analytes), and which of the data files, trace settings and spectrum panels are shown, or focus mode. Use it to frame the window before chromatogram_image. Presentation only; no data change. Requires --allow-changes.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn set_layout(&self, Parameters(args): Parameters<SetLayoutArgs>) -> CallToolResult {
+        let SetLayoutArgs {
+            mode,
+            auto_grid,
+            rows,
+            columns,
+            page,
+            show_files,
+            show_inspector,
+            show_spectrum,
+            focus,
+        } = args;
+        self.dispatch(Command::SetLayout {
+            mode,
+            auto_grid,
+            rows,
+            columns,
+            page,
+            show_files,
+            show_inspector,
+            show_spectrum,
+            focus,
+        })
+        .await
+    }
+    #[tool(
+        description = "Keep the current extraction of a dataset in its list of retained traces, so a later extraction shows next to it instead of replacing it (extract_chromatogram with display=true already retains the previous trace). Use it before changing the extraction when you want to compare both. Requires --allow-changes.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn retain_trace(&self, Parameters(args): Parameters<RetainTraceArgs>) -> CallToolResult {
+        self.dispatch(Command::RetainTrace {
+            dataset_id: args.dataset_id,
+        })
+        .await
+    }
+    #[tool(
+        description = "Delete one trace of a dataset from the workspace and from figures: a retained trace by trace_index (see gui_state), or the current extraction when trace_index is omitted. The extraction can be repeated; measurements already recorded stay. Requires --allow-changes.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn remove_trace(&self, Parameters(args): Parameters<RemoveTraceArgs>) -> CallToolResult {
+        self.dispatch(Command::RemoveTrace {
+            dataset_id: args.dataset_id,
+            trace_index: args.trace_index,
+        })
+        .await
+    }
+    #[tool(
+        description = "Show or hide a single trace of a dataset in the plots and figures: a retained trace by trace_index (see gui_state), or the current extraction when trace_index is omitted. select_trace and set_visibility act on other things (the active trace, a whole dataset). Requires --allow-changes.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn set_trace_visibility(
+        &self,
+        Parameters(args): Parameters<SetTraceVisibilityArgs>,
+    ) -> CallToolResult {
+        self.dispatch(Command::SetTraceVisibility {
+            dataset_id: args.dataset_id,
+            trace_index: args.trace_index,
+            visible: args.visible,
+        })
+        .await
+    }
+    #[tool(
+        description = "Return the whole current state of the window: datasets, active dataset, processing parameters, plot bounds, layout, retained traces (with their trace_index), measurements, the history of operations and the units used. Use it at the start of a session and whenever you are unsure what the person is looking at. Read-only.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1295,6 +1402,50 @@ impl ServerHandler for McpServer {
             .with_server_info(Implementation::new("chromascope", env!("CARGO_PKG_VERSION")))
             .with_instructions("One server for everything the person sees in the window. Inspect datasets first (list_datasets, gui_state). Use the typed viewer tools to open data, extract and integrate; start_analysis runs calibration, quantification and QC on the shared engine and, when launched with --allow-changes, shows the finished result in the Quantification tab (analysis_status says whether it did). Retrieve bounded numerical pages for quantitation; images aid visual review. Read-only unless explicitly enabled at launch (--allow-changes, --allow-exports, --allow-project-writes). AI interpretations are external to measured results.")
     }
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SetLayoutArgs {
+    /// `overlay` (all traces in one plot), `grid` (one plot per trace) or `compare` (samples as
+    /// columns, analytes as rows).
+    pub mode: Option<String>,
+    /// Grid: fit rows and columns to the window and show every trace.
+    pub auto_grid: Option<bool>,
+    /// Grid rows 1..8, used when auto_grid is off.
+    pub rows: Option<usize>,
+    /// Grid columns 1..8, used when auto_grid is off.
+    pub columns: Option<usize>,
+    /// Zero-based page of a fixed grid that holds more traces than fit.
+    pub page: Option<usize>,
+    /// Show or hide the data files panel.
+    pub show_files: Option<bool>,
+    /// Show or hide the trace settings panel.
+    pub show_inspector: Option<bool>,
+    /// Show or hide the mass spectrum panel.
+    pub show_spectrum: Option<bool>,
+    /// Focus mode: hide all three panels and restore them later.
+    pub focus: Option<bool>,
+}
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RetainTraceArgs {
+    pub dataset_id: DatasetRef,
+}
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RemoveTraceArgs {
+    pub dataset_id: DatasetRef,
+    /// Index of a retained trace (the `trace_index` in gui_state); omit for the current extraction.
+    pub trace_index: Option<usize>,
+}
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SetTraceVisibilityArgs {
+    pub dataset_id: DatasetRef,
+    /// Index of a retained trace (the `trace_index` in gui_state); omit for the current extraction.
+    pub trace_index: Option<usize>,
+    pub visible: bool,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -1420,6 +1571,10 @@ mod tests {
         "set_visibility",
         "set_display",
         "select_trace",
+        "set_layout",
+        "retain_trace",
+        "remove_trace",
+        "set_trace_visibility",
         "integrate",
         "undo_integration",
         "export_figure",
@@ -1435,7 +1590,7 @@ mod tests {
     #[test]
     fn tool_descriptions_are_unique_nonempty_and_annotated() {
         let tools = McpServer::tool_router().list_all();
-        assert_eq!(tools.len(), 31, "31 typed tools; workbench is not listed");
+        assert_eq!(tools.len(), 35, "35 typed tools; workbench is not listed");
         assert!(
             tools.iter().all(|t| t.name != "workbench"),
             "workbench duplicated the typed tools and must not be listed"
@@ -1520,11 +1675,11 @@ mod tests {
             let discovered=rpc(&mut write,&mut read,json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}})).await;
             let listed=discovered["result"]["tools"].as_array().unwrap();
             let desktop=McpServer::tool_router().list_all();
-            assert_eq!(desktop.len(),31);
+            assert_eq!(desktop.len(),35);
             assert!(desktop.iter().all(|d|listed.iter().any(|t|t["name"]==d.name.as_ref())),"every viewer tool is listed");
             let engine=crate::engine_mcp::EngineMcp::new(vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))]).unwrap().tool_names();
             let visible=engine.iter().filter(|n|crate::EXPERIMENTAL||!matches!(n.as_str(),"start_untargeted"|"untargeted_status"|"cancel_untargeted"|"untargeted_features")).count();
-            assert_eq!(listed.len(),31+visible,"viewer tools plus the shared engine tools");
+            assert_eq!(listed.len(),35+visible,"viewer tools plus the shared engine tools");
             assert!(listed.iter().all(|t|t["name"]!="workbench"));
             assert!(listed.iter().all(|t|t["annotations"]["readOnlyHint"].is_boolean()&&t["annotations"]["destructiveHint"].is_boolean()),"every tool must carry both hints on the wire");
             let find=|name:&str|listed.iter().find(|t|t["name"]==name).unwrap();

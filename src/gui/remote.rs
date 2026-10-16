@@ -634,6 +634,9 @@ impl MzViewerApp {
     }
     fn remote_validate(&self, c: &Command, b: &GuiBridge) -> Result<(), String> {
         let dataset = match c {
+            Command::RetainTrace { dataset_id }
+            | Command::RemoveTrace { dataset_id, .. }
+            | Command::SetTraceVisibility { dataset_id, .. } => Some(dataset_id.index()),
             Command::SelectTrace { dataset_id, .. } => Some(dataset_id.index()),
             Command::ListScans { dataset_id, .. } => Some(dataset_id.index()),
             Command::DatasetMetadata { dataset_id }
@@ -664,6 +667,10 @@ impl MzViewerApp {
         let changes = matches!(
             c,
             Command::SelectDataset { .. }
+                | Command::SetLayout { .. }
+                | Command::RetainTrace { .. }
+                | Command::RemoveTrace { .. }
+                | Command::SetTraceVisibility { .. }
                 | Command::SetDisplay { .. }
                 | Command::SelectTrace { .. }
                 | Command::SetView { .. }
@@ -700,7 +707,7 @@ impl MzViewerApp {
             entry
         }).collect();
         datasets.sort_by_key(|f| f["dataset_id"].as_u64());
-        json!({"datasets":datasets,"active_dataset_id":self.active_file_id,"parameters":self.user_input,"chromatogram_bounds":self.workspace.bounds,"spectrum_bounds":self.workspace.spectrum_bounds,"overlay":self.workspace.overlay,"measurements":self.workspace.measurements,"retained_traces":self.workspace.traces.iter().map(|(id,traces)|json!({"dataset_id":id,"traces":traces.iter().map(|t|json!({"name":t.name,"parameters":t.params,"point_count":t.points.len(),"visible":t.visible})).collect::<Vec<_>>()})).collect::<Vec<_>>(),"history":b.history,"units":{"retention_time":"minutes","mz":"m/z","intensity":"arbitrary units","area":"intensity*minutes"}})
+        json!({"datasets":datasets,"active_dataset_id":self.active_file_id,"parameters":self.user_input,"chromatogram_bounds":self.workspace.bounds,"spectrum_bounds":self.workspace.spectrum_bounds,"overlay":self.workspace.overlay,"measurements":self.workspace.measurements,"layout":ops::layout(self),"retained_traces":self.workspace.traces.iter().map(|(id,traces)|json!({"dataset_id":id,"traces":traces.iter().enumerate().map(|(i,t)|json!({"trace_index":i,"name":t.name,"parameters":t.params,"point_count":t.points.len(),"visible":t.visible})).collect::<Vec<_>>()})).collect::<Vec<_>>(),"history":b.history,"units":{"retention_time":"minutes","mz":"m/z","intensity":"arbitrary units","area":"intensity*minutes"}})
     }
     fn remote_command(
         &mut self,
@@ -819,6 +826,17 @@ impl MzViewerApp {
                 }
                 json!({"active_dataset_id":dataset_id,"parameters":self.user_input})
             }
+            command @ Command::SetLayout { .. } => ops::set_layout(self, command)?,
+            Command::RetainTrace { dataset_id } => ops::retain_trace(self, dataset_id.index())?,
+            Command::RemoveTrace {
+                dataset_id,
+                trace_index,
+            } => ops::remove_trace(self, dataset_id.index(), trace_index)?,
+            Command::SetTraceVisibility {
+                dataset_id,
+                trace_index,
+                visible,
+            } => ops::set_trace_visibility(self, dataset_id.index(), trace_index, visible)?,
             Command::ListScans {
                 dataset_id,
                 offset,
@@ -1331,6 +1349,7 @@ impl MzViewerApp {
     }
 }
 
+mod ops;
 #[cfg(test)]
 mod protocol_tests;
 #[cfg(test)]

@@ -724,3 +724,183 @@ fn stored_chromatograms_are_listed_and_extracted() {
     );
     desktop.finish();
 }
+
+#[test]
+fn layout_can_be_changed_over_mcp_exactly_like_the_plot_menu() {
+    let mut desktop = Desktop::start(vec![], true, false, false);
+    let state = desktop.tool("gui_state", json!({}));
+    assert_eq!(state["layout"]["mode"], "grid");
+    assert_eq!(state["layout"]["auto_grid"], true);
+    assert_eq!(
+        state["layout"]["panels"],
+        json!({"files":true,"inspector":true,"spectrum":true})
+    );
+    let overlay = desktop.tool("set_layout", json!({"mode":"overlay"}));
+    assert_eq!(overlay["mode"], "overlay");
+    assert!(desktop.app.workspace.overlay);
+    // A fixed grid of 2 x 3, page 1, without the spectrum panel.
+    let grid = desktop.tool(
+        "set_layout",
+        json!({"mode":"grid","auto_grid":false,"rows":2,"columns":3,"page":1,"show_spectrum":false}),
+    );
+    assert_eq!(
+        (
+            grid["mode"].as_str(),
+            grid["rows"].as_u64(),
+            grid["columns"].as_u64()
+        ),
+        (Some("grid"), Some(2), Some(3))
+    );
+    assert_eq!(grid["auto_grid"], false);
+    assert_eq!(grid["page"], 1);
+    assert_eq!(grid["panels"]["spectrum"], false);
+    assert!(!desktop.app.workspace.overlay && !desktop.app.workspace.view.auto_grid);
+    assert_eq!(
+        (
+            desktop.app.workspace.view.rows,
+            desktop.app.workspace.view.columns
+        ),
+        (2, 3)
+    );
+    // Compare samples (samples by analytes), and focus mode hides every panel until it is left.
+    assert_eq!(
+        desktop.tool("set_layout", json!({"mode":"compare"}))["mode"],
+        "compare"
+    );
+    let focus = desktop.tool("set_layout", json!({"focus":true}));
+    assert_eq!(
+        focus["panels"],
+        json!({"files":false,"inspector":false,"spectrum":false})
+    );
+    assert_eq!(focus["focus"], true);
+    let restored = desktop.tool("set_layout", json!({"focus":false}));
+    assert_eq!(
+        restored["panels"],
+        json!({"files":true,"inspector":true,"spectrum":false})
+    );
+    // The report in gui_state is the same value.
+    assert_eq!(desktop.tool("gui_state", json!({}))["layout"], restored);
+    // Invalid values change nothing.
+    for bad in [
+        json!({"rows":9}),
+        json!({"columns":0}),
+        json!({"mode":"stacked"}),
+    ] {
+        let error = desktop.tool_error("set_layout", bad);
+        assert!(
+            error["message"].as_str().unwrap().contains("must be 1..8")
+                || error["message"].as_str().unwrap().contains("mode:"),
+            "{error}"
+        );
+    }
+    assert_eq!(desktop.tool("gui_state", json!({}))["layout"], restored);
+    desktop.finish();
+    // Without --allow-changes the window is not touched.
+    let mut read_only = Desktop::start(vec![], false, false, false);
+    let error = read_only.tool_error("set_layout", json!({"mode":"overlay"}));
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("--allow-changes"),
+        "{error}"
+    );
+    assert!(!read_only.app.workspace.overlay);
+    read_only.finish();
+}
+
+#[test]
+fn retained_traces_can_be_kept_hidden_and_removed_over_mcp() {
+    let mut desktop = Desktop::start(vec![], true, false, false);
+    let id = desktop.open_fixture();
+    let tic = json!({"dataset_id":id,"kind":"tic","polarity":"positive","ms_level":1,"smoothing":0,"display":true});
+    desktop.tool("extract_chromatogram", tic);
+    let retained = |d: &mut Desktop| -> Vec<Value> {
+        let state = d.tool("gui_state", json!({}));
+        state["retained_traces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["dataset_id"] == id)
+            .map(|t| t["traces"].as_array().unwrap().clone())
+            .unwrap_or_default()
+    };
+    assert!(
+        retained(&mut desktop).is_empty(),
+        "the first extraction is the current one"
+    );
+    // Keep it explicitly; doing so twice keeps one copy.
+    let kept = desktop.tool("retain_trace", json!({"dataset_id":id}));
+    assert_eq!(
+        (kept["retained"].as_bool(), kept["retained_traces"].as_u64()),
+        (Some(true), Some(1)),
+        "{kept}"
+    );
+    assert_eq!(
+        desktop.tool("retain_trace", json!({"dataset_id":id}))["already_retained"],
+        true
+    );
+    // A second extraction retains the first automatically, as in the window.
+    let smooth = json!({"dataset_id":id,"kind":"tic","polarity":"positive","ms_level":1,"smoothing":3,"display":true});
+    desktop.tool("extract_chromatogram", smooth);
+    let traces = retained(&mut desktop);
+    assert_eq!(traces.len(), 1);
+    assert_eq!(traces[0]["trace_index"], 0);
+    assert_eq!(traces[0]["visible"], true);
+    // Hide the retained trace, then the current one; both show in the state.
+    let hidden = desktop.tool(
+        "set_trace_visibility",
+        json!({"dataset_id":id,"trace_index":0,"visible":false}),
+    );
+    assert_eq!(hidden["visible"], false);
+    assert_eq!(retained(&mut desktop)[0]["visible"], false);
+    desktop.tool(
+        "set_trace_visibility",
+        json!({"dataset_id":id,"visible":false}),
+    );
+    assert!(desktop
+        .app
+        .workspace
+        .hidden_current
+        .contains(&(id as usize)));
+    desktop.tool(
+        "set_trace_visibility",
+        json!({"dataset_id":id,"visible":true}),
+    );
+    assert!(!desktop
+        .app
+        .workspace
+        .hidden_current
+        .contains(&(id as usize)));
+    // Remove the retained trace; the current extraction stays.
+    let removed = desktop.tool("remove_trace", json!({"dataset_id":id,"trace_index":0}));
+    assert_eq!(removed["retained_traces"], 0, "{removed}");
+    assert_eq!(removed["has_current_trace"], true);
+    // Remove the current extraction too.
+    let removed = desktop.tool("remove_trace", json!({"dataset_id":id}));
+    assert_eq!(removed["has_current_trace"], false, "{removed}");
+    // Nothing left to act on: a clear error each time.
+    for (tool, arguments) in [
+        ("remove_trace", json!({"dataset_id":id})),
+        ("retain_trace", json!({"dataset_id":id})),
+        ("remove_trace", json!({"dataset_id":id,"trace_index":4})),
+        (
+            "set_trace_visibility",
+            json!({"dataset_id":id,"trace_index":4,"visible":true}),
+        ),
+    ] {
+        let error = desktop.tool_error(tool, arguments);
+        assert!(
+            error["message"]
+                .as_str()
+                .unwrap()
+                .contains("current extraction")
+                || error["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("retained trace index"),
+            "{tool}: {error}"
+        );
+    }
+    desktop.finish();
+}
