@@ -9,7 +9,7 @@
 //! A new feature is not finished until its MCP tool, its entry and its protocol test exist.
 #![cfg(feature = "mcp")]
 use chromascope::gui::actions::{ACTIONS, FURNITURE, WITHHELD};
-use chromascope::mcp::{AccessPolicy, McpServer};
+use chromascope::mcp::{AccessPolicy, McpServer, ToolProfile, CORE_TOOLS};
 use rmcp::ServiceExt;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -22,7 +22,9 @@ fn listed_tools() -> Vec<String> {
         let policy = AccessPolicy::new(vec![root.path().to_owned()], true, true)
             .unwrap()
             .with_project_writes(true);
+        // Parity is a property of the full profile; the core profile is checked below.
         let (server, bridge) = McpServer::new(egui::Context::default(), policy).unwrap();
+        let server = server.with_tool_profile(ToolProfile::Full);
         let (client, transport) = tokio::io::duplex(1 << 20);
         let task = tokio::spawn(async move {
             let _window = bridge;
@@ -120,6 +122,28 @@ fn every_tool_an_action_names_is_listed_and_every_listed_tool_belongs_to_an_acti
         orphans.is_empty(),
         "tools that no action in chromascope::gui::actions uses (add the window control they stand for): {orphans:?}"
     );
+}
+
+#[test]
+fn the_core_profile_only_selects_from_tools_that_have_a_window_action() {
+    let listed: BTreeSet<String> = listed_tools().into_iter().collect();
+    let used: BTreeSet<&str> = ACTIONS
+        .iter()
+        .flat_map(|a| a.tools.iter().copied())
+        .collect();
+    assert!(CORE_TOOLS.len() <= 40);
+    for tool in CORE_TOOLS {
+        assert!(
+            listed.contains(*tool),
+            "core names {tool}, which the full profile does not list"
+        );
+        assert!(
+            used.contains(tool),
+            "core tool {tool} belongs to no window action"
+        );
+    }
+    // The point of the profile: a shorter list than the full one.
+    assert!(CORE_TOOLS.len() < listed.len());
 }
 
 #[test]

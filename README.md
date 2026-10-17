@@ -173,8 +173,8 @@ An AI client can do over MCP everything a person can do in the window, with the 
 
 | Server | Window | Tools | Use it for |
 |---|---|---|---|
-| `chromascope-mcp` (feature `mcp`) | **yes**, a visible window the person watches | 75 in the default build: 60 viewer and window tools plus the 15 engine tools | Normal use. A calibration or QC that the AI computes appears in the Quantification tab without reopening anything |
-| `chromascope-engine-mcp` (feature `mcp-headless`) | none | the 15 engine tools | Scripts, CI and machines without a desktop (a subset of the desktop server) |
+| `chromascope-mcp` (feature `mcp`) | **yes**, a visible window the person watches | 74 in the default build: 60 viewer and window tools plus the 14 engine tools (`--tool-profile core` lists 40) | Normal use. A calibration or QC that the AI computes appears in the Quantification tab without reopening anything |
+| `chromascope-engine-mcp` (feature `mcp-headless`) | none | the 14 engine tools | Scripts, CI and machines without a desktop (a subset of the desktop server) |
 
 ### Set up
 
@@ -199,6 +199,8 @@ The operator decides at launch what an AI may do. The default is read-only insid
 | `--allow-changes` | change what is in the window: select, zoom, lay out, apply integrations, run a batch, open methods, sessions, batches and projects, change display preferences |
 | `--allow-exports` | write **new** files (figures, CSV, sessions, methods, batches, presets, audit packages); existing files are never overwritten |
 | `--allow-project-writes` | create projects, save revisions, approve and commit review proposals |
+
+`--tool-profile core|full` chooses how many tools the server lists. Some AI clients accept only a limited number of tools (often around 40) and fail or drop tools beyond it, so `core` lists the 40 tools of the main workflows (opening and inspecting data, extracting, spectra, integration, quantification and review, exports, projects, analysis jobs and `analysis_capabilities`) and refuses every other tool when it is called, also inside a `batch`. `full`, the default, lists all of them and is what keeps parity with the window: use it unless your client has a limit.
 
 Marking a peak as human-reviewed stays a window action, and choosing the msconvert program is left to the person. A ready-made client configuration is in [examples/mcp-client.json](examples/mcp-client.json).
 
@@ -231,7 +233,7 @@ Jobs and the audit log are session-local, so export before shutdown. `commit_ana
 | Batch quantification | `start_quantification`, `quantification_status`, `quantification_trace`, `review_quantification`, `reset_quantification`, `cancel_quantification`, `export_quantification`, `save_batch`, `load_batch` |
 | Calibration, QC, projects | `export_results`, `import_results`, `create_project`, `save_project`, `open_project`, `refresh_project`, `build_bundle`, `verify_bundle`, `reprocess_result` |
 | Files and commands | `export_csv`, `export_figure`, `batch` (1–64 typed operations in order; not a transaction, each step needs its own tool's permission) |
-| Engine tools (both servers) | `analysis_capabilities`, `discover_datasets`, `start_analysis`, `analysis_status`, `analysis_result`, `cancel_analysis`, `analytical_operation`, `inspect_project`, `export_project_report`, `prepare_analysis_report`, `prepare_review_proposal`, `queue_review_proposal`, `resolve_review_proposal`, `commit_analysis`, `session_audit` |
+| Engine tools (both servers) | `analysis_capabilities`, `discover_datasets`, `start_analysis`, `analysis_status`, `analysis_result`, `cancel_analysis`, `inspect_project`, `export_project_report`, `prepare_analysis_report`, `prepare_review_proposal`, `queue_review_proposal`, `resolve_review_proposal`, `commit_analysis`, `session_audit` |
 
 `analysis_capabilities` returns the generated request and response schemas of every engine operation and the workflow recipes. When the window may change (`--allow-changes`), a finished targeted batch or QC study is routed into the Quantification tab; without it the reply says `window.state = not_shown` and the result stays an MCP job. A client cannot inject a result into the window.
 

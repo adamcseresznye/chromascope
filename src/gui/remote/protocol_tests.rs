@@ -224,7 +224,6 @@ fn one_server_lists_viewer_and_engine_tools_with_unique_descriptions() {
         "discover_datasets",
         "session_audit",
         "prepare_analysis_report",
-        "analytical_operation",
     ] {
         assert!(names.contains(&engine), "missing engine tool {engine}");
     }

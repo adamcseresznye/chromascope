@@ -1,3 +1,4 @@
+mod common;
 use approx::assert_relative_eq;
 use chromascope::{
     domain::{Operation, Request},
@@ -467,11 +468,12 @@ fn actual_mcp_statistics_and_export() {
             actor: "MCP analyst".into(),
             operation,
         };
-        send(
+        let value = common::run_operation(
             &mut input,
-            serde_json::json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":{"name":"analytical_operation","arguments":{"path":root.join("Cargo.toml"),"request":request}}}),
+            &mut output,
+            id,
+            serde_json::json!({"path":root.join("Cargo.toml"),"request":request}),
         );
-        let value = read(&mut output);
         assert_ne!(value["result"]["isError"], true, "{value}");
         let response: engine::Response =
             serde_json::from_value(value["result"]["structuredContent"].clone()).unwrap();

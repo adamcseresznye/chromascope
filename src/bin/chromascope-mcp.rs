@@ -1,7 +1,7 @@
 //! MCP stdio runner. Deliberately a console binary on Windows.
 use chromascope::{
     gui::MzViewerApp,
-    mcp::{AccessPolicy, McpServer},
+    mcp::{AccessPolicy, McpServer, ToolProfile},
 };
 use rmcp::ServiceExt;
 use std::path::PathBuf;
@@ -13,11 +13,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut changes = false;
     let mut exports = false;
     let mut project_writes = false;
+    let mut profile = ToolProfile::default();
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--help" | "-h" => {
-                eprintln!("Usage: chromascope-mcp --allow-root DIRECTORY [--allow-root DIRECTORY ...] [--allow-changes] [--allow-exports] [--allow-project-writes]\nHosts a live Chromascope window and local MCP stdio server with every viewer, quantification, QC and project tool. Roots must exist. Changes, exports and project writes are disabled by default. Logs go to stderr.");
+                eprintln!("Usage: chromascope-mcp --allow-root DIRECTORY [--allow-root DIRECTORY ...] [--allow-changes] [--allow-exports] [--allow-project-writes] [--tool-profile core|full]\nHosts a live Chromascope window and local MCP stdio server with every viewer, quantification, QC and project tool. Roots must exist. Changes, exports and project writes are disabled by default. --tool-profile core lists only the {} main-workflow tools, for clients that cap the number of tools (calls to other tools are refused); full, the default, lists every tool. Logs go to stderr.", chromascope::mcp::CORE_TOOLS.len());
                 return Ok(());
             }
             "--allow-root" => roots.push(PathBuf::from(
@@ -26,6 +27,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "--allow-changes" => changes = true,
             "--allow-exports" => exports = true,
             "--allow-project-writes" => project_writes = true,
+            "--tool-profile" => {
+                profile = args
+                    .next()
+                    .ok_or("--tool-profile needs core or full")?
+                    .parse()?
+            }
             _ => return Err(format!("Unknown option: {arg}").into()),
         }
     }
@@ -41,6 +48,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut app = MzViewerApp::new(cc);
             let (server, bridge) =
                 McpServer::new(cc.egui_ctx.clone(), policy).map_err(|e| e.to_string())?;
+            let server = server.with_tool_profile(profile);
             app.attach_mcp(bridge);
             let context = cc.egui_ctx.clone();
             std::thread::spawn(move || {

@@ -1,3 +1,4 @@
+mod common;
 use chromascope::{
     domain::{Operation, Request},
     engine::{self, Output},
@@ -323,11 +324,12 @@ fn actual_headless_mcp_qc_and_review() {
         actor: "qc-test".into(),
         operation: Operation::EvaluateQc { study: study() },
     };
-    send(
+    let result = common::run_operation(
         &mut input,
-        serde_json::json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"analytical_operation","arguments":{"path":root.join("Cargo.toml"),"request":request}}}),
+        &mut output,
+        2,
+        serde_json::json!({"path":root.join("Cargo.toml"),"request":request}),
     );
-    let result = read(&mut output);
     assert_ne!(result["result"]["isError"], true);
     let report: Report =
         serde_json::from_value(result["result"]["structuredContent"]["output"]["report"].clone())
@@ -346,11 +348,12 @@ fn actual_headless_mcp_qc_and_review() {
             report: Box::new(report),
         },
     };
-    send(
+    let result = common::run_operation(
         &mut input,
-        serde_json::json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"analytical_operation","arguments":{"path":root.join("Cargo.toml"),"request":request}}}),
+        &mut output,
+        3,
+        serde_json::json!({"path":root.join("Cargo.toml"),"request":request}),
     );
-    let result = read(&mut output);
     assert_ne!(result["result"]["isError"], true);
     assert_eq!(
         result["result"]["structuredContent"]["output"]["report"]["reviews"][0]["reason"],

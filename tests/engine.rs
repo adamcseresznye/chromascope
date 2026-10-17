@@ -1,4 +1,5 @@
 //! Reference calculations and cross-interface contracts use the existing redistributable mzML.
+mod common;
 use chromascope::{
     domain::*,
     engine::{self, Output},
@@ -319,16 +320,25 @@ fn headless_mcp_stdio_matches_engine_and_enforces_roots() {
         serde_json::json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
     );
     let list = read(&mut stdout);
-    assert_eq!(list["result"]["tools"][0]["name"], "analytical_operation");
+    // analytical_operation is gone: start_analysis (asynchronous) is the one way to run an operation.
+    let names: Vec<&str> = list["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|t| t["name"].as_str())
+        .collect();
+    assert!(names.contains(&"start_analysis"));
+    assert!(!names.contains(&"analytical_operation"));
     let req = request(Operation::Extract {
         params: params(PlotType::Xic),
     });
     let expected = engine::execute(&fixture(), req.clone(), &JobControl::default()).unwrap();
-    send(
+    let response = common::run_operation(
         &mut stdin,
-        serde_json::json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"analytical_operation","arguments":{"path":fixture(),"request":req}}}),
+        &mut stdout,
+        3,
+        serde_json::json!({"path":fixture(),"request":req}),
     );
-    let response = read(&mut stdout);
     assert_ne!(response["result"]["isError"], serde_json::json!(true));
     // Deserialize the declared DTO before comparing: raw arrays are f32 while
     // JSON Values use f64. Compare exact source f32 and processed f64 values.
@@ -373,11 +383,12 @@ fn headless_mcp_stdio_matches_engine_and_enforces_roots() {
         },
     });
     let expected = engine::execute(&fixture(), req.clone(), &JobControl::default()).unwrap();
-    send(
+    let response = common::run_operation(
         &mut stdin,
-        serde_json::json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"analytical_operation","arguments":{"path":fixture(),"request":req}}}),
+        &mut stdout,
+        5,
+        serde_json::json!({"path":fixture(),"request":req}),
     );
-    let response = read(&mut stdout);
     assert_ne!(response["result"]["isError"], serde_json::json!(true));
     let actual: Output =
         serde_json::from_value(response["result"]["structuredContent"]["output"].clone()).unwrap();
@@ -399,21 +410,23 @@ fn headless_mcp_stdio_matches_engine_and_enforces_roots() {
         },
         preview: true,
     });
-    send(
+    let response = common::run_operation(
         &mut stdin,
-        serde_json::json!({"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"analytical_operation","arguments":{"path":fixture(),"request":req}}}),
+        &mut stdout,
+        6,
+        serde_json::json!({"path":fixture(),"request":req}),
     );
-    let response = read(&mut stdout);
     assert_eq!(
         response["result"]["structuredContent"]["output"]["preview"],
         true
     );
     let outside = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
-    send(
+    let denied = common::run_operation(
         &mut stdin,
-        serde_json::json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"analytical_operation","arguments":{"path":outside,"request":request(Operation::Metadata)}}}),
+        &mut stdout,
+        4,
+        serde_json::json!({"path":outside,"request":request(Operation::Metadata)}),
     );
-    let denied = read(&mut stdout);
     assert_eq!(
         denied["result"]["structuredContent"]["code"],
         "unauthorized"

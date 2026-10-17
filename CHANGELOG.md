@@ -23,8 +23,11 @@ quantification workbench with a command-line interface and two MCP servers.
   restore; readable HTML report, JSON, CSV, TSV and SVG exports; portable, checksummed bundles that
   can be verified and re-processed without replacing the original results.
 - **Desktop MCP server** (`chromascope-mcp`): an AI client does over MCP everything a person does
-  in the window, with the same result and the same audit trail. 75 tools in the default build: 60
-  that drive the window and the 15 engine tools (calibration, QC, review proposals, projects). A
+  in the window, with the same result and the same audit trail. 74 tools in the default build: 60
+  that drive the window and the 14 engine tools (calibration, QC, review proposals, projects);
+  `--tool-profile core` lists only the 40 tools of the main workflows for clients that cap the
+  number of tools. `tools/list` stays under 40 KB: engine requests are described briefly and
+  `analysis_capabilities` returns the complete schema. A
   calibration or QC computed by an AI appears in the Quantification tab without reopening anything.
   Launch flags `--allow-root`, `--allow-changes`, `--allow-exports` and
   `--allow-project-writes` decide what it may touch; every call is recorded under **AI activity**.

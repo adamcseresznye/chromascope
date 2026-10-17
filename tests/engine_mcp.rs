@@ -119,7 +119,8 @@ fn complete_targeted_workflow_review_qc_report_and_project_history() {
         let (mut client,task)=connect(EngineMcp::new(vec![temp.path().to_owned()]).unwrap().with_project_writes(true)).await;
         let listed=client.rpc("tools/list",json!({})).await;
         let tools=listed["result"]["tools"].as_array().unwrap();
-        for name in ["analytical_operation","start_analysis","commit_analysis"] {assert!(tools.iter().any(|t|t["name"]==name));}
+        for name in ["start_analysis","commit_analysis"] {assert!(tools.iter().any(|t|t["name"]==name));}
+        assert!(!tools.iter().any(|t|t["name"]=="analytical_operation"),"analytical_operation was removed; start_analysis replaces it");
         for name in ["start_untargeted","untargeted_features"] {assert_eq!(tools.iter().any(|t|t["name"]==name),chromascope::EXPERIMENTAL);}
         let listed_size=serde_json::to_string(tools).unwrap().len();
         assert!(listed_size<20_000,"the headless tools/list is {listed_size} bytes");
@@ -228,10 +229,20 @@ fn every_entry_point_authorizes_the_sample_sources_of_a_batch_the_same_way() {
         };
         let (mut client, task) =
             connect(EngineMcp::new(vec![allowed.path().to_owned()]).unwrap()).await;
-        for tool in ["start_analysis", "analytical_operation"] {
-            let reply = client
-                .call(tool, json!({"path": anchor, "request": request}))
-                .await;
+        // The two tools that take an engine request: start_analysis and prepare_review_proposal.
+        for (tool, extra) in [
+            ("start_analysis", json!({})),
+            (
+                "prepare_review_proposal",
+                json!({"reason":"r","evidence":[]}),
+            ),
+        ] {
+            let mut arguments = json!({"path": anchor, "request": request});
+            arguments
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            let reply = client.call(tool, arguments).await;
             assert_eq!(
                 reply["result"]["structuredContent"]["code"], "unauthorized",
                 "{tool} must refuse samples outside the allowed roots: {reply}"
@@ -248,14 +259,12 @@ fn every_entry_point_authorizes_the_sample_sources_of_a_batch_the_same_way() {
             .call("start_analysis", json!({"path": anchor, "request": inside}))
             .await;
         assert_ne!(started["result"]["isError"], true, "{started}");
-        let direct = client
-            .call(
-                "analytical_operation",
-                json!({"path": anchor, "request": inside}),
-            )
-            .await;
-        assert_ne!(direct["result"]["isError"], true, "{direct}");
-        assert!(direct["result"]["structuredContent"]["output"].is_object());
+        let job = started["result"]["structuredContent"]["job_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let response = client.response(&job).await;
+        assert!(response["output"].is_object(), "{response}");
         drop(client);
         task.await.unwrap();
     });
@@ -416,8 +425,14 @@ fn experimental_workflows_are_hidden_and_rejected() {
         }
         let request = json!({"version":1,"operation_id":uuid::Uuid::new_v4().to_string(),"actor":"AI","operation":{"operation":"import_spectral_library","text":"","format":"msp","source":{"name":"n","version":"1","url":"u","license":"l"}}});
         let args = json!({"path":path,"request":request});
-        for tool in ["start_analysis", "analytical_operation"] {
-            let reply = client.call(tool, args.clone()).await;
+        for (tool, arguments) in [
+            ("start_analysis", args.clone()),
+            (
+                "prepare_review_proposal",
+                json!({"path":path,"request":request,"reason":"r","evidence":[]}),
+            ),
+        ] {
+            let reply = client.call(tool, arguments).await;
             assert_eq!(
                 reply["result"]["structuredContent"]["code"], "experimental_unavailable",
                 "{tool}: {reply}"

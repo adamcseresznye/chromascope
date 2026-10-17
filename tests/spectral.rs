@@ -1,3 +1,4 @@
+mod common;
 use chromascope::{
     domain::{Operation, Request},
     engine::{self, Output},
@@ -567,42 +568,46 @@ fn actual_mcp_import_search_annotation_and_root_policy() {
         serde_json::json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
     );
     let path = root.join("Cargo.toml");
-    send(
+    let value = common::run_operation(
         &mut input,
-        serde_json::json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"analytical_operation","arguments":{"path":path,"request":request(Operation::ImportSpectralLibrary{text:msp(),format:"msp".into(),source:source()})}}}),
+        &mut output,
+        2,
+        serde_json::json!({"path":path,"request":request(Operation::ImportSpectralLibrary{text:msp(),format:"msp".into(),source:source()})}),
     );
-    let value = read(&mut output);
     assert_ne!(value["result"]["isError"], true, "{value}");
     let library: Library =
         serde_json::from_value(value["result"]["structuredContent"]["output"]["library"].clone())
             .unwrap();
-    send(
+    let value = common::run_operation(
         &mut input,
-        serde_json::json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"analytical_operation","arguments":{"path":path,"request":request(Operation::SearchSpectralLibrary{query:Box::new(query()),library:Box::new(library),config:SearchConfig::default()})}}}),
+        &mut output,
+        3,
+        serde_json::json!({"path":path,"request":request(Operation::SearchSpectralLibrary{query:Box::new(query()),library:Box::new(library),config:SearchConfig::default()})}),
     );
-    let value = read(&mut output);
     assert_ne!(value["result"]["isError"], true, "{value}");
     let report: SearchReport =
         serde_json::from_value(value["result"]["structuredContent"]["output"]["report"].clone())
             .unwrap();
     verify_report(&report).unwrap();
     assert_eq!(report.candidates.len(), 1);
-    send(
+    let value = common::run_operation(
         &mut input,
-        serde_json::json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"analytical_operation","arguments":{"path":path,"request":request(Operation::AnnotateSpectrum{report:Box::new(report),expected_revision:0,annotation:annotation(Confidence::Unknown)})}}}),
+        &mut output,
+        4,
+        serde_json::json!({"path":path,"request":request(Operation::AnnotateSpectrum{report:Box::new(report),expected_revision:0,annotation:annotation(Confidence::Unknown)})}),
     );
-    let value = read(&mut output);
     assert_ne!(value["result"]["isError"], true, "{value}");
     assert_eq!(
         value["result"]["structuredContent"]["output"]["report"]["annotations"][0]["actor"],
         "reference-analyst"
     );
     let outside = tempfile::NamedTempFile::new().unwrap();
-    send(
+    let value = common::run_operation(
         &mut input,
-        serde_json::json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"analytical_operation","arguments":{"path":outside.path(),"request":request(Operation::FormulaCandidates{config:formula_config()})}}}),
+        &mut output,
+        5,
+        serde_json::json!({"path":outside.path(),"request":request(Operation::FormulaCandidates{config:formula_config()})}),
     );
-    let value = read(&mut output);
     assert_eq!(value["result"]["isError"], true);
     drop(input);
     child.kill().unwrap();

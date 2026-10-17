@@ -1373,55 +1373,6 @@ impl EngineMcp {
         })();
         feature_reply(result)
     }
-    #[tool(
-        description = "Legacy synchronous form of start_analysis: runs one engine operation and returns its result.",
-        annotations(
-            read_only_hint = true,
-            destructive_hint = false,
-            open_world_hint = false
-        )
-    )]
-    async fn analytical_operation(
-        &self,
-        Parameters(args): Parameters<AnalysisArgs>,
-    ) -> CallToolResult {
-        let result: crate::domain::Result<String> = async {
-            let path = self.authorize(&args.path)?;
-            let bytes = serde_json::to_vec(&args.request)
-                .map_err(|e| EngineError::new("invalid_parameters", e))?;
-            if bytes.len() > 16 * 1024 * 1024 {
-                return Err(EngineError::new("resource_limit", "Request exceeds 16 MiB"));
-            }
-            let request: Request = serde_json::from_slice(&bytes)
-                .map_err(|e| EngineError::new("invalid_parameters", e))?;
-            self.authorize_request(&request)?;
-            let job = self
-                .scheduler
-                .submit(path, request, JobControl::default())?;
-            let response = tokio::task::spawn_blocking(move || job.wait())
-                .await
-                .map_err(|e| EngineError::new("adapter_failure", e))??;
-            let text = serde_json::to_string(&response)
-                .map_err(|e| EngineError::new("adapter_failure", e))?;
-            if text.len() > 16 * 1024 * 1024 {
-                return Err(EngineError::new(
-                    "resource_limit",
-                    "Result exceeds 16 MiB; use CLI for full arrays",
-                ));
-            }
-            Ok(text)
-        }
-        .await;
-        match result {
-            Ok(text) => match serde_json::from_str(&text) {
-                Ok(value) => CallToolResult::structured(value),
-                Err(error) => CallToolResult::structured_error(
-                    serde_json::json!({"code":"adapter_failure","message":error.to_string()}),
-                ),
-            },
-            Err(error) => CallToolResult::structured_error(serde_json::json!(error)),
-        }
-    }
 }
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for EngineMcp {
@@ -1465,7 +1416,6 @@ impl ServerHandler for EngineMcp {
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> std::result::Result<ListToolsResult, rmcp::ErrorData> {
         let legacy = [
-            "analytical_operation",
             "cancel_untargeted",
             "start_untargeted",
             "untargeted_features",

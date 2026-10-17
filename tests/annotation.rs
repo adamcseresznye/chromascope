@@ -1,3 +1,4 @@
+mod common;
 use chromascope::annotation::{csv, verify, verify_response};
 use chromascope::{
     annotation::*,
@@ -513,11 +514,12 @@ fn actual_mcp_propose_review_export() {
             actor: "mcp-analyst".into(),
             operation,
         };
-        send(
+        let v = common::run_operation(
             &mut input,
-            serde_json::json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":{"name":"analytical_operation","arguments":{"path":root.join("Cargo.toml"),"request":request}}}),
+            &mut output,
+            id,
+            serde_json::json!({"path":root.join("Cargo.toml"),"request":request}),
         );
-        let v = read(&mut output);
         assert_ne!(v["result"]["isError"], true, "{v}");
         let response: engine::Response =
             serde_json::from_value(v["result"]["structuredContent"].clone()).unwrap();

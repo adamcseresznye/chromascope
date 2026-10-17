@@ -1,3 +1,4 @@
+mod common;
 use chromascope::{
     domain::{Operation, Request},
     engine::{self, Output},
@@ -618,11 +619,12 @@ fn targeted_mcp_raw_review_export_and_nested_path_policy() {
         &mut writer,
         serde_json::json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
     );
-    send(
+    let value = common::run_operation(
         &mut writer,
-        serde_json::json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"analytical_operation","arguments":{"path":source,"request":req(Operation::TargetedBatch{batch:batch_request.clone()})}}}),
+        &mut reader,
+        2,
+        serde_json::json!({"path":source,"request":req(Operation::TargetedBatch{batch:batch_request.clone()})}),
     );
-    let value = read(&mut reader);
     assert_ne!(value["result"]["isError"], true, "{value}");
     let response: engine::Response =
         serde_json::from_value(value["result"]["structuredContent"].clone()).unwrap();
@@ -630,11 +632,12 @@ fn targeted_mcp_raw_review_export_and_nested_path_policy() {
         panic!()
     };
     assert_eq!(actual.results, direct.results);
-    send(
+    let value = common::run_operation(
         &mut writer,
-        serde_json::json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"analytical_operation","arguments":{"path":source,"request":req(Operation::ReviewTargeted{batch:actual,expected_revision:0,sample:"raw6".into(),target:"a".into(),accepted:true,reason:"Raw reference checked".into()})}}}),
+        &mut reader,
+        3,
+        serde_json::json!({"path":source,"request":req(Operation::ReviewTargeted{batch:actual,expected_revision:0,sample:"raw6".into(),target:"a".into(),accepted:true,reason:"Raw reference checked".into()})}),
     );
-    let value = read(&mut reader);
     assert_ne!(value["result"]["isError"], true, "{value}");
     let response: engine::Response =
         serde_json::from_value(value["result"]["structuredContent"].clone()).unwrap();
@@ -650,11 +653,12 @@ fn targeted_mcp_raw_review_export_and_nested_path_policy() {
             .reviewed
     );
     let expected_csv = csv(&actual).unwrap();
-    send(
+    let value = common::run_operation(
         &mut writer,
-        serde_json::json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"analytical_operation","arguments":{"path":source,"request":req(Operation::ExportTargeted{batch:actual})}}}),
+        &mut reader,
+        4,
+        serde_json::json!({"path":source,"request":req(Operation::ExportTargeted{batch:actual})}),
     );
-    let value = read(&mut reader);
     assert_eq!(
         value["result"]["structuredContent"]["output"]["csv"],
         expected_csv
@@ -664,11 +668,12 @@ fn targeted_mcp_raw_review_export_and_nested_path_policy() {
     std::fs::copy(&source, &outside_path).unwrap();
     let mut forbidden = batch_request;
     forbidden.samples[3].source = outside_path.to_str().unwrap().into();
-    send(
+    let value = common::run_operation(
         &mut writer,
-        serde_json::json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"analytical_operation","arguments":{"path":source,"request":req(Operation::TargetedBatch{batch:forbidden})}}}),
+        &mut reader,
+        5,
+        serde_json::json!({"path":source,"request":req(Operation::TargetedBatch{batch:forbidden})}),
     );
-    let value = read(&mut reader);
     assert_eq!(value["result"]["structuredContent"]["code"], "unauthorized");
     drop(writer);
     child.wait().unwrap();

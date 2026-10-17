@@ -21,7 +21,7 @@ pub struct Action {
     pub labels: &'static [&'static str],
     /// The MCP tools that do it.
     pub tools: &'static [&'static str],
-    /// Engine operations (`start_analysis` / `analytical_operation`) that do it.
+    /// Engine operations (run through `start_analysis`) that do it.
     pub operations: &'static [&'static str],
     /// Belongs to a workflow that is only in builds with the `experimental` feature.
     pub experimental: bool,
@@ -570,7 +570,6 @@ pub const ACTIONS: &[Action] = &[
             "analysis_status",
             "analysis_result",
             "cancel_analysis",
-            "analytical_operation",
         ],
     ),
     // ---- Fields of the forms (the inputs next to which a control acts)

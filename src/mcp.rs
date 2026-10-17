@@ -328,6 +328,105 @@ impl Command {
         }
     }
 }
+/// Which tools the desktop server lists and accepts (`chromascope-mcp --tool-profile`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ToolProfile {
+    /// The main workflows in [`CORE_TOOLS`] (at most 40 tools), for clients that cap the number
+    /// of tools they accept.
+    Core,
+    /// Every tool: whatever a person can do in the window, an AI can do. The default.
+    #[default]
+    Full,
+}
+/// The tools of [`ToolProfile::Core`]: open and inspect data, extract, spectrum, integrate,
+/// quantify, review, export, projects, analysis jobs and capabilities.
+pub const CORE_TOOLS: &[&str] = &[
+    // open and inspect data
+    "list_mzml_files",
+    "open_files",
+    "list_datasets",
+    "dataset_metadata",
+    "list_scans",
+    "select_dataset",
+    "gui_state",
+    // extract, spectrum, figures
+    "extract_chromatogram",
+    "chromatogram_data",
+    "spectrum",
+    "chromatogram_image",
+    "spectrum_image",
+    "set_view",
+    "show_workspace",
+    // integrate
+    "integrate",
+    "undo_integration",
+    "measurements",
+    // quantify and review peaks
+    "start_quantification",
+    "quantification_status",
+    "quantification_trace",
+    "review_quantification",
+    "reset_quantification",
+    // export
+    "export_csv",
+    "export_figure",
+    "export_measurements",
+    "export_quantification",
+    "export_results",
+    // projects and the audit package
+    "create_project",
+    "open_project",
+    "save_project",
+    "build_bundle",
+    "verify_bundle",
+    // analysis jobs, capabilities and review proposals
+    "start_analysis",
+    "analysis_status",
+    "analysis_result",
+    "cancel_analysis",
+    "analysis_capabilities",
+    "prepare_review_proposal",
+    "commit_analysis",
+    // several operations in one call
+    "batch",
+];
+impl ToolProfile {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Core => "core",
+            Self::Full => "full",
+        }
+    }
+    /// Whether the tool is listed and may be called.
+    pub fn allows(self, tool: &str) -> bool {
+        match self {
+            Self::Full => true,
+            Self::Core => CORE_TOOLS.contains(&tool),
+        }
+    }
+    /// Whether a command of a `batch` is allowed: its operation is a tool's name, except the
+    /// figure renderer (one operation behind two tools) and the resource reads (not tools).
+    pub fn allows_operation(self, operation: &str) -> bool {
+        match operation {
+            "plot_image" => self.allows("chromatogram_image") || self.allows("spectrum_image"),
+            "list_resources" | "read_resource" => true,
+            other => self.allows(other),
+        }
+    }
+}
+impl std::str::FromStr for ToolProfile {
+    type Err = String;
+    fn from_str(value: &str) -> Result<Self, String> {
+        match value {
+            "core" => Ok(Self::Core),
+            "full" => Ok(Self::Full),
+            other => Err(format!(
+                "Unknown tool profile '{other}': use core (at most {} tools) or full",
+                CORE_TOOLS.len()
+            )),
+        }
+    }
+}
 /// Extensions of the vendor and interchange formats msconvert converts to mzML.
 pub const VENDOR_EXTENSIONS: &[&str] = &[
     "raw", "d", "wiff", "wiff2", "lcd", "baf", "tdf", "tsf", "yep", "mzxml", "mz5", "cdf", "mgf",
@@ -538,6 +637,7 @@ pub struct McpServer {
     engine_tools: Arc<Vec<String>>,
     routed: RouteMap,
     policy: AccessPolicy,
+    profile: ToolProfile,
 }
 impl McpServer {
     pub fn new(context: egui::Context, policy: AccessPolicy) -> Result<(Self, GuiBridge), String> {
@@ -557,6 +657,7 @@ impl McpServer {
                 engine,
                 routed: routed.clone(),
                 policy: policy.clone(),
+                profile: ToolProfile::Full,
             },
             GuiBridge {
                 pending: None,
@@ -571,8 +672,35 @@ impl McpServer {
             },
         ))
     }
+    /// What the core profile tells the AI about the tools it does not see.
+    fn profile_note(&self) -> String {
+        match self.profile {
+            ToolProfile::Full => String::new(),
+            ToolProfile::Core => format!(
+                " Tool profile: core, {} of the server's tools; the rest (layouts, sessions, methods, presets, display settings, trace management, review-proposal queueing) need chromascope-mcp --tool-profile full.",
+                CORE_TOOLS.len()
+            ),
+        }
+    }
+    /// Lists and accepts only the tools of this profile (everything by default).
+    pub fn with_tool_profile(mut self, profile: ToolProfile) -> Self {
+        self.profile = profile;
+        self
+    }
     pub(crate) async fn dispatch(&self, command: Command) -> CallToolResult {
         if let Command::Batch { commands } = command {
+            // A batch must not reach a tool the profile leaves out.
+            let outside = commands.iter().find_map(|command| {
+                let operation = serde_json::to_value(command).ok()?["operation"]
+                    .as_str()?
+                    .to_owned();
+                (!self.profile.allows_operation(&operation)).then_some(operation)
+            });
+            if let Some(operation) = outside {
+                return CallToolResult::structured_error(
+                    json!({"code":"tool_not_in_profile","message":format!("'{operation}' is not in the {} tool profile; launch chromascope-mcp with --tool-profile full to use it", self.profile.name())}),
+                );
+            }
             if commands.is_empty()
                 || commands.len() > 64
                 || commands.iter().any(|c| matches!(c, Command::Batch { .. }))
@@ -1896,6 +2024,16 @@ impl ServerHandler for McpServer {
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> std::result::Result<CallToolResponse, rmcp::ErrorData> {
         let name = request.name.to_string();
+        let known = self.tool_router.has_route(&name) || self.engine_tools.contains(&name);
+        if known && !self.profile.allows(&name) {
+            return Err(rmcp::ErrorData::invalid_params(
+                format!(
+                    "Tool {name} is not in the {} tool profile; launch chromascope-mcp with --tool-profile full to use it",
+                    self.profile.name()
+                ),
+                None,
+            ));
+        }
         if self.engine_tools.contains(&name) {
             return self.call_engine_tool(name, request, context).await;
         }
@@ -1913,6 +2051,24 @@ impl ServerHandler for McpServer {
         let mut tools = self.tool_router.list_all();
         tools.iter_mut().for_each(crate::engine_mcp::compact_tool);
         tools.append(&mut listed.tools);
+        tools.retain(|tool| self.profile.allows(&tool.name));
+        if self.profile != ToolProfile::Full {
+            // A batch may only name operations of tools that are listed.
+            for tool in tools.iter_mut().filter(|tool| tool.name == "batch") {
+                let mut schema = Value::Object((*tool.input_schema).clone());
+                if let Some(Value::Array(names)) =
+                    schema.pointer_mut("/properties/commands/items/properties/operation/enum")
+                {
+                    names.retain(|name| {
+                        name.as_str()
+                            .is_some_and(|name| self.profile.allows_operation(name))
+                    });
+                }
+                if let Value::Object(map) = schema {
+                    tool.input_schema = Arc::new(map);
+                }
+            }
+        }
         listed.tools = tools;
         Ok(listed)
     }
@@ -2004,6 +2160,9 @@ impl ServerHandler for McpServer {
             .map(GetPromptResponse::Complete)
     }
     fn get_tool(&self, name: &str) -> Option<Tool> {
+        if !self.profile.allows(name) {
+            return None;
+        }
         self.tool_router
             .get(name)
             .cloned()
@@ -2018,7 +2177,7 @@ impl ServerHandler for McpServer {
                 .build(),
         )
             .with_server_info(Implementation::new("chromascope", env!("CARGO_PKG_VERSION")))
-            .with_instructions("One server for everything the person sees in the window. Inspect datasets first (list_datasets, gui_state). Use the typed viewer tools to open data, extract and integrate; start_analysis runs calibration, quantification and QC on the shared engine and, when launched with --allow-changes, shows the finished result in the Quantification tab (analysis_status says whether it did). Retrieve bounded numerical pages for quantitation; images aid visual review. Read-only unless explicitly enabled at launch (--allow-changes, --allow-exports, --allow-project-writes). AI interpretations are external to measured results.")
+            .with_instructions(format!("{}{}", "One server for everything the person sees in the window. Inspect datasets first (list_datasets, gui_state). Use the typed viewer tools to open data, extract and integrate; start_analysis runs calibration, quantification and QC on the shared engine and, when launched with --allow-changes, shows the finished result in the Quantification tab (analysis_status says whether it did). Retrieve bounded numerical pages for quantitation; images aid visual review. Read-only unless explicitly enabled at launch (--allow-changes, --allow-exports, --allow-project-writes). AI interpretations are external to measured results.", self.profile_note()))
     }
 }
 
@@ -2490,6 +2649,58 @@ mod tests {
                 "{name} is not a listed tool"
             );
         }
+    }
+    #[test]
+    fn the_core_profile_is_a_small_subset_and_batches_cannot_bypass_it() {
+        let mut all: Vec<String> = McpServer::tool_router()
+            .list_all()
+            .iter()
+            .map(|t| t.name.to_string())
+            .collect();
+        all.extend(
+            crate::engine_mcp::EngineMcp::new(vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))])
+                .unwrap()
+                .tool_names(),
+        );
+        assert!(
+            CORE_TOOLS.len() <= 40,
+            "core lists {} tools",
+            CORE_TOOLS.len()
+        );
+        let unique: std::collections::HashSet<_> = CORE_TOOLS.iter().collect();
+        assert_eq!(
+            unique.len(),
+            CORE_TOOLS.len(),
+            "a core tool is listed twice"
+        );
+        for tool in CORE_TOOLS {
+            assert!(
+                all.iter().any(|name| name == tool),
+                "core names the unknown tool {tool}"
+            );
+            assert!(ToolProfile::Core.allows(tool) && ToolProfile::Full.allows(tool));
+        }
+        assert!(!ToolProfile::Core.allows("set_layout"));
+        assert!(ToolProfile::Full.allows("set_layout"));
+        // Every operation a batch can run is a tool (or one of three known exceptions), so the
+        // profile check on batch commands cannot be dodged by an operation with another name.
+        let exceptions = ["batch", "plot_image", "list_resources", "read_resource"];
+        for operation in batch_operation_names() {
+            if exceptions.contains(&operation.as_str()) {
+                continue;
+            }
+            assert!(
+                all.contains(&operation),
+                "batch operation {operation} is not a tool name: map it in ToolProfile::allows_operation"
+            );
+            assert_eq!(
+                ToolProfile::Core.allows_operation(&operation),
+                CORE_TOOLS.contains(&operation.as_str()),
+                "{operation}"
+            );
+        }
+        assert!(ToolProfile::Core.allows_operation("plot_image"));
+        assert!(!ToolProfile::Core.allows_operation("no_such_operation"));
     }
     #[test]
     fn protocol_initialize_discovery_and_invalid_tool_arguments() {

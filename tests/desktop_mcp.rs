@@ -2,7 +2,7 @@
 //! Untargeted analysis, Statistics) stay invisible and unreachable, for the viewer tools and for
 //! everything the server shares with the headless engine.
 #![cfg(feature = "mcp")]
-use chromascope::mcp::{AccessPolicy, McpServer};
+use chromascope::mcp::{AccessPolicy, McpServer, ToolProfile, CORE_TOOLS};
 use rmcp::ServiceExt;
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, DuplexStream, ReadHalf, WriteHalf};
@@ -39,10 +39,17 @@ impl Client {
 /// A connected client. Calls that need the window to answer are not made here: the tools used
 /// are the ones the server answers on its own threads.
 async fn connect(root: &std::path::Path) -> (Client, tokio::task::JoinHandle<()>) {
+    connect_with(root, ToolProfile::default()).await
+}
+async fn connect_with(
+    root: &std::path::Path,
+    profile: ToolProfile,
+) -> (Client, tokio::task::JoinHandle<()>) {
     let policy = AccessPolicy::new(vec![root.to_owned()], true, true)
         .unwrap()
         .with_project_writes(true);
     let (server, _bridge) = McpServer::new(egui::Context::default(), policy).unwrap();
+    let server = server.with_tool_profile(profile);
     let (client, transport) = tokio::io::duplex(1024 * 1024);
     let task = tokio::spawn(async move {
         let _keep_window_alive = _bridge;
@@ -122,8 +129,18 @@ fn experimental_workflows_are_hidden_on_the_desktop_server() {
         }
         let request = json!({"version":1,"operation_id":uuid::Uuid::new_v4().to_string(),"actor":"AI","operation":{"operation":"import_spectral_library","text":"","format":"msp","source":{"name":"n","version":"1","url":"u","license":"l"}}});
         let args = json!({"path":anchor,"request":request});
-        for tool in ["start_analysis", "analytical_operation"] {
-            let reply = client.call(tool, args.clone()).await;
+        assert!(
+            !tools.iter().any(|t| t["name"] == "analytical_operation"),
+            "analytical_operation was removed; start_analysis replaces it"
+        );
+        for (tool, arguments) in [
+            ("start_analysis", args.clone()),
+            (
+                "prepare_review_proposal",
+                json!({"path":anchor,"request":request,"reason":"r","evidence":[]}),
+            ),
+        ] {
+            let reply = client.call(tool, arguments).await;
             assert_eq!(
                 reply["result"]["structuredContent"]["code"], "experimental_unavailable",
                 "{tool}: {reply}"
@@ -260,4 +277,112 @@ fn the_tool_list_stays_small_and_requests_are_still_validated_in_full() {
         drop(client);
         task.await.unwrap();
     });
+}
+
+/// `--tool-profile`: some clients cap the number of tools, so `core` lists the main workflows
+/// only (at most 40 tools) and refuses every other tool when it is called; `full` (the default)
+/// lists everything, which is what the parity test checks.
+#[test]
+fn the_core_profile_lists_the_main_workflows_and_refuses_every_other_tool() {
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let temp = tempfile::tempdir().unwrap();
+        let (mut full, full_task) = connect(temp.path()).await;
+        let listed = full.rpc("tools/list", json!({})).await;
+        let full_names: Vec<String> = listed["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap().to_owned())
+            .collect();
+        assert!(full_names.len() >= 70, "the default profile is full: {} tools", full_names.len());
+        for tool in CORE_TOOLS {
+            assert!(full_names.iter().any(|n| n == tool), "core names a tool that does not exist: {tool}");
+        }
+        drop(full);
+        full_task.await.unwrap();
+
+        let (mut client, task) = connect_with(temp.path(), ToolProfile::Core).await;
+        let init_again = client.rpc("tools/list", json!({})).await;
+        let tools = init_again["result"]["tools"].as_array().unwrap();
+        assert!(tools.len() <= 40, "core lists {} tools", tools.len());
+        let mut names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+        names.sort_unstable();
+        let mut expected = CORE_TOOLS.to_vec();
+        expected.sort_unstable();
+        assert_eq!(names, expected, "core lists exactly the core tools");
+        // The main workflows are all there.
+        for workflow in [
+            "open_files", "dataset_metadata", "extract_chromatogram", "spectrum", "integrate",
+            "start_quantification", "review_quantification", "export_csv", "create_project",
+            "open_project", "start_analysis", "analysis_status", "analysis_result",
+            "analysis_capabilities",
+        ] {
+            assert!(names.contains(&workflow), "core lacks {workflow}");
+        }
+        // A tool outside the profile is refused as unknown, whichever server part serves it.
+        for outside in [
+            "set_layout", "get_settings", "load_session", "save_preset", "retain_trace",
+            "inspect_project", "session_audit", "queue_review_proposal", "discover_datasets",
+        ] {
+            assert!(!names.contains(&outside));
+            let reply = client.call(outside, json!({})).await;
+            assert_eq!(reply["error"]["code"], -32602, "{outside}: {reply}");
+            let message = reply["error"]["message"].as_str().unwrap();
+            assert!(
+                message.contains("core") && message.contains("--tool-profile full"),
+                "{outside}: {message}"
+            );
+        }
+        // A tool of the profile still works; one that needs no window answers here.
+        let capabilities = client.call("analysis_capabilities", json!({})).await;
+        assert!(capabilities["result"]["structuredContent"]["request_schema"].is_object());
+        // A batch cannot reach a tool the profile leaves out ...
+        let batch = tools.iter().find(|t| t["name"] == "batch").unwrap();
+        let operations = batch["inputSchema"]["properties"]["commands"]["items"]["properties"]["operation"]["enum"]
+            .as_array()
+            .unwrap();
+        assert!(operations.iter().any(|o| o == "integrate"));
+        assert!(!operations.iter().any(|o| o == "set_layout" || o == "get_settings"));
+        let reply = client
+            .call("batch", json!({"commands":[{"operation":"list_datasets"},{"operation":"set_layout","mode":"grid"}]}))
+            .await;
+        assert_eq!(reply["result"]["structuredContent"]["code"], "tool_not_in_profile", "{reply}");
+        // ... and a batch of core operations is still checked like any other.
+        let reply = client.call("batch", json!({"commands":[]})).await;
+        assert_eq!(reply["result"]["structuredContent"]["code"], "invalid_batch");
+        // Prompts and the instructions are unchanged except for the note about the profile.
+        let prompts = client.rpc("prompts/list", json!({})).await;
+        assert_eq!(prompts["result"]["prompts"].as_array().unwrap().len(), 6);
+        drop(client);
+        task.await.unwrap();
+    });
+}
+
+#[test]
+fn the_tool_profile_flag_is_validated_before_a_window_opens() {
+    use std::process::Command;
+    let exe = env!("CARGO_BIN_EXE_chromascope-mcp");
+    let root = env!("CARGO_MANIFEST_DIR");
+    for args in [
+        vec!["--allow-root", root, "--tool-profile", "bogus"],
+        vec!["--allow-root", root, "--tool-profile"],
+    ] {
+        let output = Command::new(exe).args(&args).output().unwrap();
+        assert!(!output.status.success(), "{args:?} must fail");
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            error.contains("tool profile") || error.contains("--tool-profile"),
+            "{args:?}: {error}"
+        );
+    }
+    let help = Command::new(exe).arg("--help").output().unwrap();
+    let text = String::from_utf8_lossy(&help.stderr);
+    assert!(
+        text.contains("--tool-profile core|full") && text.contains("40"),
+        "{text}"
+    );
+    assert_eq!("core".parse::<ToolProfile>(), Ok(ToolProfile::Core));
+    assert_eq!("full".parse::<ToolProfile>(), Ok(ToolProfile::Full));
+    assert!("Core".parse::<ToolProfile>().is_err());
+    assert_eq!(ToolProfile::default(), ToolProfile::Full);
 }
