@@ -20,4 +20,4 @@ Some test records of the project come from MassBank and carry per-record attribu
 
 ## This website
 
-The website is built with [MkDocs](https://www.mkdocs.org/) and the [Material for MkDocs](https://squidfunnel.github.io/mkdocs-material/) theme.
+The website is built with [MkDocs](https://www.mkdocs.org/) and the [Material for MkDocs](https://squidfunk.github.io/mkdocs-material/) theme.

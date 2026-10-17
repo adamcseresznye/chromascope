@@ -1,5 +1,5 @@
 ---
-title: Chromascope
+title: A free LC-MS workbench
 ---
 
 # Chromascope
