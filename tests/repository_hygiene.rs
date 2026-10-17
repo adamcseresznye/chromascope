@@ -488,3 +488,124 @@ fn the_link_checker_notices_what_it_should() {
         ["a-title", "sub-part", "sub-part-1"]
     );
 }
+
+/// SHA-1 (FIPS 180-4), because the mzML `fileChecksum` is a SHA-1 and the project has no other
+/// use for it.
+fn sha1_hex(data: &[u8]) -> String {
+    let mut h: [u32; 5] = [
+        0x6745_2301,
+        0xEFCD_AB89,
+        0x98BA_DCFE,
+        0x1032_5476,
+        0xC3D2_E1F0,
+    ];
+    let mut message = data.to_vec();
+    message.push(0x80);
+    while message.len() % 64 != 56 {
+        message.push(0);
+    }
+    message.extend_from_slice(&((data.len() as u64) * 8).to_be_bytes());
+    for block in message.chunks(64) {
+        let mut w = [0u32; 80];
+        for (i, word) in block.chunks(4).enumerate() {
+            w[i] = u32::from_be_bytes([word[0], word[1], word[2], word[3]]);
+        }
+        for i in 16..80 {
+            w[i] = (w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16]).rotate_left(1);
+        }
+        let [mut a, mut b, mut c, mut d, mut e] = h;
+        for (i, word) in w.iter().enumerate() {
+            let (f, k) = match i {
+                0..=19 => ((b & c) | (!b & d), 0x5A82_7999),
+                20..=39 => (b ^ c ^ d, 0x6ED9_EBA1),
+                40..=59 => ((b & c) | (b & d) | (c & d), 0x8F1B_BCDC),
+                _ => (b ^ c ^ d, 0xCA62_C1D6),
+            };
+            let t = a
+                .rotate_left(5)
+                .wrapping_add(f)
+                .wrapping_add(e)
+                .wrapping_add(k)
+                .wrapping_add(*word);
+            e = d;
+            d = c;
+            c = b.rotate_left(30);
+            b = a;
+            a = t;
+        }
+        for (slot, value) in h.iter_mut().zip([a, b, c, d, e]) {
+            *slot = slot.wrapping_add(value);
+        }
+    }
+    h.iter().map(|word| format!("{word:08x}")).collect()
+}
+
+fn find(haystack: &[u8], needle: &[u8], from: usize) -> Option<usize> {
+    haystack[from..]
+        .windows(needle.len())
+        .position(|window| window == needle)
+        .map(|at| at + from)
+}
+
+fn attribute<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
+    let start = tag.find(&format!(" {name}=\""))? + name.len() + 3;
+    tag[start..].split('"').next()
+}
+
+#[test]
+fn the_mzml_fixture_index_points_at_its_elements_and_the_checksum_is_right() {
+    assert_eq!(sha1_hex(b"abc"), "a9993e364706816aba3e25717850c26c9cd0d89d");
+    let bytes = fs::read(root().join("test_file/data_dependent_02.mzML")).unwrap();
+    let text = String::from_utf8(bytes.clone()).expect("the fixture is UTF-8");
+    let index_list = find(&bytes, b"<indexList ", 0).expect("<indexList>");
+    // indexListOffset is the position of <indexList>.
+    let stored = text
+        .split("<indexListOffset>")
+        .nth(1)
+        .and_then(|s| s.split('<').next())
+        .expect("indexListOffset");
+    assert_eq!(
+        stored.parse::<usize>().unwrap(),
+        index_list,
+        "indexListOffset"
+    );
+    // Every <offset> points at the start of the element of that id, and every element is indexed.
+    let mut indexed = 0;
+    for index in text[index_list..].split("<index name=\"").skip(1) {
+        let (kind, body) = index.split_once("\">").unwrap();
+        let (kind, tag) = match kind {
+            "spectrum" => ("spectrum", "<spectrum "),
+            "chromatogram" => ("chromatogram", "<chromatogram "),
+            other => panic!("unknown index {other}"),
+        };
+        let body = body.split("</index>").next().unwrap();
+        for entry in body.split("<offset idRef=\"").skip(1) {
+            let (id, rest) = entry.split_once("\">").unwrap();
+            let offset: usize = rest.split('<').next().unwrap().trim().parse().unwrap();
+            assert!(
+                bytes[offset..].starts_with(tag.as_bytes()),
+                "{kind} {id}: offset {offset} does not point at {tag}"
+            );
+            let element = &text[offset..offset + text[offset..].find('>').unwrap()];
+            assert_eq!(
+                attribute(element, "id"),
+                Some(id),
+                "{kind} {id}: wrong element at {offset}"
+            );
+            indexed += 1;
+        }
+    }
+    let elements = text[..index_list].matches("<spectrum ").count()
+        + text[..index_list].matches("<chromatogram ").count();
+    assert_eq!(
+        indexed, elements,
+        "every spectrum and chromatogram is indexed exactly once"
+    );
+    assert!(indexed >= 54);
+    // fileChecksum: SHA-1 of every byte up to and including the <fileChecksum> start tag.
+    let marker = b"<fileChecksum>";
+    let start = find(&bytes, marker, index_list).unwrap() + marker.len();
+    let stored = &text[start..start + 40];
+    assert_eq!(sha1_hex(&bytes[..start]), stored, "fileChecksum");
+    assert!(text[start + 40..].starts_with("</fileChecksum>"));
+}
