@@ -234,3 +234,49 @@ fn documentation_matches_the_shipped_app() {
     assert!(!readme.contains("Reports and AI activity"));
     assert!(!readme.contains("Project reports and delivery"));
 }
+
+/// GitHub is retiring the Node 20 runtime for actions: every action that is written for it prints
+/// a deprecation warning in each run. These are the first major versions that run on Node 24.
+#[test]
+fn github_actions_run_on_node_24() {
+    let minimum = [
+        ("actions/checkout", 6),
+        ("actions/setup-python", 6),
+        ("actions/upload-artifact", 6),
+        ("actions/download-artifact", 7),
+        ("softprops/action-gh-release", 3),
+    ];
+    let mut seen = std::collections::BTreeSet::new();
+    for file in [".github/workflows/CI.yml", ".github/workflows/release.yml"] {
+        for line in read(file).lines() {
+            let Some(rest) = line.split("uses:").nth(1) else {
+                continue;
+            };
+            let Some((action, version)) = rest.trim().split_once('@') else {
+                continue;
+            };
+            for (name, first) in minimum {
+                if action == name {
+                    let major: u32 = version
+                        .trim_start_matches('v')
+                        .split('.')
+                        .next()
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or_else(|| {
+                            panic!("{file}: {action}@{version} is not a version tag")
+                        });
+                    assert!(
+                        major >= first,
+                        "{file}: {action}@{version} runs on Node 20; use v{first} or later"
+                    );
+                    seen.insert(name);
+                }
+            }
+        }
+    }
+    assert_eq!(
+        seen.len(),
+        minimum.len(),
+        "an action is no longer used or was not found: {seen:?}"
+    );
+}

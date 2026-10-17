@@ -37,7 +37,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Set up scientific reference Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.13'
 
@@ -94,7 +94,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Set up Python (used by the example-script tests)
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.13'
 

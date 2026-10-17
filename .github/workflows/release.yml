@@ -22,7 +22,7 @@ jobs:
     outputs:
       version: ${{ steps.v.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Check third-party licences are current
         run: |
           cargo fetch --locked
@@ -41,7 +41,7 @@ jobs:
     name: Test before release
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -52,7 +52,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
 
@@ -81,7 +81,7 @@ jobs:
             target: aarch64-unknown-linux-gnu
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -150,7 +150,7 @@ jobs:
           chmod +x appimagetool
           ARCH="$ARCH" APPIMAGE_EXTRACT_AND_RUN=1 ./appimagetool --no-appstream appdir "$OUT/$NAME.AppImage"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: assets-linux-${{ matrix.arch }}
           path: release-assets/*
@@ -174,7 +174,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -216,7 +216,7 @@ jobs:
             -d Version="$MSI_VERSION" -d BinDir=bin -d LicenseDir=. -d IconFile=packaging/icons/chromascope.ico \
             -o "$OUT/$NAME.msi" packaging/windows/chromascope.wxs
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: assets-windows-${{ matrix.arch }}
           path: release-assets/*
@@ -227,7 +227,7 @@ jobs:
     needs: [version, test]
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -281,7 +281,7 @@ jobs:
           ln -s /Applications stage/dmg/Applications
           hdiutil create -volname Chromascope -srcfolder stage/dmg -ov -format UDZO "$OUT/$NAME.dmg"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: assets-macos
           path: release-assets/*
@@ -295,7 +295,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           pattern: assets-*
           merge-multiple: true
@@ -305,7 +305,7 @@ jobs:
         working-directory: release-assets
         run: sha256sum * > SHA256SUMS.txt
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: release-assets/*
           generate_release_notes: true
