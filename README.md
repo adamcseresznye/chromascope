@@ -57,7 +57,7 @@ Every package contains the GPL-3.0 [LICENSE](LICENSE) and `THIRD_PARTY_LICENSES.
 The package declares **Rust 1.88** as its minimum, and CI compiles every target on exactly that version. You need a compatible Rust toolchain, a platform C/C++ toolchain and the checked-in lockfile. On Ubuntu the GUI also needs `libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev`.
 
 ```sh
-git clone https://github.com/adamcseresznye/chromascope.git
+git clone https://github.com/chromascope-ms/chromascope.git
 cd chromascope
 cargo build --locked --release --bin chromascope
 cargo build --locked --release --no-default-features --bin chromascope-cli

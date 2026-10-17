@@ -8,7 +8,7 @@ If you encounter any bugs or have feature requests, please open an issue on our 
 
 ## Contributing
 
-We welcome contributions to Chromascope! If you have suggestions for new features, bug reports, or would like to contribute code, please open an issue or submit a pull request on our [GitHub repository](https://github.com/adamcseresznye/chromascope).
+We welcome contributions to Chromascope! If you have suggestions for new features, bug reports, or would like to contribute code, please open an issue or submit a pull request on our [GitHub repository](https://github.com/chromascope-ms/chromascope).
 
 ### Development Setup
 
@@ -17,7 +17,7 @@ We welcome contributions to Chromascope! If you have suggestions for new feature
 
 2. **Clone Your Fork**:
    ```bash
-   git clone https://github.com/adamcseresznye/chromascope.git
+   git clone https://github.com/chromascope-ms/chromascope.git
    cd chromascope
    ```
 

@@ -7,7 +7,7 @@
   <key>CFBundleDisplayName</key>
   <string>Chromascope</string>
   <key>CFBundleIdentifier</key>
-  <string>io.github.adamcseresznye.chromascope</string>
+  <string>io.github.chromascope-ms.chromascope</string>
   <key>CFBundleExecutable</key>
   <string>chromascope</string>
   <key>CFBundleIconFile</key>

@@ -35,10 +35,10 @@ pub(super) fn show(app: &MzViewerApp, ctx: &Context) {
                 ui.label("Inspect chromatograms and spectra, integrate peaks, review batch results, and export CSV files. Save extraction presets and quantification methods for reuse.");
                 ui.separator();
                 ui.horizontal_wrapped(|ui| {
-                    ui.hyperlink_to("Project & documentation", "https://github.com/adamcseresznye/chromascope");
-                    ui.hyperlink_to("Report an issue", "https://github.com/adamcseresznye/chromascope/issues");
+                    ui.hyperlink_to("Project & documentation", "https://chromascope-ms.github.io/chromascope/");
+                    ui.hyperlink_to("Report an issue", "https://github.com/chromascope-ms/chromascope/issues");
                 });
-                ui.hyperlink_to("GPL-3.0-only license", "https://github.com/adamcseresznye/chromascope/blob/main/LICENSE");
+                ui.hyperlink_to("GPL-3.0-only license", "https://github.com/chromascope-ms/chromascope/blob/main/LICENSE");
                 egui::CollapsingHeader::new("Credits & licenses").show(ui, |ui| {
                     ui.label("Built with Rust, egui/eframe, and mzdata.");
                     ui.hyperlink_to("Inter by Rasmus Andersson · SIL Open Font License", "https://rsms.me/inter/");

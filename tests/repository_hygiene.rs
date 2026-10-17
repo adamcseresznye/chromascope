@@ -166,9 +166,12 @@ fn package_metadata_feeds_the_deb_and_rpm_packages() {
     assert!(!description.ends_with('.') && !description.contains('\n'));
     assert_eq!(
         text("repository"),
-        "https://github.com/adamcseresznye/chromascope"
+        "https://github.com/chromascope-ms/chromascope"
     );
-    assert!(text("homepage").starts_with("https://"));
+    assert_eq!(
+        text("homepage"),
+        "https://chromascope-ms.github.io/chromascope/"
+    );
     assert_eq!(text("license"), "GPL-3.0-only");
     assert_eq!(text("readme"), "README.md");
     assert!(root().join("README.md").is_file());
@@ -351,6 +354,39 @@ fn no_tracked_file_refers_to_the_docs_folder() {
     let ignore = read(".gitignore");
     let rules: Vec<&str> = ignore.lines().filter(|l| l.contains("docs")).collect();
     assert_eq!(rules, [needle.as_str()], "one rule keeps the folder out");
+}
+
+#[test]
+fn no_tracked_file_points_at_the_old_repository_address() {
+    // The project lives in the chromascope-ms organization. Built at run time so that this file
+    // does not contain what it forbids. The author's name is not an address and stays.
+    let account = ["adam", "cseresznye"].concat();
+    let needles = [
+        ["github.com/", account.as_str()].concat(),
+        [account.as_str(), ".github.io"].concat(),
+        ["io.github.", account.as_str()].concat(),
+    ];
+    let Some(files) = tracked_files() else {
+        eprintln!("git is not available: tracked files were not scanned");
+        return;
+    };
+    assert!(files.len() > 100, "unexpectedly few tracked files");
+    let mut offenders = Vec::new();
+    for file in &files {
+        let Some(text) = tracked_text(file) else {
+            continue;
+        };
+        for (number, line) in text.lines().enumerate() {
+            if needles.iter().any(|n| line.to_lowercase().contains(n)) {
+                offenders.push(format!("{file}:{}: {}", number + 1, line.trim()));
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "the old repository address is still used:\n{}",
+        offenders.join("\n")
+    );
 }
 
 /// The anchor GitHub gives a heading: lowercase, punctuation dropped, spaces turned into hyphens.
