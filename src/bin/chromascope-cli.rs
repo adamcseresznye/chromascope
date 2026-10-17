@@ -7,6 +7,7 @@ use chromascope::{
 };
 use std::{io::Read, path::Path};
 const HELP_HEAD: &str = "Chromascope shared-engine JSON CLI
+AI-assisted LC-MS analysis, across instrument vendors, with traceable results.
 Usage:
   run DATASET|- [PROJECT] < request.json
   project-create DIRECTORY

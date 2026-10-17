@@ -31,7 +31,8 @@ pub(super) fn show(app: &MzViewerApp, ctx: &Context) {
                     });
                 });
                 ui.separator();
-                ui.label("A lightweight mass spectrometry viewer and batch peak-integration workbench.");
+                ui.label(egui::RichText::new("Analyze more. Click less.").strong());
+                ui.label("AI-assisted LC-MS analysis, across instrument vendors, with traceable results.");
                 ui.label("Inspect chromatograms and spectra, integrate peaks, review batch results, and export CSV files. Save extraction presets and quantification methods for reuse.");
                 ui.separator();
                 ui.horizontal_wrapped(|ui| {
