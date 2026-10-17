@@ -346,6 +346,7 @@ pub fn status(app: &mut MzViewerApp, ctx: &Context) {
                     ui.small("Exploratory · no project");
                 }
             }
+            super::update::show_notice(&app.updates, ui);
             let low_contrast = app.files.values().any(|file| file.display.visible && contrast_ratio(file.display.color.to_egui_for(ui.visuals().dark_mode),ui.visuals().panel_fill)<3.0)
                 || app.workspace.traces.values().flatten().any(|trace|trace.visible && contrast_ratio(trace.color.to_egui_for(ui.visuals().dark_mode),ui.visuals().panel_fill)<3.0);
             if low_contrast { ui.colored_label(ui.visuals().warn_fg_color,"Low-contrast trace color · adjust Appearance or switch theme"); }

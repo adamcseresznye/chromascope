@@ -67,6 +67,14 @@ cargo build --locked --release --features mcp --bin chromascope-mcp
 
 Run the executables under `target/release/` (`.exe` on Windows). On Windows, close a running copy before rebuilding, or the linker cannot replace the file.
 
+### Update check
+
+The desktop windows (`chromascope` and the window of `chromascope-mcp`) look for a newer version **once a day** and say so on the status bar: "Chromascope X.Y.Z is available — Download · Dismiss". **Download** opens the release page in your browser; **Dismiss** hides the notice for that version. Nothing is downloaded or installed automatically.
+
+What is sent: one ordinary web request to `https://github.com/chromascope-ms/chromascope/releases/latest`, made in the background after the window has opened. It carries no user name, no file name and no data from your work, only what any web request contains (your IP address, and the user agent `Chromascope/<version>`). The reply is read from the address GitHub redirects to; the GitHub API is not used. If you are offline or behind a firewall, nothing is shown and nothing is retried before the next day. The command-line tool and the headless MCP server never contact the network.
+
+To turn it off: clear **View → Check for updates**, or set the environment variable `CHROMASCOPE_NO_UPDATE_CHECK=1` (for laboratories and CI). The setting, the time of the last check and the dismissed version are kept in `settings.json` next to the other preferences. An AI client can read and change the setting with `get_settings` / `set_settings` (`check_for_updates`); `get_settings` also reports `update_available`.
+
 ## Quick start
 
 1. Start `chromascope` (`target/release/chromascope` when built from source).
@@ -257,7 +265,7 @@ The desktop server publishes what the window holds as **resources**:
 
 - No original file is modified. Exports and saves create new files; saving over an existing user file writes a temporary file in the same folder and renames it into place, so a crash cannot leave a half-written file.
 - Without `--allow-changes` the AI cannot select, zoom, apply integrations, run batches or replace what is in the window. `display` and `apply` default to false.
-- The server runs no shell, sends no network request and browses no folder outside the roots. The roots are trusted local storage, not a sandbox against another process replacing files during an operation.
+- The server runs no shell, makes no network request on an AI's behalf (the window's once-a-day [update check](#update-check) is the only network access of the desktop program, and `chromascope-engine-mcp` has none) and browses no folder outside the roots. The roots are trusted local storage, not a sandbox against another process replacing files during an operation.
 - Every call and failure is recorded with its exact request under **AI activity** (parameters over 64 KiB are summarised by size and SHA-256). Agent corrections stay distinct from human review; AI text is never stored as measured data.
 - The server is local stdio only and hosts its own window; it cannot attach to a window started separately. There is no HTTP transport and no persistent job store. The queue holds 16 requests and runs one expensive worker operation at a time.
 - Vendor import is tested with a fake `msconvert` only; real ProteoWizard and vendor files are not covered by the automated tests.

@@ -322,9 +322,9 @@ pub const ACTIONS: &[Action] = &[
         &["list_presets", "get_preset", "save_preset", "apply_preset"],
     ),
     act(
-        "Choose theme, interface size and m/z decimals",
+        "Choose theme, interface size, m/z decimals and the update check",
         "View menu",
-        &["Theme", "m/z decimals", "Interface size"],
+        &["Theme", "m/z decimals", "Interface size", "Check for updates"],
         &["get_settings", "set_settings"],
     ),
     // ---- Quantification and QC: batch
@@ -790,7 +790,14 @@ pub const FURNITURE: &[(&str, &str)] = &[
         "Confirm",
         "answers a dialog; the action it confirms has its own entry",
     ),
-    ("Dismiss", "closes an error dialog"),
+    (
+        "Dismiss",
+        "closes an error dialog, or hides the update notice for one version",
+    ),
+    (
+        "Download",
+        "opens the release page in the system browser from the update notice; get_settings reports update_available",
+    ),
     (
         "Legend",
         "shows or hides the legend of one on-screen plot; images always draw it",

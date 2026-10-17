@@ -367,7 +367,11 @@ fn the_tool_profile_flag_is_validated_before_a_window_opens() {
         vec!["--allow-root", root, "--tool-profile", "bogus"],
         vec!["--allow-root", root, "--tool-profile"],
     ] {
-        let output = Command::new(exe).args(&args).output().unwrap();
+        let output = Command::new(exe)
+            .args(&args)
+            .env("CHROMASCOPE_NO_UPDATE_CHECK", "1")
+            .output()
+            .unwrap();
         assert!(!output.status.success(), "{args:?} must fail");
         let error = String::from_utf8_lossy(&output.stderr);
         assert!(
@@ -375,7 +379,11 @@ fn the_tool_profile_flag_is_validated_before_a_window_opens() {
             "{args:?}: {error}"
         );
     }
-    let help = Command::new(exe).arg("--help").output().unwrap();
+    let help = Command::new(exe)
+        .arg("--help")
+        .env("CHROMASCOPE_NO_UPDATE_CHECK", "1")
+        .output()
+        .unwrap();
     let text = String::from_utf8_lossy(&help.stderr);
     assert!(
         text.contains("--tool-profile core|full") && text.contains("40"),

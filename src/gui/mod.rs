@@ -135,6 +135,7 @@ mod table;
 mod test_render;
 mod theme;
 mod untargeted;
+mod update;
 mod widgets;
 mod workbench;
 mod workflow;
@@ -186,11 +187,29 @@ impl MzViewerApp {
             delivery: Default::default(),
             project: Default::default(),
             ai: Default::default(),
+            updates: Default::default(),
             msconvert_path: crate::import::discover_msconvert(),
             #[cfg(feature = "mcp")]
             remote: None,
         }
     }
+
+    /// Looks for a newer release once a day, in the background, and picks up the answer. The
+    /// unit tests run frames too and must never reach the network.
+    fn poll_updates(&mut self, ctx: &egui::Context) {
+        if cfg!(test) {
+            return;
+        }
+        let repaint = ctx.clone();
+        let changed = settings::with_update_prefs(|prefs| {
+            self.updates
+                .tick(prefs, update::now_secs(), move || repaint.request_repaint())
+        });
+        if changed {
+            settings::save(ctx);
+        }
+    }
+
     /// Resets the internal state of the instance.
     ///
     /// This function clears all opened files and resets the active file ID.
@@ -644,6 +663,7 @@ impl eframe::App for MzViewerApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         project_workbench::poll(self, ctx);
         ai_review::poll(self, ctx);
+        self.poll_updates(ctx);
         #[cfg(feature = "mcp")]
         self.poll_remote(ctx);
         presets::poll(self, ctx);
@@ -666,6 +686,7 @@ impl eframe::App for MzViewerApp {
         if workbench::advanced_active(self, ctx) {
             workbench::status(self, ctx);
         } else if self.quant.active {
+            update::show_notice_bar(&self.updates, ctx);
             quant::show(self, ctx);
         } else {
             workbench::status(self, ctx);

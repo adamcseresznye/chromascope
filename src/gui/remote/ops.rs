@@ -195,11 +195,18 @@ fn theme_name(preference: egui::ThemePreference) -> &'static str {
 }
 
 /// The display preferences, as the View menu shows them.
-pub(super) fn settings(ctx: &egui::Context) -> Value {
+pub(super) fn settings(ctx: &egui::Context, updates: &super::super::update::Updates) -> Value {
+    let (check_for_updates, update_available) =
+        super::super::settings::with_update_prefs(|prefs| {
+            (prefs.check_for_updates, updates.reported(prefs))
+        });
     json!({
         "theme":theme_name(ctx.options(|o| o.theme_preference)),
         "interface_size":(ctx.zoom_factor() * 100.0).round() as u16,
         "mz_decimals":super::super::settings::mz_decimals(),
+        "check_for_updates":check_for_updates,
+        "update_check_blocked_by_environment":updates.opted_out(),
+        "update_available":update_available,
         "choices":{
             "theme":["system","light","dark"],
             "interface_size":INTERFACE_SIZES,
@@ -210,9 +217,11 @@ pub(super) fn settings(ctx: &egui::Context) -> Value {
 
 pub(super) fn set_settings(
     ctx: &egui::Context,
+    updates: &super::super::update::Updates,
     theme: Option<&str>,
     interface_size: Option<u16>,
     mz_decimals: Option<u8>,
+    check_for_updates: Option<bool>,
 ) -> Result<Value, String> {
     // Check everything first, so a bad value leaves all preferences as they were.
     let theme = match theme {
@@ -239,11 +248,14 @@ pub(super) fn set_settings(
     if let Some(decimals) = mz_decimals {
         super::super::settings::set_mz_decimals(ctx, decimals);
     }
+    if let Some(check) = check_for_updates {
+        super::super::settings::with_update_prefs(|prefs| prefs.check_for_updates = check);
+    }
     match interface_size {
         Some(size) => super::super::settings::set_zoom(ctx, f32::from(size) / 100.0),
         None => super::super::settings::save(ctx),
     }
-    let mut now = settings(ctx);
+    let mut now = settings(ctx, updates);
     if let Some(size) = interface_size {
         // The window applies the new size at the start of its next frame; report it already.
         now["interface_size"] = json!(size);

@@ -1068,12 +1068,20 @@ impl MzViewerApp {
                 trace_index,
                 visible,
             } => ops::set_trace_visibility(self, dataset_id.index(), trace_index, visible)?,
-            Command::GetSettings {} => ops::settings(ctx),
+            Command::GetSettings {} => ops::settings(ctx, &self.updates),
             Command::SetSettings {
                 theme,
                 interface_size,
                 mz_decimals,
-            } => ops::set_settings(ctx, theme.as_deref(), interface_size, mz_decimals)?,
+                check_for_updates,
+            } => ops::set_settings(
+                ctx,
+                &self.updates,
+                theme.as_deref(),
+                interface_size,
+                mz_decimals,
+                check_for_updates,
+            )?,
             Command::RemoveMeasurement { index } => {
                 let total = self.workspace.measurements.len();
                 if index >= total {

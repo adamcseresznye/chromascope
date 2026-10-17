@@ -304,6 +304,8 @@ pub struct MzViewerApp {
     pub(super) delivery: super::delivery::State,
     pub(super) project: super::project_workbench::State,
     pub(super) ai: super::ai_review::State,
+    /// The once-a-day look for a newer release.
+    pub(super) updates: super::update::Updates,
     pub(crate) msconvert_path: Option<std::path::PathBuf>,
 }
 
@@ -330,6 +332,7 @@ impl Default for MzViewerApp {
             delivery: Default::default(),
             project: Default::default(),
             ai: Default::default(),
+            updates: Default::default(),
             msconvert_path: crate::import::discover_msconvert(),
             #[cfg(feature = "mcp")]
             remote: None,

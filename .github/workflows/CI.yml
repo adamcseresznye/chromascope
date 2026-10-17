@@ -11,6 +11,8 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # The tests start the desktop program; it must not look for updates on the internet.
+  CHROMASCOPE_NO_UPDATE_CHECK: "1"
 
 jobs:
   quality:

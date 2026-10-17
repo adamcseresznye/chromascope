@@ -1863,6 +1863,52 @@ fn display_preferences_are_read_and_changed_over_mcp() {
 }
 
 #[test]
+fn the_update_check_is_a_setting_and_a_found_update_is_reported_over_mcp() {
+    let mut desktop = Desktop::start(vec![], true, false, false);
+    // No network in a test: the window knows of version 99.0.0 as if a check had found it.
+    desktop.app.updates =
+        crate::gui::update::Updates::offline_with(Some(semver::Version::new(99, 0, 0)));
+    let before = desktop.tool("get_settings", json!({}));
+    assert_eq!(before["check_for_updates"], true, "{before}");
+    assert_eq!(before["update_check_blocked_by_environment"], false);
+    assert_eq!(before["update_available"], "99.0.0");
+    // Switching the check off is kept for the next start and hides what was found.
+    let off = desktop.tool("set_settings", json!({"check_for_updates":false}));
+    assert_eq!(off["check_for_updates"], false, "{off}");
+    assert!(off["update_available"].is_null(), "{off}");
+    let file = crate::import::settings_path()
+        .unwrap()
+        .with_file_name("settings.json");
+    let saved: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    assert_eq!(saved["check_for_updates"], false, "{saved}");
+    assert!(!crate::gui::settings::with_update_prefs(
+        |p| p.check_for_updates
+    ));
+    // The other preferences are untouched by it, and a wrong type is refused.
+    assert_eq!(off["mz_decimals"], before["mz_decimals"]);
+    let refused = desktop.call("set_settings", json!({"check_for_updates":"yes"}));
+    assert!(
+        !refused["error"].is_null() || refused["result"]["isError"] == true,
+        "{refused}"
+    );
+    assert!(!crate::gui::settings::with_update_prefs(
+        |p| p.check_for_updates
+    ));
+    let on = desktop.tool("set_settings", json!({"check_for_updates":true}));
+    assert_eq!(
+        (
+            on["check_for_updates"].as_bool(),
+            on["update_available"].as_str()
+        ),
+        (Some(true), Some("99.0.0"))
+    );
+    // Dismissing the notice does not stop the report.
+    let mut prefs = crate::gui::update::Prefs::default();
+    assert!(desktop.app.updates.dismiss(&mut prefs));
+    desktop.finish();
+}
+
+#[test]
 fn the_viewer_tools_that_predate_the_parity_work_run_over_the_protocol() {
     let temp = tempfile::tempdir().unwrap();
     let mut desktop = Desktop::start(vec![temp.path().to_owned()], true, true, false);

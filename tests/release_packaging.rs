@@ -235,6 +235,20 @@ fn documentation_matches_the_shipped_app() {
     assert!(!readme.contains("Project reports and delivery"));
 }
 
+/// The desktop program looks for a newer release once a day. Hosted runs must not: the tests
+/// start the program, and a test never touches the network.
+#[test]
+fn hosted_runs_switch_the_update_check_off() {
+    for file in [".github/workflows/CI.yml", ".github/workflows/release.yml"] {
+        assert!(
+            read(file)
+                .lines()
+                .any(|l| l.trim() == "CHROMASCOPE_NO_UPDATE_CHECK: \"1\""),
+            "{file} must set CHROMASCOPE_NO_UPDATE_CHECK"
+        );
+    }
+}
+
 /// GitHub is retiring the Node 20 runtime for actions: every action that is written for it prints
 /// a deprecation warning in each run. These are the first major versions that run on Node 24.
 #[test]

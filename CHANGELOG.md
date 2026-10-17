@@ -11,6 +11,13 @@ quantification workbench with a command-line interface and two MCP servers.
 
 ### Added
 
+- **Update check.** The desktop windows look for a newer release once a day, in the background,
+  and show "Chromascope X.Y.Z is available — Download · Dismiss" on the status bar. It reads the
+  redirect of `releases/latest` (no GitHub API), never shows an error when offline, downloads and
+  installs nothing, and is switched off by **View → Check for updates** or
+  `CHROMASCOPE_NO_UPDATE_CHECK=1`. `get_settings` / `set_settings` carry `check_for_updates`, and
+  `get_settings` reports `update_available`. The command-line tool and the headless MCP server
+  never contact the network.
 - **Quantification and QC workspace.** Batch quantification with per-analyte integration settings
   (classic, valley/drop-line, Savitzky-Golay + SNR, fixed window), weighted linear and quadratic
   calibration, internal standards, qualifiers, dilution, extrapolation of end standards, rule-based

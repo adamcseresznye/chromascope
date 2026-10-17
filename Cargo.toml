@@ -16,7 +16,8 @@ rust-version = "1.88"
 
 [features]
 default = ["gui"]
-gui = ["dep:egui", "dep:eframe", "dep:rfd", "dep:egui_plot", "dep:image"]
+# `ureq` + `semver`: the once-a-day check for a newer release (desktop windows only).
+gui = ["dep:egui", "dep:eframe", "dep:rfd", "dep:egui_plot", "dep:image", "dep:ureq", "dep:semver"]
 mcp-headless = ["dep:rmcp", "dep:tokio"]
 mcp = ["gui", "mcp-headless", "dep:base64"]
 # Unverified workflows (Identification, Untargeted analysis, Statistics). The code is always
@@ -112,6 +113,8 @@ image = { optional = true, version = "0.25.2", default-features = false, feature
 env_logger = "0.10"
 tempfile = "3"
 nalgebra = { version = "0.33", default-features = false, features = ["std"] }
+ureq = { version = "3", default-features = false, features = ["rustls"], optional = true }
+semver = { version = "1", optional = true }
 
 
 [profile.release]

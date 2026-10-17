@@ -166,6 +166,20 @@ pub fn update_data_selection_panel(app: &mut MzViewerApp, ctx: &Context) {
                         }
                     }
                 });
+                ui.separator();
+                let opted_out = app.updates.opted_out();
+                let mut check = super::settings::with_update_prefs(|prefs| prefs.check_for_updates);
+                ui.add_enabled_ui(!opted_out, |ui| {
+                    let hint = if opted_out {
+                        "Switched off by the environment variable CHROMASCOPE_NO_UPDATE_CHECK."
+                    } else {
+                        "Once a day, ask github.com whether a newer version exists. Sends an ordinary web request, nothing about you or your data. Nothing is downloaded or installed."
+                    };
+                    if ui.checkbox(&mut check, "Check for updates").on_hover_text(hint).changed() {
+                        super::settings::with_update_prefs(|prefs| prefs.check_for_updates = check);
+                        super::settings::save(ctx);
+                    }
+                });
             });
             ui.separator();
             super::workbench::navigation(app, ui);

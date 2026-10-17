@@ -231,6 +231,7 @@ pub enum Command {
         theme: Option<String>,
         interface_size: Option<u16>,
         mz_decimals: Option<u8>,
+        check_for_updates: Option<bool>,
     },
     BuildBundle {
         destination: String,
@@ -1651,7 +1652,7 @@ impl McpServer {
         .await
     }
     #[tool(
-        description = "Read the display preferences (theme, interface size in percent, m/z decimals) and the values each can take.",
+        description = "Read the display preferences (theme, interface size in percent, m/z decimals), whether the daily update check is on, update_available (a newer version number, or null) and the values each can take.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1662,7 +1663,7 @@ impl McpServer {
         self.dispatch(Command::GetSettings {}).await
     }
     #[tool(
-        description = "Change and keep display preferences: theme (system, light, dark), interface size in percent (90, 100, 115, 130), m/z decimals (2-6). Requires --allow-changes.",
+        description = "Change and keep display preferences: theme (system, light, dark), interface size in percent (90, 100, 115, 130), m/z decimals (2-6), check_for_updates (true or false). Requires --allow-changes.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -1674,6 +1675,7 @@ impl McpServer {
             theme: args.theme,
             interface_size: args.interface_size,
             mz_decimals: args.mz_decimals,
+            check_for_updates: args.check_for_updates,
         })
         .await
     }
@@ -2255,6 +2257,8 @@ pub struct SetSettingsArgs {
     pub interface_size: Option<u16>,
     /// Decimals shown for every on-screen m/z: 2 to 6. Exports always keep full precision.
     pub mz_decimals: Option<u8>,
+    /// Look for a newer release on github.com once a day (the View menu's Check for updates).
+    pub check_for_updates: Option<bool>,
 }
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]

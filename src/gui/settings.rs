@@ -1,6 +1,6 @@
 //! User preferences kept on this computer in one `settings.json` next to the other app files:
-//! theme, interface size and how many decimals an on-screen m/z shows. Exports and stored
-//! data always keep full precision. A missing, partial or unreadable file means defaults, and a
+//! theme, interface size, how many decimals an on-screen m/z shows and the update-check
+//! preferences. Exports and stored data always keep full precision. A missing, partial or unreadable file means defaults, and a
 //! field that cannot be read costs only that field: the others in the file are kept.
 
 use crate::validation::MassTolerance;
@@ -8,6 +8,9 @@ use eframe::egui;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::Mutex;
+
+use super::update::Prefs as UpdatePrefs;
 
 /// Decimals offered in the View menu.
 pub(super) const MZ_DECIMAL_CHOICES: [u8; 5] = [2, 3, 4, 5, 6];
@@ -15,6 +18,12 @@ const DEFAULT_MZ_DECIMALS: u8 = 4;
 const ZOOM_RANGE: std::ops::RangeInclusive<f32> = 0.9..=1.3;
 
 static MZ_DECIMALS: AtomicU8 = AtomicU8::new(DEFAULT_MZ_DECIMALS);
+/// The update-check preferences of this session; `load` fills them from the file.
+static UPDATE_PREFS: Mutex<UpdatePrefs> = Mutex::new(UpdatePrefs {
+    check_for_updates: true,
+    last_check: None,
+    dismissed_version: None,
+});
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
 #[serde(rename_all = "lowercase")]
@@ -46,12 +55,18 @@ impl From<egui::ThemePreference> for ThemeChoice {
 }
 
 /// The saved preferences. Every field is optional in the file.
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 #[serde(default)]
 pub(super) struct Settings {
     pub mz_decimals: u8,
     pub theme: ThemeChoice,
     pub zoom: f32,
+    /// "Check for updates" in the View menu.
+    pub check_for_updates: bool,
+    /// When the last update check was started, seconds since 1970.
+    pub last_update_check: Option<u64>,
+    /// The version whose update notice was dismissed.
+    pub dismissed_update_version: Option<String>,
 }
 
 impl Default for Settings {
@@ -60,11 +75,22 @@ impl Default for Settings {
             mz_decimals: DEFAULT_MZ_DECIMALS,
             theme: ThemeChoice::System,
             zoom: 1.0,
+            check_for_updates: true,
+            last_update_check: None,
+            dismissed_update_version: None,
         }
     }
 }
 
 impl Settings {
+    fn update_prefs(&self) -> UpdatePrefs {
+        UpdatePrefs {
+            check_for_updates: self.check_for_updates,
+            last_check: self.last_update_check,
+            dismissed_version: self.dismissed_update_version.clone(),
+        }
+    }
+
     /// Pull out-of-range values back to something the interface offers.
     fn sanitised(mut self) -> Self {
         self.mz_decimals = self.mz_decimals.clamp(
@@ -100,10 +126,24 @@ fn parse(bytes: &[u8]) -> Settings {
         .get("zoom")
         .and_then(serde_json::Value::as_f64)
         .map_or(defaults.zoom, |n| n as f32);
+    let check_for_updates = file
+        .get("check_for_updates")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(defaults.check_for_updates);
+    let last_update_check = file
+        .get("last_update_check")
+        .and_then(serde_json::Value::as_u64);
+    let dismissed_update_version = file
+        .get("dismissed_update_version")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
     Settings {
         mz_decimals,
         theme,
         zoom,
+        check_for_updates,
+        last_update_check,
+        dismissed_update_version,
     }
     .sanitised()
 }
@@ -119,7 +159,20 @@ pub(super) fn load() -> Settings {
         .map(|bytes| parse(&bytes))
         .unwrap_or_default();
     MZ_DECIMALS.store(settings.mz_decimals, Ordering::Relaxed);
+    *update_prefs_lock() = settings.update_prefs();
     settings
+}
+
+fn update_prefs_lock() -> std::sync::MutexGuard<'static, UpdatePrefs> {
+    UPDATE_PREFS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Read or change the update-check preferences. The caller saves them with `save` when it
+/// changed something.
+pub(super) fn with_update_prefs<R>(f: impl FnOnce(&mut UpdatePrefs) -> R) -> R {
+    f(&mut update_prefs_lock())
 }
 
 /// Write the current theme, interface size and decimals.
@@ -136,10 +189,14 @@ pub(super) fn set_zoom(ctx: &egui::Context, factor: f32) {
 }
 
 fn save_with_zoom(ctx: &egui::Context, zoom: f32) {
+    let update_prefs = update_prefs_lock().clone();
     let settings = Settings {
         mz_decimals: mz_decimals(),
         theme: ctx.options(|o| o.theme_preference).into(),
         zoom,
+        check_for_updates: update_prefs.check_for_updates,
+        last_update_check: update_prefs.last_check,
+        dismissed_update_version: update_prefs.dismissed_version,
     };
     let Some(path) = path() else { return };
     let saved = path
@@ -246,8 +303,36 @@ mod tests {
             mz_decimals: 3,
             theme: ThemeChoice::Light,
             zoom: 1.15,
+            check_for_updates: false,
+            last_update_check: Some(1_760_000_000),
+            dismissed_update_version: Some("0.4.0".into()),
         };
         assert_eq!(parse(&serde_json::to_vec(&s).unwrap()), s);
+    }
+
+    #[test]
+    fn the_update_preferences_default_to_on_and_survive_bad_values() {
+        let s = parse(b"{}");
+        assert!(s.check_for_updates);
+        assert_eq!(
+            (s.last_update_check, s.dismissed_update_version),
+            (None, None)
+        );
+        let s = parse(br#"{"check_for_updates":false,"last_update_check":1760000000,"dismissed_update_version":"0.4.0"}"#);
+        assert!(!s.check_for_updates);
+        assert_eq!(s.last_update_check, Some(1_760_000_000));
+        assert_eq!(s.dismissed_update_version.as_deref(), Some("0.4.0"));
+        // Unreadable values cost only themselves.
+        let s = parse(br#"{"check_for_updates":"no","last_update_check":-5,"dismissed_update_version":7,"theme":"dark"}"#);
+        assert!(
+            s.check_for_updates,
+            "an unreadable switch keeps the default"
+        );
+        assert_eq!(
+            (s.last_update_check, s.dismissed_update_version),
+            (None, None)
+        );
+        assert_eq!(s.theme, ThemeChoice::Dark);
     }
 
     #[test]
