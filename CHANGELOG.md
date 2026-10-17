@@ -85,6 +85,9 @@ quantification workbench with a command-line interface and two MCP servers.
 
 ### Changed
 
+- Branding copy: the slogan "Analyze more. Click less." and the line "AI-assisted LC-MS analysis, across instrument vendors, with traceable results" on the README, the website
+  home page (with OpenGraph tags), the About window and the `chromascope-cli` help; the package
+  descriptions and the citation abstract say the same in one factual line.
 - The Reports tab is now **Audit package**; its workflow step, window title and documentation use
   that single name.
 - Window titles use sentence case ("Plot properties", "m/z range filter").

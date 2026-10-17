@@ -7,11 +7,11 @@ message: "If you use this software, please cite it using the metadata from this 
 type: software
 title: "Chromascope: an open-source, AI-ready LC-MS workbench"
 abstract: >-
-  Chromascope is a free, open-source LC-MS workbench written in Rust. It opens mzML data,
-  draws chromatograms and spectra, integrates peaks, builds calibration curves and runs
-  quantification and QC, as a desktop app, a JSON command-line tool, or over the Model Context
-  Protocol (MCP) for AI assistants. Results keep their units, settings, software versions and
-  source hashes.
+  Chromascope is a free, open-source application for AI-assisted LC-MS analysis, across
+  instrument vendors, with traceable results. It reads mzML directly and vendor files through
+  ProteoWizard MSConvert, integrates peaks, builds calibration curves and runs quantification
+  and QC, as a desktop app, a JSON command-line tool, or over the Model Context Protocol (MCP)
+  for AI assistants.
 authors:
   - family-names: Cseresznye
     given-names: Adam
