@@ -1,10 +1,12 @@
 ---
-title: A free LC-MS workbench
+title: Analyze more. Click less.
 ---
 
-# Chromascope
+# Analyze more. Click less.
 
-*A free LC-MS workbench that shows its work.*
+*AI-assisted LC-MS analysis, across instrument vendors, with traceable results.*
+
+<small>Free. Open-source. Built for scientists.</small>
 
 Chromascope opens your LC-MS data, draws chromatograms and spectra, integrates peaks, builds calibration curves and reports concentrations. Every number keeps its units, its settings and the hash of the file it came from. You can use it like any desktop program, or let an AI assistant drive the same window for you.
 

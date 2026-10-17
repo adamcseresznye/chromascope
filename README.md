@@ -1,6 +1,10 @@
 # Chromascope
 
-**Let an AI assistant drive your LC-MS analysis — while every number stays traceable.**
+**Analyze more. Click less.**
+
+AI-assisted LC-MS analysis, across instrument vendors, with traceable results.
+
+*Free. Open-source. Built for scientists.*
 
 Chromascope is a free, open-source LC-MS workbench written in Rust. Open mzML data, draw chromatograms and spectra, integrate peaks, build calibration curves, quantify and run QC. Use it like a normal desktop app, script it from the command line, or hand the controls to an AI assistant over [MCP](https://modelcontextprotocol.io). The assistant does the reasoning; Chromascope does the maths, keeps the evidence and records exactly what happened.
 

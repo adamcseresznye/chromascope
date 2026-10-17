@@ -2,7 +2,7 @@
 #   mkdocs build --strict -f website/mkdocs.yml
 # (the changelog page includes the root CHANGELOG.md, whose path is relative to that folder).
 site_name: Chromascope
-site_description: "Chromascope is a free LC-MS workbench. Look at chromatograms and spectra, integrate peaks, quantify with calibration curves, and let an AI assistant do the same through MCP."
+site_description: "Chromascope: AI-assisted LC-MS analysis, across instrument vendors, with traceable results. Free and open source."
 site_url: https://chromascope-ms.github.io/chromascope/
 repo_url: https://github.com/chromascope-ms/chromascope
 repo_name: chromascope-ms/chromascope
@@ -14,6 +14,7 @@ strict: true
 
 theme:
   name: material
+  custom_dir: overrides
   language: en
   logo: assets/icon.png
   favicon: assets/icon.png

@@ -1,0 +1,24 @@
+{#- OpenGraph and Twitter card tags, so that a link to the site shows a title and a description. -#}
+{% extends "base.html" %}
+
+{% block extrahead %}
+  {% set description = page.meta.description if page and page.meta and page.meta.description else config.site_description %}
+  {% if page and page.is_homepage %}
+    {% set social_title = config.site_name ~ ": Analyze more. Click less." %}
+  {% elif page and page.title %}
+    {% set social_title = page.title ~ " - " ~ config.site_name %}
+  {% else %}
+    {% set social_title = config.site_name %}
+  {% endif %}
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="{{ config.site_name }}">
+  <meta property="og:title" content="{{ social_title }}">
+  <meta property="og:description" content="{{ description }}">
+  {% if page and page.canonical_url %}
+    <meta property="og:url" content="{{ page.canonical_url }}">
+  {% endif %}
+  <meta property="og:image" content="{{ config.site_url }}assets/icon.png">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="{{ social_title }}">
+  <meta name="twitter:description" content="{{ description }}">
+{% endblock %}
