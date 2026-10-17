@@ -2,7 +2,7 @@
 Type=Application
 Name=Chromascope
 GenericName=Mass spectrometry viewer
-Comment=Inspect chromatograms and spectra, integrate peaks and quantify
+Comment=AI-assisted LC-MS analysis, across instrument vendors, with traceable results
 Exec=chromascope %F
 Icon=chromascope
 Terminal=false

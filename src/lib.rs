@@ -1,5 +1,5 @@
 // src/lib.rs
-//! Chromascope - Mass spectrometry data visualization tool
+//! Chromascope - AI-assisted LC-MS analysis, across instrument vendors, with traceable results.
 //!
 //! This library provides the core functionality for parsing MzML files,
 //! extracting chromatograms, and processing mass spectrometry data.

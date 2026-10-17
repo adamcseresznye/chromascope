@@ -5,7 +5,7 @@ default-run = "chromascope"
 authors = ["Adam Cseresznye"]
 edition = "2021"
 license = "GPL-3.0-only"
-description = "LC-MS chromatogram and spectrum viewer with peak integration, calibration-based quantification, QC and MCP servers for AI clients"
+description = "AI-assisted LC-MS analysis, across instrument vendors, with traceable results: viewer, quantification, QC and MCP servers"
 repository = "https://github.com/chromascope-ms/chromascope"
 homepage = "https://chromascope-ms.github.io/chromascope/"
 readme = "README.md"
@@ -51,7 +51,7 @@ targets = ["x86_64-unknown-linux-gnu"]
 [package.metadata.deb]
 copyright = "Adam Cseresznye"
 license-file = ["LICENSE", "0"]
-extended-description = "Chromascope inspects LC-MS chromatograms and spectra, integrates peaks and quantifies with calibration curves. Includes the command-line interface and the MCP servers for AI clients."
+extended-description = "AI-assisted LC-MS analysis, across instrument vendors, with traceable results. Chromascope inspects LC-MS chromatograms and spectra, integrates peaks and quantifies with calibration curves, and includes the command-line interface and the MCP servers for AI clients."
 section = "science"
 priority = "optional"
 depends = "$auto"
@@ -68,7 +68,7 @@ assets = [
 
 # RPM package, built by the release workflow with `cargo generate-rpm`.
 [package.metadata.generate-rpm]
-summary = "LC-MS chromatogram and spectrum viewer with quantification"
+summary = "AI-assisted LC-MS analysis, across instrument vendors, with traceable results"
 assets = [
     { source = "target/release/chromascope", dest = "/usr/bin/chromascope", mode = "755" },
     { source = "target/release/chromascope-cli", dest = "/usr/bin/chromascope-cli", mode = "755" },
