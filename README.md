@@ -62,6 +62,30 @@ flowchart LR
   Project --> Delivery[JSON / CSV / TSV / SVG / HTML drafts]
 ```
 
+## Citation
+
+If Chromascope helps with work you publish, please cite it and name the version you used (**File**, **About Chromascope…**). The metadata are in [CITATION.cff](CITATION.cff), which GitHub shows under "Cite this repository".
+
+<!-- TODO: after the first release has been archived on Zenodo, add the DOI badge here, for example:
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.XXXXXXX.svg)](https://doi.org/10.5281/zenodo.XXXXXXX)
+and add the same concept DOI, and the year, to CITATION.cff, the BibTeX entry and the plain-text citation below. -->
+
+Plain text:
+
+> Cseresznye, A. Chromascope: an open-source LC-MS workbench, version 0.3.0. https://github.com/chromascope-ms/chromascope
+
+BibTeX:
+
+```bibtex
+@software{cseresznye_chromascope,
+  author  = {Cseresznye, Adam},
+  title   = {Chromascope: an open-source LC-MS workbench},
+  version = {0.3.0},
+  url     = {https://github.com/chromascope-ms/chromascope},
+  license = {GPL-3.0-only}
+}
+```
+
 ## Licence
 
 Licensed under [GPL-3.0-only](LICENSE). [THIRD_PARTY_LICENSES.txt](THIRD_PARTY_LICENSES.txt) lists the notice of every dependency and of the embedded Inter and JetBrains Mono fonts.
