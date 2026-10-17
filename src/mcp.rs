@@ -15,7 +15,7 @@ use tokio::sync::oneshot;
 
 /// One dataset of the window: by the number it has in the running window, or by an id that
 /// survives restarts.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum DatasetRef {
     /// The `dataset_id` number from `list_datasets`. Valid only while the window stays open:
@@ -25,6 +25,21 @@ pub enum DatasetRef {
     /// file (the bare hex also works), or the UUID of a dataset of the open project. It names the
     /// same data after a restart, whatever number the window gave it.
     Stable(String),
+}
+/// Listed as one short inline type (a number or a string) instead of a definition repeated in
+/// every tool that takes a dataset; list_datasets explains the two forms.
+impl schemars::JsonSchema for DatasetRef {
+    fn inline_schema() -> bool {
+        true
+    }
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "DatasetRef".into()
+    }
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": ["integer", "string"]
+        })
+    }
 }
 impl From<usize> for DatasetRef {
     fn from(index: usize) -> Self {
@@ -873,7 +888,7 @@ pub struct ReviewQuantificationArgs {
 #[tool_router]
 impl McpServer {
     #[tool(
-        description = "List the mzML and mzML.gz files directly inside one directory, sorted by path (not recursive, at most 10000 files); with include_vendor=true also the vendor datasets (.raw, .d, .wiff and others) that open_files converts with msconvert. Use it first to find what can be opened, then pass the returned paths to open_files. Read-only; the directory must lie inside an --allow-root.",
+        description = "List mzML and mzML.gz files in one directory (not recursive, max 10000, sorted); include_vendor=true adds vendor data that open_files converts. Directory inside an --allow-root.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -891,7 +906,7 @@ impl McpServer {
         .await
     }
     #[tool(
-        description = "Change how traces are drawn: compare_samples, intensity scale (individual, shared_highest or shared_custom with a positive intensity_maximum), line width 0.5..10 and the active dataset's line colour. Presentation only; measured values are unchanged. Requires --allow-changes.",
+        description = "Change how traces are drawn: compare_samples, intensity scale, line width, the active dataset's line colour. Presentation only. Requires --allow-changes.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -909,7 +924,7 @@ impl McpServer {
         .await
     }
     #[tool(
-        description = "Re-activate a retained chromatogram trace of a dataset by its index from gui_state, restoring its original extraction parameters and full-resolution data. Use it to return to an earlier extraction without repeating it. Requires --allow-changes.",
+        description = "Re-activate a retained trace of a dataset by its gui_state index, restoring its extraction and data. Requires --allow-changes.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -925,7 +940,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Page through scan metadata of one dataset: native scan IDs, retention times in minutes, MS level, polarity, precursor ions, isolation windows, activation and scan windows. Use it to find scan indexes for spectrum or scan_metadata; limit 1..1000. Read-only.",
+        description = "Page scan metadata of one dataset (native ID, retention time in minutes, MS level, polarity, precursors, windows), limit 1..1000.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -941,7 +956,7 @@ impl McpServer {
         .await
     }
     #[tool(
-        description = "Read a page of the unsmoothed, full-resolution XIC behind one batch result, as [minutes, intensity] points; the areas are computed from this data, independent of detection smoothing. Use it to check a peak yourself; limit 1..10000. Read-only.",
+        description = "Page of the unsmoothed XIC behind one batch result as [minutes, intensity] points (limit 1..10000); areas are computed from it.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -960,7 +975,7 @@ impl McpServer {
         .await
     }
     #[tool(
-        description = "Save the batch quantification as a CSV file with method snapshot, current results, diagnostics and review status, using the same exporter as the GUI. Requires --allow-exports; the path must be a new file inside an --allow-root, and existing files are never overwritten.",
+        description = "Save the batch quantification as CSV (method snapshot, results, diagnostics, review status). Requires --allow-exports; new file inside an --allow-root.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -975,7 +990,7 @@ impl McpServer {
             .await
     }
     #[tool(
-        description = "Roll one batch result back to its automatically detected peak and original status, discarding any manual boundary set with review_quantification or in the GUI. Requires --allow-changes; fails while a batch runs.",
+        description = "Roll one batch result back to its automatic peak and original status. Requires --allow-changes; fails while a batch runs.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -992,7 +1007,7 @@ impl McpServer {
         .await
     }
     #[tool(
-        description = "Run 1 to 64 of the typed operations in order and return one outcome per operation (the schema of each is the operation object, e.g. {\"operation\":\"set_view\",...}). Use it to save round trips for a fixed sequence. Not a transaction: finished steps stay applied when a later one fails, no nesting, and each step needs the permission of its own tool.",
+        description = "Run 1-64 operations in order, one outcome each; saves round trips. Not a transaction (finished steps stay applied), no nesting; each step needs its own tool's permission.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -1006,7 +1021,7 @@ impl McpServer {
         .await
     }
     #[tool(
-        description = "Save the displayed chromatogram (or spectrum, with spectrum=true) as an SVG file. Use it to hand a figure to the person. Requires --allow-exports; the path must be a new file inside an --allow-root, and existing files are never overwritten.",
+        description = "Save the displayed chromatogram (or spectrum, with spectrum=true) as an SVG file. Requires --allow-exports; new file inside an --allow-root.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -1024,7 +1039,7 @@ impl McpServer {
         .await
     }
     #[tool(
-        description = "Undo the last integration that was applied through MCP, restoring the previous boundaries and measurement list. Fails if the workspace changed since, so unrelated edits are never discarded. Requires --allow-changes.",
+        description = "Undo the last integration applied through MCP; fails if the workspace changed since. Requires --allow-changes.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -1035,7 +1050,7 @@ impl McpServer {
         self.dispatch(Command::UndoIntegration {}).await
     }
     #[tool(
-        description = "List the integration measurements recorded in the window (dataset, trace, boundaries, area, extraction parameters). Use it to review what has been integrated so far, by the person or by MCP. Read-only.",
+        description = "List the recorded integration measurements: dataset, trace, boundaries, area, extraction parameters.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1046,7 +1061,7 @@ impl McpServer {
         self.dispatch(Command::Measurements {}).await
     }
     #[tool(
-        description = "Ask the running batch quantification to stop; results already completed are kept. Use it when a batch was started with wrong settings. Requires --allow-changes.",
+        description = "Stop the running batch quantification; finished results are kept. Requires --allow-changes.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -1058,7 +1073,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Load 1 to 64 datasets into the live window and return a dataset_id per file: mzML and mzML.gz directly, vendor data (.raw, .d, .wiff and others) after converting it with the msconvert the window has configured (a vendor run with several samples gives one dataset per sample). Use it before any other dataset tool; opening the same file twice creates a second dataset. Does not need --allow-changes, but every path must lie inside an --allow-root.",
+        description = "Load 1-64 datasets and return a dataset_id per file: mzML/mzML.gz directly, vendor data (.raw, .d, .wiff...) via the configured msconvert. Needs no --allow-changes; paths inside an --allow-root.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -1071,7 +1086,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Return file-level metadata for one dataset: scan count, retention-time range in minutes, m/z range, the scan filters present (MS level, polarity, precursor m/z, m/z window) and the chromatograms stored in the file (index, label, SRM Q1/Q3, point count). Use it to choose valid extraction parameters before extract_chromatogram; pass a stored chromatogram's index as native_chromatogram. Read-only.",
+        description = "Metadata of one dataset: scan count, retention-time and m/z ranges, scan filters present, stored chromatograms (index, label, SRM Q1/Q3; the index is native_chromatogram).",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1087,7 +1102,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Return the full metadata of a single scan by its zero-based index (native ID, retention time, MS level, polarity, precursor and instrument settings). Use it to inspect one scan you already know; use list_scans to browse many. Read-only.",
+        description = "Full metadata of one scan by zero-based index: native ID, retention time, MS level, polarity, precursor, instrument settings.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1104,7 +1119,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Make one loaded dataset the active dataset shown in the chromatogram and spectrum panels, and clear the current integration. Use it before extract_chromatogram with display=true or integrate with apply=true. Requires --allow-changes.",
+        description = "Make one dataset the active one in the chromatogram and spectrum panels and clear the integration. Requires --allow-changes.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -1120,7 +1135,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Extract a TIC, BPC or XIC chromatogram from one dataset with the GUI's extraction code, or with native_chromatogram a chromatogram stored in the file (SRM/MRM transitions), and keep the full-resolution result for chromatogram_data, integrate and export_csv. XIC needs mass plus tolerance_ppm or tolerance_mda; TIC/BPC take an optional mz_range; retention times are minutes. Read-only unless display=true, which shows the trace in the window and requires --allow-changes.",
+        description = "Extract a TIC, BPC or XIC from a dataset (or a stored SRM/MRM chromatogram via native_chromatogram) for chromatogram_data, integrate and export_csv. XIC needs mass and a tolerance. Read-only unless display=true (needs --allow-changes).",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -1165,7 +1180,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Read a page of the last extracted chromatogram of one dataset as [retention time in minutes, intensity] points, unsmoothed unless smoothing was requested at extraction. Use it after extract_chromatogram to get numbers instead of an image; limit 1..10000. Read-only.",
+        description = "Page of the last extracted chromatogram of a dataset as [minutes, intensity] points (limit 1..10000).",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1190,7 +1205,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Read one mass spectrum of a dataset, chosen by scan index or by retention time in minutes (exactly one of the two), as a page of [m/z, intensity] points; limit 1..10000. Use it to identify what elutes at a peak. Read-only unless display=true, which shows the spectrum in the window and requires --allow-changes.",
+        description = "Read one mass spectrum, by scan index or retention time in minutes (exactly one), as a page of [m/z, intensity] points (limit 1..10000). Shown in the window only with display=true (needs --allow-changes).",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -1218,7 +1233,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Zoom the plots: set the retention-time range (minutes), the m/z range and/or switch overlay mode, or with reset=true return to the automatic view (the Reset view and Reset zoom commands). Zoom in or out, and pan, by giving the range you want. Use it to frame a region before chromatogram_image or spectrum_image; it changes what the person sees, not any data. Requires --allow-changes.",
+        description = "Zoom the plots: retention-time range (minutes) and/or m/z range, overlay mode, or reset=true for the automatic view. Changes no data. Requires --allow-changes.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -1242,7 +1257,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Show or hide one dataset's trace in the comparison plot without closing it. Use it to declutter an overlay before taking an image. Requires --allow-changes.",
+        description = "Show or hide one dataset's trace in the comparison plot. Requires --allow-changes.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -1265,7 +1280,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Integrate a peak between two retention times (minutes) on the last extracted chromatogram of a dataset with a straight-chord baseline and return the area in intensity*minutes. Bounds must lie inside the extracted trace. With apply=false it only calculates; with apply=true it also records the measurement in the window (the dataset must be displayed) and requires --allow-changes.",
+        description = "Integrate a peak between two retention times (minutes) on a dataset's last extracted chromatogram, straight-chord baseline; returns the area in intensity*minutes. apply=true also records it (needs --allow-changes).",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -1289,7 +1304,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Save the last extracted chromatogram of a dataset (or its displayed spectrum, with spectrum=true) as a CSV file. Use it to give the person the raw numbers. Requires --allow-exports; the path must be a new file inside an --allow-root, and existing files are never overwritten.",
+        description = "Save a dataset's last extracted chromatogram (or its displayed spectrum, with spectrum=true) as CSV. Requires --allow-exports; new file inside an --allow-root.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -1311,7 +1326,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Apply a preset given as TOML text: it sets overlay, rows and columns and schedules the preset's traces to be extracted in the background for the open datasets (the reply only says scheduled; check gui_state afterwards). Use it to reproduce a saved setup. Requires --allow-changes; every open dataset must lie inside an --allow-root.",
+        description = "Apply a viewer preset (TOML text): sets overlay, rows and columns and schedules its traces for the open datasets (check gui_state). Requires --allow-changes.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -1324,7 +1339,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Start a batch quantification: a method as TOML text (analytes, windows, tolerances, smoothing, detection settings) run on the given dataset_ids. Results appear in the Quantification tab; poll with quantification_status. Replaces the results of the previous batch and requires --allow-changes; fails if a batch is already running.",
+        description = "Start a batch quantification: a method (TOML text) run on the given dataset_ids; results appear in the Quantification tab, poll with quantification_status. Replaces the previous results; requires --allow-changes.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -1347,7 +1362,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Correct the peak boundaries of one batch result by giving both start_minutes and end_minutes; the area and status are recomputed and the automatic result is kept for reset_quantification. Marking a result as human-reviewed is refused, because that must be done by a person in the GUI. Requires --allow-changes; fails while a batch runs or if the method changed.",
+        description = "Correct one batch result's peak with start_minutes and end_minutes (area and status recomputed, automatic result kept). Marking reviewed is refused: a person does that. Requires --allow-changes.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -1373,7 +1388,7 @@ impl McpServer {
         .await
     }
     #[tool(
-        description = "List the datasets loaded in the window: dataset_id, name, path, loading state, visibility, last extraction parameters and which one is active. Each dataset has a dataset_id number (valid while the window stays open) and a stable_id (the SHA-256 of its source file, valid after a restart); pass either as dataset_id to every other tool. Use it to look up ids after open_files or in a new session. Read-only.",
+        description = "List loaded datasets: dataset_id (valid while the window is open), stable_id (SHA-256 of the source, survives restarts), name, path, state, visibility, last extraction. Either id goes in dataset_id of any tool.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1384,7 +1399,7 @@ impl McpServer {
         self.dispatch(Command::ListDatasets {}).await
     }
     #[tool(
-        description = "Change how the plots are arranged: overlay, grid (automatic or fixed rows and columns, with a page for a fixed grid that holds more traces) or compare (samples by analytes), and which of the data files, trace settings and spectrum panels are shown, or focus mode. Use it to frame the window before chromatogram_image. Presentation only; no data change. Requires --allow-changes.",
+        description = "Arrange the plots (overlay, grid, compare) and show or hide the files, trace settings and spectrum panels; focus mode. Presentation only. Requires --allow-changes.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -1417,7 +1432,7 @@ impl McpServer {
         .await
     }
     #[tool(
-        description = "Keep the current extraction of a dataset in its list of retained traces, so a later extraction shows next to it instead of replacing it (extract_chromatogram with display=true already retains the previous trace). Use it before changing the extraction when you want to compare both. Requires --allow-changes.",
+        description = "Keep a dataset's current extraction as a retained trace so a later extraction shows next to it. Requires --allow-changes.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -1431,7 +1446,7 @@ impl McpServer {
         .await
     }
     #[tool(
-        description = "Delete one trace of a dataset from the workspace and from figures: a retained trace by trace_index (see gui_state), or the current extraction when trace_index is omitted. The extraction can be repeated; measurements already recorded stay. Requires --allow-changes.",
+        description = "Delete one trace of a dataset: a retained one by trace_index (see gui_state) or the current extraction. Requires --allow-changes.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -1446,7 +1461,7 @@ impl McpServer {
         .await
     }
     #[tool(
-        description = "Show or hide a single trace of a dataset in the plots and figures: a retained trace by trace_index (see gui_state), or the current extraction when trace_index is omitted. select_trace and set_visibility act on other things (the active trace, a whole dataset). Requires --allow-changes.",
+        description = "Show or hide one trace of a dataset: a retained one by trace_index (see gui_state) or the current extraction. Requires --allow-changes.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -1465,7 +1480,7 @@ impl McpServer {
         .await
     }
     #[tool(
-        description = "List the extraction presets and starter files you can use: the starter viewer preset and quantification method shipped with the program, the presets the preset editor opened or saved recently (those inside an --allow-root), and with directory the .toml files in that folder, each checked and classified as a viewer preset, a quantification method or unreadable. Use it to find a preset before get_preset or apply_preset. Read-only.",
+        description = "List extraction presets and starter files: shipped ones, recent ones inside an --allow-root and, with directory, the .toml files there, each classified.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1479,7 +1494,7 @@ impl McpServer {
         .await
     }
     #[tool(
-        description = "Read one preset or starter file as TOML text together with what it means: for a viewer preset its traces (name, acquisition mode, m/z, tolerance, filters), layout and overlay; for a quantification method its analytes. The text is validated, so a valid reply can be passed straight to apply_preset (viewer preset) or start_quantification (method). Read-only; a path must be a .toml file inside an --allow-root.",
+        description = "Read a preset or starter .toml file with its meaning (traces and layout, or a method's analytes); a valid reply goes straight to apply_preset or start_quantification.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1493,7 +1508,7 @@ impl McpServer {
         .await
     }
     #[tool(
-        description = "Save a viewer extraction preset, given as TOML text, as a new .toml file, the file the preset editor's Save writes; the text is validated first and nothing is written if it is not a valid viewer preset. Use it to keep a trace setup for the person to open in the preset editor. Requires --allow-exports; the path must be a new .toml file inside an --allow-root, and existing files are never overwritten.",
+        description = "Save a viewer preset (TOML text) as a new .toml file; validated first. Requires --allow-exports; new file inside an --allow-root.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -1508,7 +1523,7 @@ impl McpServer {
         .await
     }
     #[tool(
-        description = "Read the display preferences of the window: theme (system, light or dark), interface size in percent and the number of decimals shown for an m/z, with the values each can take. Use it before set_settings. Read-only.",
+        description = "Read the display preferences (theme, interface size in percent, m/z decimals) and the values each can take.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1519,7 +1534,7 @@ impl McpServer {
         self.dispatch(Command::GetSettings {}).await
     }
     #[tool(
-        description = "Change the display preferences, as the View menu does, and keep them for the next start: theme (system, light, dark), interface size in percent (90, 100, 115, 130) and m/z decimals (2 to 6). Nothing but how the window looks changes: stored data and exports keep full precision. All values are checked before any is applied. Requires --allow-changes.",
+        description = "Change and keep display preferences: theme (system, light, dark), interface size in percent (90, 100, 115, 130), m/z decimals (2-6). Requires --allow-changes.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -1535,7 +1550,7 @@ impl McpServer {
         .await
     }
     #[tool(
-        description = "Delete one integration measurement from the window's results list, as the Remove selected measurement button of the Integration results does; give its position in the list measurements returns. The trace and any later measurements stay, and undo_integration can no longer undo an integration recorded before the removal. Use it to take back a measurement you did not mean to record. Requires --allow-changes.",
+        description = "Delete one integration measurement by its position in measurements; the trace stays. Requires --allow-changes.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -1550,7 +1565,7 @@ impl McpServer {
             .await
     }
     #[tool(
-        description = "Clear the integration markers (start, end and area) from the active chromatogram without deleting any recorded measurement, as the Clear integration button and the Escape key do. Use it before taking a clean figure with chromatogram_image or export_figure. Requires --allow-changes.",
+        description = "Clear the integration markers from the active chromatogram; recorded measurements stay. Requires --allow-changes.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -1561,7 +1576,7 @@ impl McpServer {
         self.dispatch(Command::ClearIntegration {}).await
     }
     #[tool(
-        description = "Switch the window to another workspace, as the Analysis workflow menu and the tabs do: the Data explorer, the Quantification and QC tab (at its peak review, calibration or QC stage), the method editor, the Audit package or AI activity. Use it to show the person what you just computed, for instance after start_analysis put a calibration in the Quantification tab. Changes only what is on screen. Requires --allow-changes.",
+        description = "Switch the window to a workspace: Data explorer, Quantification and QC (at a stage), method editor, Audit package or AI activity. Requires --allow-changes.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -1579,7 +1594,7 @@ impl McpServer {
         .await
     }
     #[tool(
-        description = "Write the calibration and QC results shown in the Quantification tab to a new file, as the Export menus of its calibration and QC stages do: concentrations or calibration as CSV, QC as CSV or JSON, or every run or QC report with its review history as JSON. Use it to give the person a file of what start_analysis computed. Fails when the tab holds no such result. Requires --allow-exports; the path must be a new file inside an --allow-root, and existing files are never overwritten.",
+        description = "Write the Quantification tab's calibration or QC results to a new file (CSV or JSON, see kind); fails when the tab has none. Requires --allow-exports; new file inside an --allow-root.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -1597,7 +1612,7 @@ impl McpServer {
         .await
     }
     #[tool(
-        description = "Load saved calibration runs or QC reports into the Quantification tab, as Open targeted history and Open study / report do. Every run and report is checked against its own evidence (checksums, calculations) first and nothing is added if one fails; runs already in the tab are not added twice. Use it to bring back results saved with export_results. Requires --allow-changes; the file must be a .json file inside an --allow-root.",
+        description = "Load saved calibration runs or QC reports (.json from export_results) into the Quantification tab after checking each against its own evidence. Requires --allow-changes; file inside an --allow-root.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -1615,7 +1630,7 @@ impl McpServer {
         .await
     }
     #[tool(
-        description = "Clear something the window is showing: the mass spectrum (what Clear spectrum does: the spectrum panel is hidden and the chromatograms get the space) or the shared batch preset (what Clear batch preset does: traces are no longer extracted for every sample from one preset). Datasets, measurements and results stay. Requires --allow-changes; fails while an extraction runs.",
+        description = "Clear the mass spectrum panel or the shared batch preset; datasets, measurements and results stay. Requires --allow-changes.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -1630,7 +1645,7 @@ impl McpServer {
             .await
     }
     #[tool(
-        description = "Save the window's integration measurements (file, trace, start and end in minutes, area, parameters) as a new CSV file, the file the Integration results window's Export CSV writes. Use it to hand the person the areas you recorded with integrate. Requires --allow-exports; the path must be a new .csv file inside an --allow-root, and existing files are never overwritten.",
+        description = "Save the integration measurements (file, trace, start/end in minutes, area, parameters) as a new CSV. Requires --allow-exports; new .csv file inside an --allow-root.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -1645,7 +1660,7 @@ impl McpServer {
             .await
     }
     #[tool(
-        description = "Build the audit package of a project in a new folder, as Export audit package does: a readable report.html, the machine-readable evidence (revisions, results, CSV, SVG) and checksums.json, optionally with the raw sources. Open warnings in the window (unresolved peaks, unreviewed results, failed QC) stop the export until acknowledge_warnings is true; they are then saved in the bundle as review-warnings.json. Runs in the background and replies when done. Requires --allow-exports; the destination must be a new folder inside an --allow-root, existing folders are never overwritten.",
+        description = "Build the audit package in a new folder (report.html, evidence, checksums.json; sources optional). Open warnings need acknowledge_warnings=true. Requires --allow-exports; folder inside an --allow-root.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -1670,7 +1685,7 @@ impl McpServer {
         .await
     }
     #[tool(
-        description = "Check an audit package: every file listed in checksums.json is present and unchanged, and no file is missing or extra. Use it after build_bundle, or to check a bundle received from someone else. Read-only; the folder must lie inside an --allow-root.",
+        description = "Check an audit package: every file in checksums.json present and unchanged, none missing or extra. Folder inside an --allow-root.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1685,7 +1700,7 @@ impl McpServer {
             .await
     }
     #[tool(
-        description = "Recompute one retained result of a project from its verified source and compare it with the stored output, as Reprocess and compare retained evidence does; the reply says whether the result was reproduced exactly. Nothing in the project changes. Needs the same program version that produced the result. Read-only; the project and its datasets must lie inside an --allow-root.",
+        description = "Recompute a retained project result from its verified source and compare it with the stored output. Needs the program version that made it. Project inside an --allow-root.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1704,7 +1719,7 @@ impl McpServer {
         .await
     }
     #[tool(
-        description = "Create a project from the current workspace: a new project file and its _data folder, holding the open datasets (registered with their SHA-256), the Quantification and QC results, AI review proposals and the first revision, as the Create project command does. Use it to keep an analysis that open_project, inspect_project and build_bundle can return to. Fails while an import or analysis runs, and when a dataset of the workspace lies outside the --allow-roots. Requires --allow-project-writes; the path must be a new .json file inside an --allow-root.",
+        description = "Create a project (file plus _data folder) from the workspace: datasets, results, AI proposals, first revision. Fails while work runs. Requires --allow-project-writes; new .json path inside an --allow-root.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -1719,7 +1734,7 @@ impl McpServer {
             .await
     }
     #[tool(
-        description = "Open a project in the window as the Open project command does: its datasets are reopened, saved Quantification, QC and review results restored, and the reply comes when everything is loaded. Every dataset the project registers must lie inside an --allow-root, or nothing is changed. Use inspect_project to read a project without opening it. Requires --allow-changes; replaces the current workspace, so save_session or save_project first if it matters.",
+        description = "Open a project in the window; every dataset must be inside an --allow-root or nothing changes. Replaces the workspace. Requires --allow-changes.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -1731,7 +1746,7 @@ impl McpServer {
             .await
     }
     #[tool(
-        description = "Save the open project as a new revision holding the current workspace and results, as Save project does; earlier revisions stay restorable. Fails when no project is open, when the project changed since it was opened, while work is running, and when a dataset of the workspace lies outside the --allow-roots. Requires --allow-project-writes.",
+        description = "Save the open project as a new revision of the workspace and results; earlier revisions stay restorable. Requires --allow-project-writes.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -1742,7 +1757,7 @@ impl McpServer {
         self.dispatch(Command::SaveProject {}).await
     }
     #[tool(
-        description = "Reload the open project's results and review proposals into the window, as Refresh project activity does, so work another session committed or queued (for instance with commit_analysis or queue_review_proposal) appears in the Quantification tab and the AI activity view. Requires --allow-changes; fails when no project is open.",
+        description = "Reload the open project's results and review proposals into the window (work another session committed or queued). Requires --allow-changes.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -1753,7 +1768,7 @@ impl McpServer {
         self.dispatch(Command::RefreshProject {}).await
     }
     #[tool(
-        description = "Save a quantification method as a new .toml file: the method in the Quantification tab (the same file Save method writes), or with method_toml a method you give as text, checked first. Use it to keep a method for open_method or start_quantification. Requires --allow-exports; the path must be a new .toml file inside an --allow-root, and existing files are never overwritten.",
+        description = "Save a quantification method as a new .toml file: the Quantification tab's, or with method_toml one you give. Requires --allow-exports; new file inside an --allow-root.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -1768,7 +1783,7 @@ impl McpServer {
         .await
     }
     #[tool(
-        description = "Make a method file the Quantification tab's method, as the Open method command does; existing results keep the method they were measured with and are reported as coming from an earlier method. Refuses to replace edits that were never saved unless discard_unsaved is true, and fails while a batch runs. Requires --allow-changes; the file must be a valid .toml method inside an --allow-root.",
+        description = "Make a method .toml file the Quantification tab's method. Refuses to replace unsaved edits unless discard_unsaved=true. Requires --allow-changes.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -1783,7 +1798,7 @@ impl McpServer {
         .await
     }
     #[tool(
-        description = "Save the batch quantification (its method, every result with trace, automatic and manual peak, status and review state, and the samples) as a new .chromquant file, the file Save batch writes. Use it to keep results you can reload with load_batch. Fails while a batch runs. Requires --allow-exports; the path must be a new .chromquant file inside an --allow-root, and existing files are never overwritten.",
+        description = "Save the batch quantification (method, results, review state, samples) as a new .chromquant file. Requires --allow-exports; new file inside an --allow-root.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -1794,7 +1809,7 @@ impl McpServer {
         self.dispatch(Command::SaveBatch { path: args.path }).await
     }
     #[tool(
-        description = "Replace the Quantification tab's method and results by a saved .chromquant batch, after checking every result against its method and trace. The source datasets it was measured from are reopened when they lie inside an --allow-root (others are reported as skipped; the stored results stay available). Requires --allow-changes; discards the current batch results, so save_batch first if they matter.",
+        description = "Replace the Quantification tab's method and results with a saved .chromquant batch after checking it. Requires --allow-changes; discards the current batch results.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -1805,7 +1820,7 @@ impl McpServer {
         self.dispatch(Command::LoadBatch { path: args.path }).await
     }
     #[tool(
-        description = "Save the viewer workspace (open datasets, current and retained traces, measurements, view settings) as a new .chromascope session file, the same file the Save viewer session command writes; the file is written complete or not at all. Use it to keep a state you can return to with load_session. Fails while an import or extraction is running. Requires --allow-exports; the path must be a new file inside an --allow-root, and existing files are never overwritten.",
+        description = "Save the workspace (datasets, traces, measurements, view) as a new .chromascope session file. Requires --allow-exports; new file inside an --allow-root.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -1817,7 +1832,7 @@ impl McpServer {
             .await
     }
     #[tool(
-        description = "Replace the whole viewer workspace with a saved .chromascope session: datasets are reopened from their source files, traces, measurements and view settings restored. The reply comes when everything is loaded and names any run that could not be restored. Every source file the session names must lie inside an --allow-root, or nothing is changed. Requires --allow-changes; discards the current workspace, so save_session first if it matters.",
+        description = "Replace the workspace with a saved .chromascope session; every source must be inside an --allow-root or nothing changes. Requires --allow-changes; discards the current workspace.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -1829,7 +1844,7 @@ impl McpServer {
             .await
     }
     #[tool(
-        description = "Return the whole current state of the window: datasets, active dataset, processing parameters, plot bounds, layout, retained traces (with their trace_index), measurements, the history of operations and the units used. Use it at the start of a session and whenever you are unsure what the person is looking at. Read-only.",
+        description = "Whole state of the window: datasets, active dataset, processing, plot bounds, layout, retained traces (trace_index), measurements, history, units. Use it at session start.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1840,7 +1855,7 @@ impl McpServer {
         self.dispatch(Command::GuiState {}).await
     }
     #[tool(
-        description = "Render the chromatogram currently shown in the window as a PNG image, with the GUI's own plotting code, plus the plot state. Use it for visual review after set_view or extract_chromatogram with display=true. Read-only; nothing is written to disk.",
+        description = "Render the chromatogram shown in the window as a PNG with the plot state; nothing is written to disk.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1851,7 +1866,7 @@ impl McpServer {
         self.dispatch(Command::PlotImage { spectrum: false }).await
     }
     #[tool(
-        description = "Render the mass spectrum currently shown in the window as a PNG image, with the GUI's own plotting code, plus the plot state. Use it for visual review after spectrum with display=true. Read-only; nothing is written to disk.",
+        description = "Render the mass spectrum shown in the window as a PNG with the plot state; nothing is written to disk.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1862,7 +1877,7 @@ impl McpServer {
         self.dispatch(Command::PlotImage { spectrum: true }).await
     }
     #[tool(
-        description = "Poll the batch quantification: progress, method signature and every result with its automatic and current peak, status, diagnostic and review state. Use it after start_quantification and to find a result_index for the other quantification tools. Read-only.",
+        description = "Poll the batch quantification: progress, method signature and every result with its peak, status and review state; gives the result_index for the other quantification tools.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1896,6 +1911,7 @@ impl ServerHandler for McpServer {
         // already filtered and sorted. The desktop tools come first, then the engine's.
         let mut listed = self.engine.list_tools(request, context).await?;
         let mut tools = self.tool_router.list_all();
+        tools.iter_mut().for_each(crate::engine_mcp::compact_tool);
         tools.append(&mut listed.tools);
         listed.tools = tools;
         Ok(listed)
@@ -2060,8 +2076,7 @@ pub struct ListPresetsArgs {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct GetPresetArgs {
-    /// `example:viewer` or `example:quantification` for the starter files shipped with the
-    /// program, or the path of a .toml file inside an --allow-root.
+    /// `example:viewer`, `example:quantification` or a .toml file inside an --allow-root.
     pub source: String,
 }
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -2095,17 +2110,15 @@ pub struct ShowWorkspaceArgs {
     /// `data_explorer`, `quantification`, `method_editor` (the method window of the
     /// Quantification tab), `audit_package` or `ai_activity`.
     pub workspace: String,
-    /// For `quantification`: `review` (peak areas), `calibration` (calibration and
-    /// concentrations) or `qc` (batch QC); the tab's last stage when omitted.
+    /// Quantification stage: `review`, `calibration` or `qc`; the last one when omitted.
     pub stage: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ExportResultsArgs {
-    /// `concentrations_csv` or `calibration_csv` (the latest calibration run),
-    /// `targeted_history_json` (every run with its reviews), `qc_csv` or `qc_evidence_json`
-    /// (the selected QC report), `qc_history_json` (every QC report).
+    /// `concentrations_csv`, `calibration_csv` (latest run), `targeted_history_json` (all runs),
+    /// `qc_csv`, `qc_evidence_json` (selected report) or `qc_history_json` (all reports).
     pub kind: String,
     /// New file inside an --allow-root: .csv for the CSV kinds, .json for the JSON kinds.
     pub path: String,
@@ -2113,8 +2126,7 @@ pub struct ExportResultsArgs {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ImportResultsArgs {
-    /// `targeted_history_json` (a file written by export_results or Save targeted history) or
-    /// `qc_history_json` (a QC history or a single QC report).
+    /// `targeted_history_json` (calibration runs) or `qc_history_json` (QC reports).
     pub kind: String,
     /// Existing .json file inside an --allow-root.
     pub path: String,
@@ -2123,8 +2135,7 @@ pub struct ImportResultsArgs {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ClearDisplayArgs {
-    /// `spectrum` (clear the shown mass spectrum and give the chromatograms the space) or
-    /// `batch_preset` (stop sharing one preset's traces across the batch).
+    /// `spectrum` or `batch_preset`.
     pub what: String,
 }
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -2213,9 +2224,43 @@ pub struct SessionPathArgs {
     pub path: String,
 }
 
+/// The operation names a batch accepts: those of [`Command`], derived from its schema so the
+/// list cannot drift, without the batch itself (batches do not nest).
+fn batch_operation_names() -> Vec<String> {
+    let schema = serde_json::to_value(schemars::schema_for!(Command)).unwrap_or(Value::Null);
+    let mut names: Vec<String> = schema["oneOf"]
+        .as_array()
+        .map(|variants| {
+            variants
+                .iter()
+                .filter_map(|variant| crate::engine_mcp::schema_tag(variant, "operation"))
+                .filter(|name| name != "batch")
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+/// Schema of the commands of a batch as listed in `tools/list`: the allowed operation names
+/// instead of the full schema of every command. Each command is still parsed into [`Command`]
+/// when the tool is called, so the checks are the same as before.
+fn batch_commands_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 64,
+        "description": "Commands run in order. Each is the argument object of the matching tool plus \"operation\" (one of the names below), e.g. {\"operation\":\"set_view\",\"reset\":true}; see that tool's schema.",
+        "items": {
+            "type": "object",
+            "required": ["operation"],
+            "properties": {"operation": {"enum": batch_operation_names()}}
+        }
+    })
+}
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BatchArgs {
+    #[schemars(schema_with = "batch_commands_schema")]
     pub commands: Vec<Command>,
 }
 #[derive(Debug, Deserialize, schemars::JsonSchema)]

@@ -121,10 +121,19 @@ fn complete_targeted_workflow_review_qc_report_and_project_history() {
         let tools=listed["result"]["tools"].as_array().unwrap();
         for name in ["analytical_operation","start_analysis","commit_analysis"] {assert!(tools.iter().any(|t|t["name"]==name));}
         for name in ["start_untargeted","untargeted_features"] {assert_eq!(tools.iter().any(|t|t["name"]==name),chromascope::EXPERIMENTAL);}
-        let schema=tools.iter().find(|t|t["name"]=="start_analysis").unwrap()["inputSchema"].to_string();
+        let listed_size=serde_json::to_string(tools).unwrap().len();
+        assert!(listed_size<20_000,"the headless tools/list is {listed_size} bytes");
+        // tools/list carries a short request schema; the complete one (all operations, hidden ones
+        // removed in the default build) is what analysis_capabilities returns.
+        for tool in ["start_analysis","prepare_review_proposal"] {
+            let listed_schema=tools.iter().find(|t|t["name"]==tool).unwrap()["inputSchema"].to_string();
+            assert!(listed_schema.len()<1000,"{tool} lists a {} byte schema",listed_schema.len());
+            assert!(!listed_schema.contains("targeted_batch"),"{tool} must not embed the operations");
+        }
+        let capabilities = client.call("analysis_capabilities", json!({})).await;
+        let schema=capabilities["result"]["structuredContent"]["request_schema"].to_string();
         for operation in ["targeted_batch","revise_chromatogram","evaluate_targeted_qc"] {assert!(schema.contains(operation));}
         for operation in ["analyze_statistics","search_spectral_library"] {assert_eq!(schema.contains(operation),chromascope::EXPERIMENTAL);}
-        let capabilities = client.call("analysis_capabilities", json!({})).await;
         assert_eq!(capabilities["result"]["structuredContent"]["workflows"].as_array().unwrap().len(),6);
         assert!(capabilities["result"]["structuredContent"]["response_schema"].is_object());
         let discovered=client.call("discover_datasets",json!({"directory":temp.path(),"offset":0,"limit":3})).await;

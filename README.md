@@ -8,11 +8,9 @@ https://github.com/user-attachments/assets/cfbe286f-962d-41b3-ad6f-ffa3f33bebf3
 
 <sub>Video not playing? Open [assets/demo.mp4](assets/demo.mp4) directly.</sub>
 
-![The Data explorer: the total ion chromatogram and an extracted ion chromatogram overlaid, and the mass spectrum of one scan](assets/screenshots/data-explorer.png)
+### What the demo shows (32 seconds)
 
-![Quantification and QC: the results of a two-sample batch, with the integrated peak of one result under review](assets/screenshots/quantification.png)
-
-<sub>Both pictures are screenshots of the real desktop window, showing the repository's small test file `test_file/data_dependent_02.mzML` (the second sample is a copy of it).</sub>
+On the left is an ordinary AI chat client, on the right the Chromascope desktop. The only thing typed is a plain-English request: *open `8.mzML`, extract the XIC for m/z 258.1109 (10 ppm), zoom into the main peak around 3.2 min, smooth it moderately, propose integration boundaries and calculate the area without making permanent changes.* The assistant opens the data, extracts the trace, compares the raw and the smoothed trace, and reports apex 3.1935 min, boundaries 3.11–3.36 min and an area of 409,563.44 a.u.·min with a straight-chord baseline. The area was calculated with `integrate(apply=false)`, a preview: the assistant proposed a result, it did not silently change your data. The video does not show quantification or QC, which run on the same engine.
 
 - [Why you might care](#why-you-might-care)
 - [Installation](#installation)
@@ -39,11 +37,6 @@ https://github.com/user-attachments/assets/cfbe286f-962d-41b3-ad6f-ffa3f33bebf3
 | **Quantify** | Weighted calibration, internal standards, qualifiers, dilution, batch QC rules |
 | **Deliver** | Verified project bundles and draft reports (JSON, CSV, TSV, SVG, HTML) |
 
-> **Status:** version `0.3.0` (see the [changelog](CHANGELOG.md)). Not instrument-validated. Installers and archives are published on the [Releases page](https://github.com/adamcseresznye/chromascope/releases).
-
-### What the demo shows (32 seconds)
-
-On the left is an ordinary AI chat client, on the right the Chromascope desktop. The only thing typed is a plain-English request: *open `8.mzML`, extract the XIC for m/z 258.1109 (10 ppm), zoom into the main peak around 3.2 min, smooth it moderately, propose integration boundaries and calculate the area without making permanent changes.* The assistant opens the data, extracts the trace, compares the raw and the smoothed trace, and reports apex 3.1935 min, boundaries 3.11–3.36 min and an area of 409,563.44 a.u.·min with a straight-chord baseline. The area was calculated with `integrate(apply=false)`, a preview: the assistant proposed a result, it did not silently change your data. The video does not show quantification or QC, which run on the same engine.
 
 ## Installation
 
@@ -57,7 +50,7 @@ Each release provides the desktop app together with the command-line interface a
 | **macOS** (Apple silicon and Intel) | `chromascope-<version>-macos-universal.dmg`, or the `.zip` | Drag **Chromascope** to **Applications**. The app is not notarised: open it once, dismiss the warning, then go to **System Settings → Privacy & Security** and choose **Open Anyway** (macOS 15 and later no longer offer right-click → Open). |
 | **Linux** (x86_64, aarch64) | `chromascope-<version>-linux-<arch>.deb`, `.rpm`, `.AppImage` or `.tar.gz` | `sudo apt install ./chromascope-…deb`, `sudo dnf install ./chromascope-…rpm`, or `chmod +x` the AppImage (it needs FUSE, or run it with `--appimage-extract-and-run`). |
 
-Every package contains the GPL-3.0 [LICENSE](LICENSE) and `THIRD_PARTY_LICENSES.txt`, the licence notices of the embedded fonts and the Rust dependencies. The release page also lists `SHA256SUMS.txt`. Release asset names changed from v0.2.0, which published only the GUI binary: use the new names above.
+Every package contains the GPL-3.0 [LICENSE](LICENSE) and `THIRD_PARTY_LICENSES.txt`, the licence notices of the embedded fonts and the Rust dependencies. The release page also lists `SHA256SUMS.txt`. Release asset names changed from v0.2.0, which published only the GUI binary: use the new names above. What changed in each version is in [CHANGELOG.md](CHANGELOG.md).
 
 ### Building from source
 
@@ -226,7 +219,7 @@ Jobs and the audit log are session-local, so export before shutdown. `commit_ana
 
 ### Tools
 
-`tools/list` returns generated JSON schemas with `read_only` and `destructive` annotations; unknown fields are rejected. Units: retention time in minutes, tolerance in ppm (or mDa with `tolerance_mda`), m/z in m/z, areas in intensity × minutes. The tools by area:
+`tools/list` returns generated JSON schemas with `read_only` and `destructive` annotations; unknown fields are rejected. The list is kept under 40 KB so that it fits comfortably in a model's context: `start_analysis` and `prepare_review_proposal` show a short `request` schema, `batch` lists the operation names it accepts, and `analysis_capabilities` returns the complete request schema. The server still validates every request against the full schema when the tool is called. Units: retention time in minutes, tolerance in ppm (or mDa with `tolerance_mda`), m/z in m/z, areas in intensity × minutes. The tools by area:
 
 | Area | Tools |
 |---|---|

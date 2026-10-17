@@ -142,3 +142,122 @@ fn experimental_workflows_are_hidden_on_the_desktop_server() {
         task.await.unwrap();
     });
 }
+
+/// The tool list is what an AI client reads before it does anything: it must stay small. The
+/// full engine request schema (about 38 KB) used to be embedded in `start_analysis` and in
+/// `prepare_review_proposal`, and every batch command schema in `batch`; now they are short and
+/// `analysis_capabilities` returns the complete schema. The requests are still parsed in full when
+/// a tool is called, so the checks are as strict as before.
+#[test]
+fn the_tool_list_stays_small_and_requests_are_still_validated_in_full() {
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let temp = tempfile::tempdir().unwrap();
+        let anchor = temp.path().join("anchor.mzML");
+        std::fs::write(&anchor, b"anchor").unwrap();
+        let (mut client, task) = connect(temp.path()).await;
+        let listed = client.rpc("tools/list", json!({})).await;
+        let tools = listed["result"]["tools"].as_array().unwrap();
+        let size = serde_json::to_string(tools).unwrap().len();
+        // The experimental build lists four more tools and more operations.
+        let limit = if chromascope::EXPERIMENTAL { 46_000 } else { 40_000 };
+        assert!(
+            size < limit,
+            "tools/list is {size} bytes (limit {limit}); shorten descriptions or schemas, do not embed the engine schema"
+        );
+        let find = |name: &str| tools.iter().find(|t| t["name"] == name).unwrap();
+        for name in ["start_analysis", "prepare_review_proposal"] {
+            let schema = find(name)["inputSchema"].to_string();
+            assert!(schema.len() < 1000, "{name} lists a {} byte schema", schema.len());
+            assert!(!schema.contains("targeted_batch"), "{name} embeds the operations");
+            assert_eq!(find(name)["inputSchema"]["properties"]["request"]["type"], "object");
+        }
+        // batch: the allowed operation names, not the schema of every command.
+        let batch = find("batch")["inputSchema"].clone();
+        assert!(batch.to_string().len() < 2500, "batch schema is {} bytes", batch.to_string().len());
+        let names: Vec<&str> = batch["properties"]["commands"]["items"]["properties"]["operation"]["enum"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        for needed in ["set_view", "extract_chromatogram", "integrate", "start_quantification"] {
+            assert!(names.contains(&needed), "batch does not list {needed}");
+        }
+        assert!(!names.contains(&"batch"), "batches do not nest");
+        // Every operation a batch lists is accepted by the parser (its arguments are checked
+        // when the command runs), so the list cannot drift from the real set.
+        let complete_schema = client.call("analysis_capabilities", json!({})).await;
+        assert!(complete_schema["result"]["structuredContent"]["request_schema"]["$defs"]
+            .to_string()
+            .contains("targeted_batch"));
+
+        // Validation did not loosen: each of these is refused and nothing is started.
+        let engine = |operation: Value| {
+            json!({"path": anchor, "request": {"version":1,"operation_id":uuid::Uuid::new_v4().to_string(),"actor":"AI","operation":operation}})
+        };
+        let refused = |reply: &Value| {
+            reply["error"].is_object() || reply["result"]["isError"] == true
+        };
+        for tool in ["start_analysis"] {
+            for (label, arguments) in [
+                ("unknown operation", engine(json!({"operation":"no_such_operation"}))),
+                (
+                    "unknown field in the request",
+                    {
+                        let mut arguments = engine(json!({"operation":"metadata"}));
+                        arguments["request"]["surprise"] = json!(true);
+                        arguments
+                    },
+                ),
+                ("request is not an object", json!({"path":anchor,"request":"metadata"})),
+                ("request missing", json!({"path":anchor})),
+                (
+                    "operation field of the wrong type",
+                    engine(json!({"operation":"extract","kind":5})),
+                ),
+            ] {
+                let reply = client.call(tool, arguments).await;
+                assert!(refused(&reply), "{tool}: {label} was accepted: {reply}");
+                assert!(
+                    reply["result"]["structuredContent"]["job_id"].is_null(),
+                    "{tool}: {label} started a job"
+                );
+            }
+        }
+        let outside = tempfile::tempdir().unwrap();
+        let elsewhere = outside.path().join("other.mzML");
+        std::fs::write(&elsewhere, b"x").unwrap();
+        let reply = client
+            .call(
+                "start_analysis",
+                json!({"path":elsewhere,"request":engine(json!({"operation":"metadata"}))["request"]}),
+            )
+            .await;
+        assert_eq!(reply["result"]["structuredContent"]["code"], "unauthorized", "{reply}");
+        for (label, commands) in [
+            ("empty", json!([])),
+            (
+                "nested",
+                json!([{"operation":"batch","commands":[{"operation":"list_datasets"}]}]),
+            ),
+            ("65 commands", json!(vec![json!({"operation":"list_datasets"}); 65])),
+        ] {
+            let reply = client.call("batch", json!({"commands":commands})).await;
+            assert_eq!(
+                reply["result"]["structuredContent"]["code"], "invalid_batch",
+                "batch {label}: {reply}"
+            );
+        }
+        for (label, commands) in [
+            ("unknown operation", json!([{"operation":"no_such_operation"}])),
+            ("missing field", json!([{"operation":"select_dataset"}])),
+            ("unknown field", json!([{"operation":"list_datasets","surprise":1}])),
+            ("no operation", json!([{"dataset_id":0}])),
+        ] {
+            let reply = client.call("batch", json!({"commands":commands})).await;
+            assert!(refused(&reply), "batch {label} was accepted: {reply}");
+        }
+        drop(client);
+        task.await.unwrap();
+    });
+}

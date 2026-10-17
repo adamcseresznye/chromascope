@@ -16,10 +16,21 @@ pub struct AnalysisArgs {
     /// Version-1 engine request with operation_id UUID, actor and typed operation.
     pub request: serde_json::Value,
 }
+/// Schema of an engine `request` parameter as listed in `tools/list`. The request is still parsed
+/// into the typed [`Request`] when the tool is called, so validation is as strict as before; only
+/// the ~38 KB schema is no longer repeated in every tool. `analysis_capabilities` returns the
+/// complete one.
+fn request_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "object",
+        "description": "Version-1 engine request {operation_id, actor, operation:{operation:<name>,...}}. Full schema: request_schema of analysis_capabilities; the server validates all of it."
+    })
+}
 #[derive(serde::Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ProposalArgs {
     pub path: String,
+    #[schemars(schema_with = "request_schema")]
     pub request: Request,
     pub expected_project_revision: Option<u64>,
     pub reason: String,
@@ -69,7 +80,7 @@ const EXPERIMENTAL_KINDS: &[&str] = &[
     "formula_candidates",
     "isotope_analysis",
 ];
-fn schema_tag(schema: &serde_json::Value, key: &str) -> Option<String> {
+pub(crate) fn schema_tag(schema: &serde_json::Value, key: &str) -> Option<String> {
     let property = schema.get("properties")?.get(key)?;
     property
         .get("const")
@@ -140,6 +151,57 @@ fn prune_unreferenced_definitions(schema: &mut serde_json::Value) {
                 .map(|(name, value)| (name.clone(), value.clone()))
                 .collect(),
         );
+    }
+}
+/// Removes what a client does not need from a tool's input schema: the `$schema` URI, the Rust
+/// integer and float formats (`uint8`, `double`, ...) with the `minimum: 0` of an unsigned
+/// integer, `additionalProperties: false` (the server rejects unknown fields anyway) and an
+/// empty `properties`. Types, ranges, required fields and descriptions stay.
+pub(crate) fn compact_schema(schema: &mut serde_json::Value) {
+    match schema {
+        serde_json::Value::Object(map) => {
+            map.remove("$schema");
+            if map.get("additionalProperties") == Some(&serde_json::Value::Bool(false)) {
+                map.remove("additionalProperties");
+            }
+            let object = map.get("type") == Some(&serde_json::json!("object"));
+            if object
+                && map
+                    .get("properties")
+                    .and_then(serde_json::Value::as_object)
+                    .is_some_and(|properties| properties.is_empty())
+            {
+                map.remove("properties");
+            }
+            let format = map
+                .get("format")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned);
+            if let Some(format) = format {
+                let numeric = format.starts_with("uint")
+                    || format.starts_with("int")
+                    || matches!(format.as_str(), "double" | "float");
+                if numeric {
+                    map.remove("format");
+                    if format.starts_with("uint")
+                        && map.get("minimum") == Some(&serde_json::json!(0))
+                    {
+                        map.remove("minimum");
+                    }
+                }
+            }
+            map.values_mut().for_each(compact_schema);
+        }
+        serde_json::Value::Array(items) => items.iter_mut().for_each(compact_schema),
+        _ => {}
+    }
+}
+/// [`compact_schema`] applied to a listed tool.
+pub(crate) fn compact_tool(tool: &mut Tool) {
+    let mut schema = serde_json::Value::Object((*tool.input_schema).clone());
+    compact_schema(&mut schema);
+    if let serde_json::Value::Object(map) = schema {
+        tool.input_schema = Arc::new(map);
     }
 }
 /// Schema as shown to clients: experimental operations and results are removed when disabled.
@@ -314,6 +376,7 @@ pub struct FeaturePageArgs {
 #[serde(deny_unknown_fields)]
 pub struct StartAnalysisArgs {
     pub path: String,
+    #[schemars(schema_with = "request_schema")]
     pub request: Request,
 }
 #[derive(serde::Deserialize, schemars::JsonSchema)]
@@ -525,7 +588,7 @@ impl EngineMcp {
 #[tool_router]
 impl EngineMcp {
     #[tool(
-        description = "Discover the complete shared-engine request JSON Schema, scientific units, modification policy and six agent workflow recipes. All operation variants are executable with start_analysis; legacy tools remain available.",
+        description = "Complete shared-engine request JSON Schema (request_schema), response schema, scientific units, policy and six workflow recipes. Every operation runs through start_analysis.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -542,7 +605,7 @@ impl EngineMcp {
         })))
     }
     #[tool(
-        description = "Read-only paginated discovery of mzML and mzML.gz files in one allowed directory. Sorted paths, byte counts; does not register or alter sources. Offsets refer to the returned listing SHA256; restart paging if directory changes.",
+        description = "Page mzML and mzML.gz files in one allowed directory (sorted paths, byte counts); offsets refer to the listing SHA-256, restart paging if the directory changes.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -589,7 +652,7 @@ impl EngineMcp {
         feature_reply(result)
     }
     #[tool(
-        description = "Start any typed shared-engine operation asynchronously. Returns job ID; use analysis_status, cancel_analysis and analysis_result. Computation retains an immutable proposal/result and never commits a project. Existing validation, replay, units and source authorization apply.",
+        description = "Start any typed engine operation as a job and return its job_id (analysis_status, analysis_result and cancel_analysis follow it). Never commits a project. Request schema: analysis_capabilities.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -637,7 +700,7 @@ impl EngineMcp {
         feature_reply(result)
     }
     #[tool(
-        description = "Read any retained analysis job's state, completed work units and explicit failure. Progress counts are kernel-dependent, not a percentage. Results are immutable and paged separately.",
+        description = "Read a retained job's state, completed work units and failure. Counts depend on the operation; they are not a percentage.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -666,7 +729,7 @@ impl EngineMcp {
         feature_reply(result)
     }
     #[tool(
-        description = "Request cooperative cancellation of any analysis job. Kernel cancellation boundaries apply; completion may win the race. Completed results and raw data are preserved.",
+        description = "Request cancellation of a job; completion may win the race. Finished results and raw data are kept.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -693,7 +756,7 @@ impl EngineMcp {
         feature_reply(result)
     }
     #[tool(
-        description = "Read an immutable job response by RFC6901 JSON pointer. Arrays page 1-1000 elements; strings page 1-1000 Unicode characters; objects return key names and one level of scalar values/array counts. Pointer / selects the literal empty key; empty string selects response. Response SHA256 binds every page to the original result, including parameters and provenance. No retained evidence is changed.",
+        description = "Read an immutable job response by RFC 6901 JSON pointer: arrays page 1-1000 elements, strings 1-1000 characters, objects return key names, scalars and array counts. The response SHA-256 binds every page.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -742,7 +805,7 @@ impl EngineMcp {
         feature_reply(result)
     }
     #[tool(
-        description = "Export a configured full-evidence project review draft as JSON and HTML content. Includes verified artifacts, parameters, source states, reviews and software lock digest. No writes. CLI project-bundle provides portable inputs.",
+        description = "Project review draft (full evidence, parameters, source states, reviews, software lock digest) as JSON and HTML content. Writes nothing.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -786,7 +849,7 @@ impl EngineMcp {
         })())
     }
     #[tool(
-        description = "Prepare a revision-bound review suggestion with original/proposed values, reason and evidence references. No result or project is modified. Save returned proposal JSON for the desktop AI activity review. Numerical validation uses the shared engine.",
+        description = "Prepare a revision-bound review suggestion with original and proposed values, reason and evidence references; nothing is modified.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -812,7 +875,7 @@ impl EngineMcp {
         })())
     }
     #[tool(
-        description = "Approve or reject a pending review proposal as a new project revision. Requires operator --allow-project-writes, actor/reason and unchanged project/evidence revisions. Approval identity is attributed, not authenticated. Preserve original results; use a new proposal for reversal.",
+        description = "Approve or reject a pending review proposal as a new project revision. Requires --allow-project-writes, actor, reason and unchanged revisions; approval is attributed, not authenticated.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -898,7 +961,7 @@ impl EngineMcp {
         })())
     }
     #[tool(
-        description = "Retain a pending review suggestion in a shared project without applying its analytical change. Requires --allow-project-writes and unchanged source/project revision. Desktop Refresh project activity exposes its evidence for approval/rejection. Returns the new revision-bound pending proposal.",
+        description = "Retain a pending review suggestion in a shared project without applying it. Requires --allow-project-writes and unchanged revisions.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -987,7 +1050,7 @@ impl EngineMcp {
         })())
     }
     #[tool(
-        description = "Commit a successful retained job to an existing project as a new reversible revision, with expected revision and attributed approval/reason. Requires operator --allow-project-writes. Preview cannot commit. Does not approve scientific release or erase flags. All source hashes/replay and project validation remain enforced.",
+        description = "Commit a successful retained job to an existing project as a new reversible revision (expected revision, actor, reason). Requires --allow-project-writes; hashes and validation stay enforced.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -1055,7 +1118,7 @@ impl EngineMcp {
         feature_reply(result)
     }
     #[tool(
-        description = "Page attributed session tool calls, parameters, observations, proposals, cancellations and applied project changes. In-memory session history; export with prepare_analysis_report before shutdown. Client approvals and AI statements are not independent evidence.",
+        description = "Page attributed session tool calls, observations, proposals and applied project changes. In-memory: export with prepare_analysis_report before shutdown.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1078,7 +1141,7 @@ impl EngineMcp {
         })())
     }
     #[tool(
-        description = "Prepare a reproducible JSON review-draft report from selected retained jobs. Includes original requests, numerical outputs/units/flags, errors or pending states, SHA256 checksums and session audit. AI explanation remains explicitly unverified. Returns content only, never overwrites files or represents an approved release. Large bundles require result/audit paging.",
+        description = "Prepare a reproducible JSON review draft from retained jobs: requests, outputs, units, flags, errors, checksums, session audit. The AI explanation stays marked unverified.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1311,7 +1374,7 @@ impl EngineMcp {
         feature_reply(result)
     }
     #[tool(
-        description = "Execute evaluate_qc (study), validate_method (explicit method_validation study), evaluate_targeted_qc (verified batch/rules), review_qc (report/expected_revision/rule_id/reason/acknowledged) or export_qc (report; CSV). QC decisions retain evidence/calculation/threshold/reason and required missing evidence is indeterminate. Also execute targeted_batch (sample sheet, targets, calibration), review_targeted (batch, expected_revision, sample, target, accepted, reason), export_targeted (batch; CSV) and shared engine metadata, spectrum, extract, integrate, quantify, process_chromatograms (traces/config), revise_chromatogram (analysis/expected_revision/correction/preview) or export_chromatographic_peaks (analyses; returns CSV text). Chromatography supports SG, AsLS/chord/quantile baselines, batch peaks, manual/reference bounds, accept and restore revisions. Missing intensity is null. Paths must be within allowed roots. Version 1 request matches CLI JSON; results preserve signal stages, units and history. Preview is never committed. No project writes or GUI changes.",
+        description = "Legacy synchronous form of start_analysis: runs one engine operation and returns its result.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1422,6 +1485,7 @@ impl ServerHandler for EngineMcp {
                 }
             }
         }
+        tools.iter_mut().for_each(compact_tool);
         tools.sort_by_key(|tool| {
             (
                 legacy
