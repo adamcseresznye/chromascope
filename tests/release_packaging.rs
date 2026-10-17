@@ -186,14 +186,51 @@ fn release_is_gated_on_tests_and_ci_covers_other_platforms_and_the_minimum_rust(
     assert!(msrv_job.contains(&format!("({msrv})")));
 }
 
+/// Every page of the website, with LF line ends.
+fn website_pages() -> Vec<(String, String)> {
+    fn walk(directory: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in fs::read_dir(directory).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else if path.extension().is_some_and(|e| e == "md") {
+                out.push(path);
+            }
+        }
+    }
+    let mut paths = vec![];
+    walk(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("website/content"),
+        &mut paths,
+    );
+    paths
+        .into_iter()
+        .map(|p| {
+            let text = fs::read_to_string(&p).unwrap().replace("\r\n", "\n");
+            (p.to_string_lossy().replace('\\', "/"), text)
+        })
+        .collect()
+}
+
 #[test]
 fn documentation_matches_the_shipped_app() {
+    // The README is a landing page since the website exists. What it used to carry for the
+    // installation and for the numbers is checked on the website pages that carry it now.
     let readme = read("README.md");
+    let site = website_pages();
+    let page = |name: &str| {
+        site.iter()
+            .find(|(path, _)| path.ends_with(name))
+            .unwrap_or_else(|| panic!("no website page {name}"))
+            .1
+            .clone()
+    };
     // The tab is called "Audit package"; "Reports…" and the old status line must be gone.
     assert!(!readme.contains("**Reports…**"));
     assert!(!readme.contains("preparing a release"));
-    assert!(readme.contains("**Audit package**"));
+    assert!(page("manual/audit-package.md").contains("**Audit package**"));
     // Installation covers the installers and the first-launch warnings of every platform.
+    let download = page("get-started/download.md");
     for needle in [
         ".msi",
         "administrator",
@@ -201,11 +238,16 @@ fn documentation_matches_the_shipped_app() {
         "Open Anyway",
         ".deb",
         ".AppImage",
-        "THIRD_PARTY_LICENSES.txt",
-        "CHANGELOG.md",
     ] {
-        assert!(readme.contains(needle), "README lacks {needle:?}");
+        assert!(
+            download.contains(needle),
+            "the download page lacks {needle:?}"
+        );
     }
+    assert!(page("about/licence.md").contains("THIRD_PARTY_LICENSES.txt"));
+    assert!(readme.contains("THIRD_PARTY_LICENSES.txt"));
+    assert!(readme.contains("CHANGELOG.md"));
+    assert!(readme.contains("https://chromascope-ms.github.io/chromascope/"));
     // macOS 15+ removed right-click > Open: the workflow comment may only say so, not advise it.
     let workflow = read(".github/workflows/release.yml");
     assert!(workflow.contains("Open Anyway"));
@@ -227,12 +269,17 @@ fn documentation_matches_the_shipped_app() {
     assert!(changelog.contains(&format!("## [{version}]")));
     assert!(changelog.contains("## [0.2.0]") && changelog.contains("## [0.1.0]"));
 
-    // Numerical behaviour that users can run into is written down.
-    assert!(readme.contains("within **0.01 Da**"));
-    assert!(readme.contains("double precision and rounds once"));
-    // Names the app no longer uses stay out of the README, which now holds the feature overview.
-    assert!(!readme.contains("Reports and AI activity"));
-    assert!(!readme.contains("Project reports and delivery"));
+    // Numerical behaviour that users can run into is written down (in the manual's Data explorer
+    // page; the README used to write "within **0.01 Da**" in bold, which the website reserves
+    // for labels of the window).
+    let explorer = page("manual/data-explorer.md");
+    assert!(explorer.contains("within 0.01 Da"));
+    assert!(explorer.contains("double precision and rounds once"));
+    // Names the app no longer uses stay out of the README and of every website page.
+    for text in std::iter::once(&readme).chain(site.iter().map(|(_, text)| text)) {
+        assert!(!text.contains("Reports and AI activity"));
+        assert!(!text.contains("Project reports and delivery"));
+    }
 }
 
 /// The desktop program looks for a newer release once a day. Hosted runs must not: the tests

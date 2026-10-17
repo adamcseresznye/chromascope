@@ -16,6 +16,15 @@ const TRACE_POINT_LIMIT: usize = 10_000;
 /// A resource larger than this is refused rather than sent whole.
 const RESOURCE_LIMIT: usize = 16 * 1024 * 1024;
 
+/// The resources without a placeholder, in the order `list` publishes them (each appears once
+/// the window holds what it names). The others are [`TEMPLATES`].
+pub(crate) const STATIC_URIS: [&str; 4] = [
+    "chromascope://datasets",
+    "chromascope://quantification",
+    "chromascope://qc",
+    "chromascope://project",
+];
+
 /// URI templates, for clients that build URIs themselves.
 pub(crate) const TEMPLATES: &[(&str, &str, &str)] = &[
     (
@@ -63,7 +72,7 @@ fn dataset_segment(b: &GuiBridge, id: usize) -> String {
 
 pub(super) fn list(app: &MzViewerApp, b: &GuiBridge) -> Value {
     let mut resources = vec![resource(
-        "chromascope://datasets".into(),
+        STATIC_URIS[0].into(),
         "open datasets".into(),
         "Every open dataset with its number, stable id, path, loading state and last extraction.",
     )];
@@ -90,7 +99,7 @@ pub(super) fn list(app: &MzViewerApp, b: &GuiBridge) -> Value {
     let runs = app.quant.remote_batches();
     if app.quant.has_results() || !runs.is_empty() {
         resources.push(resource(
-            "chromascope://quantification".into(),
+            STATIC_URIS[1].into(),
             "quantification results".into(),
             "The batch quantification results, the method and a list of the calibration runs.",
         ));
@@ -105,7 +114,7 @@ pub(super) fn list(app: &MzViewerApp, b: &GuiBridge) -> Value {
     let reports = app.quant.remote_qc_reports();
     if !reports.is_empty() {
         resources.push(resource(
-            "chromascope://qc".into(),
+            STATIC_URIS[2].into(),
             "QC reports".into(),
             "The QC reports of the Quantification tab with their verdicts.",
         ));
@@ -119,7 +128,7 @@ pub(super) fn list(app: &MzViewerApp, b: &GuiBridge) -> Value {
     }
     if let Some(project) = app.project.revision() {
         resources.push(resource(
-            "chromascope://project".into(),
+            STATIC_URIS[3].into(),
             "open project".into(),
             "The open project: id, revision, registered datasets and results.",
         ));

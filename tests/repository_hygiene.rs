@@ -350,10 +350,28 @@ fn no_tracked_file_refers_to_the_docs_folder() {
         "references to the untracked folder:\n{}",
         offenders.join("\n")
     );
-    // Every ignore rule for the folder is the single one line.
+    // Every ignore rule for the folder is the single one line, anchored to the root so that the
+    // website folder (website/content/...) is not caught by it.
     let ignore = read(".gitignore");
     let rules: Vec<&str> = ignore.lines().filter(|l| l.contains("docs")).collect();
-    assert_eq!(rules, [needle.as_str()], "one rule keeps the folder out");
+    let anchored = ["/", needle.as_str()].concat();
+    assert_eq!(rules, [anchored.as_str()], "one rule keeps the folder out");
+    if ignored("probe.mzML").is_some() {
+        let root_note = ["do", "cs/RELEASING.md"].concat();
+        let nested = ["website/content/do", "cs/page.md"].concat();
+        assert_eq!(
+            ignored(&root_note),
+            Some(true),
+            "{root_note} stays untracked"
+        );
+        for tracked in [
+            "website/mkdocs.yml",
+            "website/content/index.md",
+            nested.as_str(),
+        ] {
+            assert_eq!(ignored(tracked), Some(false), "{tracked} must be trackable");
+        }
+    }
 }
 
 #[test]

@@ -442,6 +442,12 @@ fn has_extension(path: &Path, extension: &str) -> Result<(), String> {
         Err(format!("The file name must end in .{extension}"))
     }
 }
+/// The addresses of the resources that have no placeholder. The others are in the server's
+/// `resources/templates/list`; both are checked against the website's MCP guide.
+pub fn static_resource_uris() -> &'static [&'static str] {
+    crate::gui::remote::static_resource_uris()
+}
+
 /// Whether `path` is an existing file or directory with a vendor extension.
 pub fn is_vendor_dataset(path: &Path) -> bool {
     path.exists()

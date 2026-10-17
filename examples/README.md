@@ -73,7 +73,7 @@ are a JSON array using the `qc::Rule` schema. The helper discovers schemas, runs
 real asynchronous jobs, retrieves evidence, optionally evaluates QC and retains
 CSV, audit, transcript and draft report. It demonstrates agent-facing orchestration;
 no language model or automatic scientific approval is embedded. See the
-[MCP section of the README](../README.md#mcp-let-an-ai-client-drive-chromascope). For visual
+[MCP guide on the website](https://chromascope-ms.github.io/chromascope/mcp/). For visual
 agent interaction use `mcp_visual_workflow.py`.
 
 ## Other operational slices

@@ -30,7 +30,7 @@ TargetedBatch comparisons explicitly exclude only /batch/batch_id and
 parameters, flags, reviews and versions are compared exactly. Generated IDs/time
 inside other operations can still make comparisons fail. This is not a numerical-tolerance or scientific-equivalence
 claim. External OpenMS/statistics operations require the original compatible
-Python/library runtimes documented in the README and retained provenance.
+Python/library runtimes documented on the project website (Limitations) and in the retained provenance.
 Cargo.lock and its SHA256 are exported; bundled software is not installed.
 Portable exports also include a local software source snapshot (src, examples and
 assets, Cargo.toml, Cargo.lock, LICENSE), with file checksums and a headless build

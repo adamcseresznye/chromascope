@@ -17,8 +17,12 @@ data/
 target/
 __pycache__/
 
-# The maintainer's own notes, plans and evidence stay on disk and out of the repository.
-docs/
+# The maintainer's own notes, plans and evidence stay on disk and out of the repository. The rule
+# is anchored with a slash: it covers the root folder only, so website/ and its pages are tracked.
+/docs/
+
+# The built website
+/website/site/
 
 # Mass spectrometry data: never commit acquisitions by accident. Patterns match at any depth;
 # a plain ".mzML" would only match a file with exactly that name. The small authored fixtures

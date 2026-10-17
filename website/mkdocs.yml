@@ -1,0 +1,104 @@
+# The Chromascope website. Build it from the repository root:
+#   mkdocs build --strict -f website/mkdocs.yml
+# (the changelog page includes the root CHANGELOG.md, whose path is relative to that folder).
+site_name: Chromascope
+site_description: "Chromascope is a free LC-MS workbench. Look at chromatograms and spectra, integrate peaks, quantify with calibration curves, and let an AI assistant do the same through MCP."
+site_url: https://chromascope-ms.github.io/chromascope/
+repo_url: https://github.com/chromascope-ms/chromascope
+repo_name: chromascope-ms/chromascope
+edit_uri: edit/main/website/content/
+copyright: Chromascope is free software under the GPL-3.0-only licence.
+docs_dir: content
+site_dir: site
+strict: true
+
+theme:
+  name: material
+  language: en
+  logo: assets/icon.png
+  favicon: assets/icon.png
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.top
+    - navigation.indexes
+    - navigation.footer
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.action.edit
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.keys
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.snippets:
+      base_path: ["."]
+      check_paths: true
+
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+
+extra_css:
+  - stylesheets/extra.css
+extra_javascript:
+  - javascripts/download.js
+
+nav:
+  - Home: index.md
+  - Get started:
+      - Download and install: get-started/download.md
+      - Getting started: get-started/getting-started.md
+  - User manual:
+      - manual/index.md
+      - Data explorer: manual/data-explorer.md
+      - Quantification and QC: manual/quantification.md
+      - Audit package and projects: manual/audit-package.md
+      - Vendor files: manual/vendor-files.md
+      - Command line: manual/command-line.md
+      - Settings: manual/settings.md
+      - Troubleshooting and FAQ: manual/troubleshooting.md
+      - Limitations: manual/limitations.md
+  - AI assistants (MCP):
+      - What an AI can do: mcp/index.md
+      - Setup: mcp/setup.md
+      - Example prompts: mcp/example-prompts.md
+      - Built-in workflow prompts: mcp/workflow-prompts.md
+      - Resources: mcp/resources.md
+      - Writing good prompts: mcp/writing-good-prompts.md
+      - Safety and data: mcp/safety.md
+      - MCP troubleshooting: mcp/troubleshooting.md
+  - About:
+      - Citing Chromascope: about/citing.md
+      - Changelog: about/changelog.md
+      - Licence and notices: about/licence.md

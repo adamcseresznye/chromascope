@@ -57,6 +57,12 @@ enum BackgroundResult {
     },
 }
 
+/// The addresses of the resources that have no placeholder (they are listed once the window
+/// holds what they name).
+pub fn static_resource_uris() -> &'static [&'static str] {
+    &resources::STATIC_URIS
+}
+
 /// The URI templates of the resources, for the server's resource template listing.
 pub fn resource_templates() -> &'static [(&'static str, &'static str, &'static str)] {
     resources::TEMPLATES

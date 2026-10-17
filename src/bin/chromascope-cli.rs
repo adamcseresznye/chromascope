@@ -35,7 +35,7 @@ Requests use version 1, operation_id UUID, actor, and tagged operation.
 Results/errors are JSON ok/result or ok/error envelopes; errors exit 1.
 Progress is stderr. RT is minutes unless a field explicitly states seconds.
 Exports refuse existing destinations. Project writes append revisions.
-See README.md and examples/README.md for workflows; the MCP tool analysis_capabilities lists every schema.";
+See https://chromascope-ms.github.io/chromascope/manual/command-line/ and examples/README.md for workflows; the MCP tool analysis_capabilities lists every schema.";
 /// Subcommands of the Identification, Untargeted and Statistics workflows; hidden unless
 /// the `experimental` feature is enabled.
 const EXPERIMENTAL_COMMANDS: &[&str] = &[

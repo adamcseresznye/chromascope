@@ -53,6 +53,13 @@ All pull requests will be reviewed by a maintainer. Please ensure that your code
 - Gives every new control in the window the MCP tool that does the same: the tool, its entry in
   `src/gui/actions.rs` and a test that calls it over the MCP protocol. A feature is not finished
   without them, and `cargo test --features mcp` (`tests/mcp_parity.rs`) fails until they exist.
+- Updates the user manual and the MCP guide in the same commit when it changes the window or the
+  MCP tools (the pages are in `website/content`). Bold text in the pages is reserved for labels
+  that the window shows, and every tool, prompt, resource address and launch flag the MCP guide
+  names must exist in the servers; `cargo test --features mcp --test website` checks both, and
+  `mkdocs build --strict -f website/mkdocs.yml` (the Website workflow) fails on a broken link.
+  Build the site locally with `pip install -r website/requirements.txt`, then run that command
+  from the repository root.
 
 Once your pull request is reviewed and approved, it will be merged into the main branch.
 
