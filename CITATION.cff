@@ -1,0 +1,33 @@
+# Citation metadata (Citation File Format 1.2.0) for GitHub's "Cite this repository" button
+# and for citation managers. Keep it consistent with .zenodo.json: Zenodo prefers
+# .zenodo.json when both files exist, so a change to the title, the authors, the licence or the
+# keywords here must be repeated there.
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata from this file."
+type: software
+title: "Chromascope: an open-source LC-MS workbench"
+abstract: >-
+  Chromascope is a free, open-source LC-MS workbench written in Rust. It opens mzML data,
+  draws chromatograms and spectra, integrates peaks, builds calibration curves and runs
+  quantification and QC, as a desktop app, a JSON command-line tool, or over the Model Context
+  Protocol (MCP) for AI assistants. Results keep their units, settings, software versions and
+  source hashes.
+authors:
+  - family-names: Cseresznye
+    given-names: Adam
+    # TODO: add the author's ORCID, for example: orcid: "https://orcid.org/0000-0000-0000-0000"
+    # TODO: add the author's affiliation, for example: affiliation: "Name of the institution"
+license: GPL-3.0-only
+repository-code: "https://github.com/chromascope-ms/chromascope"
+url: "https://chromascope-ms.github.io/chromascope/"
+version: 0.3.0
+# TODO: add date-released (YYYY-MM-DD) when version 0.3.0 is released.
+# The doi field is left out on purpose. After the first release has been archived on Zenodo, add
+# the concept DOI (the one that always points at the latest version):
+#   doi: 10.5281/zenodo.XXXXXXX
+keywords:
+  - mass spectrometry
+  - LC-MS
+  - chromatography
+  - mzML
+  - MCP
