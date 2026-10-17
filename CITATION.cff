@@ -5,7 +5,7 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite it using the metadata from this file."
 type: software
-title: "Chromascope: an open-source LC-MS workbench"
+title: "Chromascope: an open-source, AI-ready LC-MS workbench"
 abstract: >-
   Chromascope is a free, open-source LC-MS workbench written in Rust. It opens mzML data,
   draws chromatograms and spectra, integrates peaks, builds calibration curves and runs
@@ -15,13 +15,12 @@ abstract: >-
 authors:
   - family-names: Cseresznye
     given-names: Adam
-    # TODO: add the author's ORCID, for example: orcid: "https://orcid.org/0000-0000-0000-0000"
-    # TODO: add the author's affiliation, for example: affiliation: "Name of the institution"
+    orcid: "https://orcid.org/0000-0002-8340-2771"
 license: GPL-3.0-only
 repository-code: "https://github.com/chromascope-ms/chromascope"
 url: "https://chromascope-ms.github.io/chromascope/"
 version: 0.3.0
-# TODO: add date-released (YYYY-MM-DD) when version 0.3.0 is released.
+# TODO: add date-released (YYYY-MM-DD): the day version 0.3.0 is published as a GitHub release.
 # The doi field is left out on purpose. After the first release has been archived on Zenodo, add
 # the concept DOI (the one that always points at the latest version):
 #   doi: 10.5281/zenodo.XXXXXXX

@@ -4,7 +4,7 @@ If Chromascope helped with work you publish, please cite the program and say whi
 
 ## Suggested citation
 
-> Cseresznye A. Chromascope: an open-source LC-MS workbench (version 0.3.0) [software]. https://github.com/chromascope-ms/chromascope
+> Cseresznye A. Chromascope: an open-source, AI-ready LC-MS workbench (version 0.3.0) [software]. https://github.com/chromascope-ms/chromascope
 
 Replace the version with the one you used. A permanent identifier (a DOI) has not been issued yet.
 

@@ -72,14 +72,14 @@ and add the same concept DOI, and the year, to CITATION.cff, the BibTeX entry an
 
 Plain text:
 
-> Cseresznye, A. Chromascope: an open-source LC-MS workbench, version 0.3.0. https://github.com/chromascope-ms/chromascope
+> Cseresznye, A. Chromascope: an open-source, AI-ready LC-MS workbench, version 0.3.0. https://github.com/chromascope-ms/chromascope
 
 BibTeX:
 
 ```bibtex
 @software{cseresznye_chromascope,
   author  = {Cseresznye, Adam},
-  title   = {Chromascope: an open-source LC-MS workbench},
+  title   = {Chromascope: an open-source, AI-ready LC-MS workbench},
   version = {0.3.0},
   url     = {https://github.com/chromascope-ms/chromascope},
   license = {GPL-3.0-only}

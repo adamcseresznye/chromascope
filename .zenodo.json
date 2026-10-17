@@ -1,10 +1,11 @@
 {
-  "title": "Chromascope: an open-source LC-MS workbench",
+  "title": "Chromascope: an open-source, AI-ready LC-MS workbench",
   "upload_type": "software",
   "description": "<p>Chromascope is a free, open-source LC-MS workbench written in Rust. It opens mzML data, draws chromatograms and spectra, integrates peaks, builds calibration curves and runs quantification and QC, as a desktop app, a JSON command-line tool, or over the Model Context Protocol (MCP) for AI assistants. Results keep their units, settings, software versions and source hashes.</p>",
   "creators": [
     {
-      "name": "Cseresznye, Adam"
+      "name": "Cseresznye, Adam",
+      "orcid": "0000-0002-8340-2771"
     }
   ],
   "license": "gpl-3.0-only",
